@@ -30,6 +30,7 @@ versions until v1.0.0; pin a tilde or caret range when consuming.
 
 from __future__ import annotations
 
+from scrapper_tool.adapter import Adapter
 from scrapper_tool.errors import (
     BlockedError,
     ParseError,
@@ -51,6 +52,7 @@ __version__ = "0.0.0.dev0"
 
 __all__ = [
     "IMPERSONATE_LADDER",
+    "Adapter",
     "BlockedError",
     "ParseError",
     "ScrapingError",

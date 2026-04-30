@@ -27,6 +27,9 @@ All notable changes to `scrapper-tool` are recorded here. Format follows [Keep a
 - M6 — 12 meta-tests in `tests/unit/test_testing_helpers.py` covering FakeResponse construction, FakeCurlSession reset/configuration/calls-tracking, replay_fixture text loading, snapshot first-run-write / pass-on-match / fail-on-drift / write_if_missing=False semantics. 100% coverage on `testing.py`.
 - M5.5 — Filled `docs/research/2026-04-30-landscape.md` (~250 lines, 19 numbered sources). Eight sections: TLS-impersonation libraries, browser-stealth tools, anti-bot platforms in 2026, LLM-assisted scraping, HTML parsing libraries, structured-data extraction, what's deliberately missing from the lib, and a refresh policy that makes successor landscape docs append-only history rather than edits-in-place.
 
+- M7 — Generic `Adapter[QueryT, ResultT]` Protocol (`scrapper_tool.adapter`). Structural typing with `runtime_checkable` so `isinstance(obj, Adapter)` works without inheritance. Required surface: `vendor_id: str` attribute + `async search(query)` + `async fetch_detail(url)`. Doc-strings codify the error-bubbling contract (VendorHTTPError → breaker trips; BlockedError → escalate to Pattern D; ParseError → don't trip breaker, parser drift bug). Re-exported as `scrapper_tool.Adapter`.
+- M7 — 6 Protocol tests: complete impl satisfies isinstance, missing method fails, missing field fails, search round-trip, fetch_detail round-trip, fetch_detail returns None for missing URL.
+
 ### Fixed
 - CI: `pip-audit --skip-editable` so the build doesn't try to look up `scrapper-tool` itself on PyPI before v0.1.0 ships.
 
