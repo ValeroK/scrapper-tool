@@ -42,10 +42,15 @@ from scrapper_tool.http import (
     request_with_retry,
     vendor_client,
 )
+from scrapper_tool.ladder import (
+    IMPERSONATE_LADDER,
+    request_with_ladder,
+)
 
 __version__ = "0.0.0.dev0"
 
 __all__ = [
+    "IMPERSONATE_LADDER",
     "BlockedError",
     "ParseError",
     "ScrapingError",
@@ -53,6 +58,7 @@ __all__ = [
     "VendorHTTPError",
     "VendorUnavailable",
     "__version__",
+    "request_with_ladder",
     "request_with_retry",
     "vendor_client",
 ]
