@@ -16,6 +16,8 @@ Built from the scraping core behind [PartsPilot](https://github.com/ValeroK/affi
 [![Code style: ruff](https://img.shields.io/badge/code%20style-ruff-261230.svg)](https://github.com/astral-sh/ruff)
 [![Type-checked: mypy](https://img.shields.io/badge/type--checked-mypy-1f5082.svg)](https://mypy-lang.org/)
 [![PRs Welcome](https://img.shields.io/badge/PRs-welcome-brightgreen.svg)](CONTRIBUTING.md)
+[![GitHub Stars](https://img.shields.io/github/stars/ValeroK/scrapper-tool?style=social)](https://github.com/ValeroK/scrapper-tool/stargazers)
+[![GitHub Forks](https://img.shields.io/github/forks/ValeroK/scrapper-tool?style=social)](https://github.com/ValeroK/scrapper-tool/network/members)
 
 [**Quickstart**](#quickstart) · [**Documentation**](docs/index.md) · [**Recon playbook**](docs/recon.md) · [**Changelog**](CHANGELOG.md) · [**Contributing**](CONTRIBUTING.md)
 
@@ -163,11 +165,11 @@ PRs and issues are welcome. Every PR that meaningfully changes how we scrape lan
 
 ## Contributors
 
-Thanks to everyone who has contributed:
-
 <a href="https://github.com/ValeroK/scrapper-tool/graphs/contributors">
   <img src="https://contrib.rocks/image?repo=ValeroK/scrapper-tool" alt="Contributors" />
 </a>
+
+Want to see your avatar here? Check [CONTRIBUTING.md](CONTRIBUTING.md) and open a PR.
 
 ## Acknowledgements
 
