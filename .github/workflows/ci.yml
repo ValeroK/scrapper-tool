@@ -74,5 +74,8 @@ jobs:
       - run: uv python install 3.13
       - run: uv sync --all-extras --dev
       - name: pip-audit
-        run: uv run pip-audit --strict
+        # --skip-editable: the local package itself isn't on PyPI yet (until M9).
+        # We want to audit *dependencies* for CVEs, not the project's own
+        # placeholder version. Once v0.1.0 ships, the flag stays harmless.
+        run: uv run pip-audit --strict --skip-editable
         continue-on-error: false   # fail the build on any new CVE
