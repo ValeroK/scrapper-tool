@@ -21,7 +21,6 @@ from decimal import Decimal
 
 from scrapper_tool.patterns.b import ProductOffer, extract_product_offer
 
-
 # --- Fixture builders -----------------------------------------------------
 
 

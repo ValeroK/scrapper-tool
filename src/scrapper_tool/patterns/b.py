@@ -32,7 +32,7 @@ from __future__ import annotations
 from decimal import Decimal, InvalidOperation
 from typing import Any
 
-import extruct  # type: ignore[import-untyped]
+import extruct
 from pydantic import BaseModel, Field
 
 from scrapper_tool._logging import get_logger
@@ -94,9 +94,7 @@ def _walk_for_product(node: Any) -> dict[str, Any] | None:
     """
     if isinstance(node, dict):
         node_type = node.get("@type")
-        if node_type == "Product" or (
-            isinstance(node_type, list) and "Product" in node_type
-        ):
+        if node_type == "Product" or (isinstance(node_type, list) and "Product" in node_type):
             return node
         # Recurse through @graph / itemListElement / mainEntity / etc.
         for value in node.values():
