@@ -104,7 +104,7 @@ warn_unused_ignores = true
 plugins = ["pydantic.mypy"]
 
 [[tool.mypy.overrides]]
-module = ["curl_cffi.*", "selectolax.*", "extruct.*", "scrapling.*"]
+module = ["curl_cffi.*", "selectolax.*", "extruct.*", "scrapling.*", "structlog.*"]
 ignore_missing_imports = true
 
 [tool.pytest.ini_options]

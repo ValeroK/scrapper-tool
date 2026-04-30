@@ -12,13 +12,14 @@ Public API
 The top-level ``scrapper_tool`` namespace re-exports the most commonly used
 symbols. Submodules expose the rest:
 
-- ``scrapper_tool.http`` — ``vendor_client``, ``request_with_retry``, ``VendorHTTPError``
-- ``scrapper_tool.ladder`` — ``IMPERSONATE_LADDER`` and the walk logic
-- ``scrapper_tool.patterns.{a,b,c,d}`` — extraction helpers per pattern
-- ``scrapper_tool.testing`` — fixture-replay test helpers
-- ``scrapper_tool.canary`` — CLI for fingerprint-health probes
-- ``scrapper_tool.adapter`` — generic ``Adapter[QueryT, ResultT]`` Protocol
-- ``scrapper_tool.errors`` — exception hierarchy
+- ``scrapper_tool.http`` — :func:`vendor_client`, :func:`request_with_retry`
+- ``scrapper_tool.errors`` — :class:`VendorHTTPError`, :class:`BlockedError`,
+  :class:`ParseError`, :class:`VendorUnavailable`, :class:`ScrapingError`
+- ``scrapper_tool.ladder`` *(M2)* — ``IMPERSONATE_LADDER`` and the walk logic
+- ``scrapper_tool.patterns.{a,b,c,d}`` *(M3-M5)* — extraction helpers per pattern
+- ``scrapper_tool.testing`` *(M6)* — fixture-replay test helpers
+- ``scrapper_tool.canary`` *(M8)* — CLI for fingerprint-health probes
+- ``scrapper_tool.adapter`` *(M7)* — generic ``Adapter[QueryT, ResultT]`` Protocol
 
 Stability
 ---------
@@ -29,8 +30,29 @@ versions until v1.0.0; pin a tilde or caret range when consuming.
 
 from __future__ import annotations
 
+from scrapper_tool.errors import (
+    BlockedError,
+    ParseError,
+    ScrapingError,
+    VendorHTTPError,
+    VendorUnavailable,
+)
+from scrapper_tool.http import (
+    VendorHTTPClient,
+    request_with_retry,
+    vendor_client,
+)
+
 __version__ = "0.0.0.dev0"
 
 __all__ = [
+    "BlockedError",
+    "ParseError",
+    "ScrapingError",
+    "VendorHTTPClient",
+    "VendorHTTPError",
+    "VendorUnavailable",
     "__version__",
+    "request_with_retry",
+    "vendor_client",
 ]
