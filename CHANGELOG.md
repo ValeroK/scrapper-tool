@@ -25,6 +25,10 @@ All notable changes to `scrapper-tool` are recorded here. Format follows [Keep a
 - M6 — Test helpers (`scrapper_tool.testing`): `FakeCurlSession` (drop-in mock for `curl_cffi.AsyncSession` because `respx` doesn't intercept it), `FakeResponse` (minimal duck-typed response), `replay_fixture(path, parser)` (load fixture file from disk and feed to a parser), `assert_pydantic_snapshot(obj, path, *, write_if_missing=True)` (golden-snapshot diff for Pydantic models with first-run seeding).
 - M6 — Refactored `tests/unit/test_ladder.py` to use the canonical `FakeCurlSession` (M2's inline mock removed; replaced with the import).
 - M6 — 12 meta-tests in `tests/unit/test_testing_helpers.py` covering FakeResponse construction, FakeCurlSession reset/configuration/calls-tracking, replay_fixture text loading, snapshot first-run-write / pass-on-match / fail-on-drift / write_if_missing=False semantics. 100% coverage on `testing.py`.
+- M5.5 — Filled `docs/research/2026-04-30-landscape.md` (~250 lines, 19 numbered sources). Eight sections: TLS-impersonation libraries, browser-stealth tools, anti-bot platforms in 2026, LLM-assisted scraping, HTML parsing libraries, structured-data extraction, what's deliberately missing from the lib, and a refresh policy that makes successor landscape docs append-only history rather than edits-in-place.
+
+### Fixed
+- CI: `pip-audit --skip-editable` so the build doesn't try to look up `scrapper-tool` itself on PyPI before v0.1.0 ships.
 
 ### Notes
 - Initial milestone scope and decision log live in [`docs/research/2026-04-30-landscape.md`](docs/research/2026-04-30-landscape.md) (filled in during M5.5).
