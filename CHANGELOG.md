@@ -4,6 +4,10 @@ All notable changes to `scrapper-tool` are recorded here. Format follows [Keep a
 
 ## [Unreleased]
 
+## [0.1.0] - 2026-04-30
+
+First public release. Covers Pattern A/B/C/D extraction primitives, the four-profile anti-bot impersonation ladder, deterministic fixture-replay testing, the generic `Adapter` Protocol, and a `scrapper-tool canary` CLI.
+
 ### Added
 - M0 — repo bootstrap: `pyproject.toml`, MIT `LICENSE`, README, governance files (`CONTRIBUTING.md`, `CODE_OF_CONDUCT.md`), CI workflow (`.github/workflows/ci.yml` — ruff + mypy --strict + pytest + pip-audit on py3.12/3.13/3.14 matrix), tag-triggered PyPI release workflow (`.github/workflows/release.yml`, OIDC trusted-publisher).
 - `[project.optional-dependencies]` placeholders for `hostile` (Scrapling) and `agent` (MCP — populated in M13).

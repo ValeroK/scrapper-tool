@@ -74,8 +74,11 @@ jobs:
       - run: uv python install 3.13
       - run: uv sync --all-extras --dev
       - name: pip-audit
-        # --skip-editable: the local package itself isn't on PyPI yet (until M9).
-        # We want to audit *dependencies* for CVEs, not the project's own
-        # placeholder version. Once v0.1.0 ships, the flag stays harmless.
-        run: uv run pip-audit --strict --skip-editable
+        # --skip-editable: don't try to look up the local package on PyPI.
+        # NOTE: --strict is incompatible with --skip-editable in current
+        # pip-audit (treats the editable install itself as a hard error).
+        # Without --strict, pip-audit still exits non-zero on actual
+        # CVE findings — the warning behaviour we trade away is for
+        # "package not found on PyPI" cases, which is what we want.
+        run: uv run pip-audit --skip-editable
         continue-on-error: false   # fail the build on any new CVE
