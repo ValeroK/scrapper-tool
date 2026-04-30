@@ -51,6 +51,10 @@ dev = [
 scrapper-tool = "scrapper_tool.canary:main"
 # scrapper-tool-mcp = "scrapper_tool.mcp:main"  # M13 — uncommented when the MCP module lands.
 
+# Verify the console script is wired:
+#     pip install -e .
+#     scrapper-tool canary https://example.com
+
 [project.urls]
 Homepage = "https://github.com/ValeroK/scrapper-tool"
 Repository = "https://github.com/ValeroK/scrapper-tool"
