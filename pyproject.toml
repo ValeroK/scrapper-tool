@@ -1,0 +1,133 @@
+[build-system]
+requires = ["hatchling>=1.27"]
+build-backend = "hatchling.build"
+
+[project]
+name = "scrapper-tool"
+version = "0.0.0.dev0"
+description = "Reusable web-scraping toolkit — Pattern A/B/C/D ladder, TLS-impersonation fallback chain, deterministic fixture-replay testing, and an optional MCP server for LLM agents."
+readme = "README.md"
+requires-python = ">=3.12"
+license = "MIT"
+license-files = ["LICENSE"]
+authors = [{ name = "ValeroK" }]
+keywords = ["web-scraping", "html-parsing", "anti-bot", "mcp", "llm-agents", "curl-cffi", "extruct"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Programming Language :: Python :: 3.14",
+    "Topic :: Internet :: WWW/HTTP :: Indexing/Search",
+    "Topic :: Software Development :: Libraries :: Python Modules",
+    "Topic :: Text Processing :: Markup :: HTML",
+    "Typing :: Typed",
+]
+dependencies = [
+    "httpx>=0.27",
+    "curl-cffi>=0.7",
+    "selectolax>=0.3.21",
+    "extruct>=0.18",
+    "pydantic>=2.5",
+]
+
+[project.optional-dependencies]
+hostile = ["scrapling>=0.3"]
+agent = []  # M8.5/M13 — empty placeholder so consumers know the slot exists. Populated when the MCP server lands.
+dev = [
+    "pytest>=8",
+    "pytest-asyncio>=0.24",
+    "pytest-cov>=5",
+    "respx>=0.21",
+    "ruff>=0.9",
+    "mypy>=1.13",
+    "pip-audit>=2.7",
+]
+
+[project.scripts]
+scrapper-tool = "scrapper_tool.canary:main"
+# scrapper-tool-mcp = "scrapper_tool.mcp:main"  # M13 — uncommented when the MCP module lands.
+
+[project.urls]
+Homepage = "https://github.com/ValeroK/scrapper-tool"
+Repository = "https://github.com/ValeroK/scrapper-tool"
+Issues = "https://github.com/ValeroK/scrapper-tool/issues"
+Changelog = "https://github.com/ValeroK/scrapper-tool/blob/main/CHANGELOG.md"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/scrapper_tool"]
+
+[tool.hatch.build.targets.sdist]
+include = [
+    "src/",
+    "tests/",
+    "docs/",
+    "README.md",
+    "CHANGELOG.md",
+    "LICENSE",
+]
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+
+[tool.ruff.lint]
+select = [
+    "E", "F", "W",       # pycodestyle / pyflakes
+    "I",                  # isort
+    "B",                  # bugbear
+    "UP",                 # pyupgrade
+    "SIM",                # simplify
+    "RUF",                # ruff-native
+    "TC",                 # type-checking
+    "TID",                # tidy-imports
+    "PL",                 # pylint subset
+    "ASYNC",              # asyncio anti-patterns
+    "S",                  # security (bandit)
+]
+ignore = [
+    "S101",  # asserts in tests are fine
+    "PLR0913",  # too-many-arguments — config functions need them
+]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/**" = ["S", "PLR2004"]
+
+[tool.mypy]
+python_version = "3.12"
+strict = true
+warn_unreachable = true
+warn_unused_ignores = true
+plugins = ["pydantic.mypy"]
+
+[[tool.mypy.overrides]]
+module = ["curl_cffi.*", "selectolax.*", "extruct.*", "scrapling.*"]
+ignore_missing_imports = true
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]
+markers = [
+    "live: tests that hit the live internet (skipped by default in CI; opt in with -m live)",
+]
+addopts = [
+    "-ra",
+    "--strict-markers",
+    "--strict-config",
+    "-m", "not live",
+]
+
+[tool.coverage.run]
+source = ["src/scrapper_tool"]
+branch = true
+
+[tool.coverage.report]
+fail_under = 85
+exclude_also = [
+    "if TYPE_CHECKING:",
+    "raise NotImplementedError",
+    "@overload",
+]
