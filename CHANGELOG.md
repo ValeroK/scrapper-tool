@@ -4,10 +4,24 @@ All notable changes to `scrapper-tool` are recorded here. Format follows [Keep a
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-05-01
+
+Adds an optional MCP server so LLM agents (Claude, OpenClaw, Hermes Agent, AutoGen, LangChain) can drive the scraper directly. Last milestone of the M0–M13 roadmap.
+
 ### Added
+- M13 — MCP server (`scrapper_tool.mcp`) + `scrapper-tool-mcp` console script. Lazy-imports the `mcp` SDK; missing-extra error surfaces a useful install hint. Four tools exposed:
+  - `fetch_with_ladder(url, method?, use_curl_cffi?)` — issues an HTTP request through the four-profile impersonation ladder; returns `{status, body (≤64 KB), winning_profile, blocked, error}`.
+  - `extract_product(html, base_url?)` — parses schema.org Product+Offer via extruct; returns ProductOffer dict or null.
+  - `extract_microdata_price(html)` — parses `<meta itemprop="price">` + `priceCurrency`; returns `{price, currency}` or null.
+  - `canary(url, profiles?)` — walks the impersonation ladder; returns the same JSON shape as the CLI's `--json` mode.
+- M13 — `[agent]` optional extra now pulls `mcp>=1.2`. Empty-extra placeholder (M0/M8.5) replaced.
+- M13 — Body truncation at 64 KB so a single fetch can't blow an agent's context window. `truncated: true` flag signals when this happened.
+- M13 — `docs/agent-integration.md` — comprehensive integration guide covering Claude Desktop / Claude Code / Anthropic SDK + mcp-use / OpenClaw / Hermes / AutoGen / LangChain. Security section codifies trust-boundary handling (the consuming agent's permission model gates user-data-bearing fetches; the lib doesn't bundle auth).
+- M13 — 15 MCP tests (4 tool dispatch tests with FakeCurlSession-mocked HTTP, 2 truncation tests, 3 main-entrypoint tests, lazy-import safety, +6 edge cases). Coverage on `mcp.py` 86%.
 - M11.5 — Live-canary GitHub Actions workflow (`.github/workflows/live-canary.yml`). Daily cron at 04:17 UTC + `workflow_dispatch`. Three jobs (smoke / Pattern A ladder / Pattern B extraction) probe stable public URLs (`example.com`, `httpbin.org/anything`, `schema.org/Product`); on failure, a fourth job opens (or comments on) a `live-canary-failed` GitHub issue with dedup so we don't get one issue per failed run.
 - M11.5 — `tests/integration/test_live_probes.py` — three opt-in tests gated by `@pytest.mark.live` + `SCRAPPER_TOOL_LIVE=1` env var. Default `pytest` invocation skips them; the live-canary workflow runs them with the env var set. CI matrix unaffected.
 - M11.5 — `tests/canary_targets.yaml` — append-only, dated registry of canary URLs. Discipline: never edit historical URLs in place; add a new row above and leave the predecessor as audit trail.
+- M12 — Quarterly review checklist in `CONTRIBUTING.md` — four numbered actions (re-run canary, audit `docs/research/`, audit `do-not-adopt.md`, bump MCP SDK pin) the maintainer runs each quarter to keep the lib aligned with the moving scraping landscape.
 
 ## [0.1.0] - 2026-04-30
 

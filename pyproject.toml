@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "scrapper-tool"
-version = "0.1.0"
+version = "0.2.0"
 description = "Reusable web-scraping toolkit — Pattern A/B/C/D ladder, TLS-impersonation fallback chain, deterministic fixture-replay testing, and an optional MCP server for LLM agents."
 readme = "README.md"
 requires-python = ">=3.12"
@@ -36,7 +36,11 @@ dependencies = [
 
 [project.optional-dependencies]
 hostile = ["scrapling>=0.3"]
-agent = []  # M8.5/M13 — empty placeholder so consumers know the slot exists. Populated when the MCP server lands.
+# M13: filled. Provides scrapper-tool-mcp console script (stdio MCP server)
+# exposing fetch_with_ladder / extract_product / extract_microdata_price /
+# canary tools for LLM agents (Claude Desktop, Claude Code, OpenClaw,
+# Hermes Agent, AutoGen, LangChain via mcp-use).
+agent = ["mcp>=1.2"]
 dev = [
     "pytest>=8",
     "pytest-asyncio>=0.24",
@@ -49,11 +53,13 @@ dev = [
 
 [project.scripts]
 scrapper-tool = "scrapper_tool.canary:main"
-# scrapper-tool-mcp = "scrapper_tool.mcp:main"  # M13 — uncommented when the MCP module lands.
+scrapper-tool-mcp = "scrapper_tool.mcp:main"
 
-# Verify the console script is wired:
-#     pip install -e .
+# Verify the console scripts are wired:
+#     pip install -e .                  # canary CLI
 #     scrapper-tool canary https://example.com
+#     pip install -e .[agent]           # MCP server
+#     scrapper-tool-mcp                 # starts stdio MCP server
 
 [project.urls]
 Homepage = "https://github.com/ValeroK/scrapper-tool"

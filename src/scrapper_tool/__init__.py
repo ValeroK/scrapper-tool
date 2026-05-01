@@ -48,7 +48,7 @@ from scrapper_tool.ladder import (
     request_with_ladder,
 )
 
-__version__ = "0.1.0"
+__version__ = "0.2.0"
 
 __all__ = [
     "IMPERSONATE_LADDER",

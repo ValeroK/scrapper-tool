@@ -1,33 +1,123 @@
-# Agent integration
+# Agent integration — MCP server
 
-> **Status: stub for v0.0.x. The MCP server lands in v0.2.0 (M13).** This doc is reserved at the top-level docs IA so the slot is visible from M0 — no retrofitting required when M13 ships.
+`scrapper-tool` ships an optional MCP server (Model Context Protocol) that exposes the lib's helpers as tools any LLM agent can call. Available since **v0.2.0** (M13). Install:
 
-## What this will cover
+```bash
+pip install scrapper-tool[agent]
+```
 
-`scrapper-tool` ships an optional MCP server (`pip install scrapper-tool[agent]`) that exposes the lib's helpers as tools any [Model Context Protocol](https://modelcontextprotocol.io)-compatible agent can call:
+Then start the stdio server:
 
-- `fetch_with_ladder` — issue an HTTP request through the four-profile impersonation ladder; report which profile won.
-- `extract_product` — parse a schema.org Product+Offer block from HTML (Pattern B).
-- `extract_microdata_price` — parse `itemprop="price"` schema.org microdata from HTML (Pattern C).
-- `recon_classify` — classify a URL into Pattern A/B/C/D programmatically.
-- `hostile_fetch` — Scrapling-backed fetch with auto-Turnstile-solve (requires `[hostile]` extra).
-- `canary` — fire one probe per impersonation profile against a URL, report 200/403/timeout per profile.
+```bash
+scrapper-tool-mcp
+```
 
-Sections planned for M13:
+This is a stdio MCP server compatible with **Claude Desktop**, **Claude Code**, **OpenClaw**, **Hermes Agent**, and any other MCP-aware client.
 
-1. **MCP via Claude Code / Claude Desktop** — `.mcp.json` snippet.
-2. **MCP via the Anthropic SDK + `mcp-use`** — Python snippet.
-3. **OpenClaw integration** — manifest at `docs/agent-integration/openclaw.json`.
-4. **Hermes Agent integration** — manifest at `docs/agent-integration/hermes.yaml`.
-5. **AutoGen / LangChain via `mcp-use`** — code snippets.
-6. **Security note** — the MCP server runs in the user's trust boundary; tool docstrings call out unsafe inputs (raw URLs from untrusted content); the consuming agent's own permission model gates user-data-bearing fetches.
+## Tools exposed
 
-## Why MCP
+| Tool | Input | Output | Use when |
+|---|---|---|---|
+| `fetch_with_ladder` | `url, method?, use_curl_cffi?` | `{status, body (≤64 KB), winning_profile, blocked, error}` | Agent needs to fetch a URL that may TLS-fingerprint |
+| `extract_product` | `html, base_url?` | `ProductOffer` dict or `null` | Agent has HTML and wants schema.org Product+Offer fields |
+| `extract_microdata_price` | `html` | `{price, currency}` or `null` | Agent has HTML with `<meta itemprop="price">` anchors |
+| `canary` | `url, profiles?` | Per-profile probe results | Agent diagnosing which TLS fingerprint a site rejects |
 
-The 2026 agent stacks (Hermes Agent's plugin system, OpenClaw's tool registry, Composio connectors) all consume MCP servers. Reference implementations — Microsoft's [Playwright MCP](https://playwright.dev/python/agents) (~29k stars), Browserbase's Stagehand MCP (~21k stars), MaitreyaM's Crawl4AI MCP, luminati-io's web-scraping-with-mcp — all converge on the same shape.
+## Wiring it up
 
-The official Python MCP SDK (`mcp` package) is the canonical path; `mcp-use` bridges it to LangChain/AutoGen/the Anthropic SDK directly.
+### Claude Code / Claude Desktop
 
----
+Add to your `.mcp.json`:
 
-*Detailed integration docs land in v0.2.0 (M13). Track [#TBD](https://github.com/ValeroK/scrapper-tool/issues) for the milestone.*
+```json
+{
+  "mcpServers": {
+    "scrapper-tool": {
+      "command": "scrapper-tool-mcp",
+      "args": [],
+      "env": {}
+    }
+  }
+}
+```
+
+Restart the client. The four tools appear in the tool palette. Example chat:
+
+> *"Fetch https://example.com and tell me if any schema.org Product data is present."*
+
+The agent will call `fetch_with_ladder` then `extract_product` and report.
+
+### Anthropic Python SDK + `mcp-use`
+
+```python
+import asyncio
+from mcp_use import MCPClient
+from anthropic import Anthropic
+
+async def main() -> None:
+    client = MCPClient.from_dict({
+        "mcpServers": {
+            "scrapper-tool": {"command": "scrapper-tool-mcp"},
+        }
+    })
+    async with client:
+        tools = await client.list_tools()
+        anthropic = Anthropic()
+        msg = anthropic.messages.create(
+            model="claude-opus-4-5",
+            max_tokens=2048,
+            tools=tools,
+            messages=[{"role": "user", "content": "Probe httpbin.org/anything"}],
+        )
+        print(msg)
+
+asyncio.run(main())
+```
+
+### OpenClaw / Hermes Agent
+
+Both consume MCP servers natively. Point them at the `scrapper-tool-mcp` command (same as Claude Desktop). See [Composio's Hermes integration patterns](https://composio.dev/toolkits/scrapingbee/framework/hermes-agent) for reference wiring.
+
+### AutoGen / LangChain
+
+Both have first-class MCP support via [`mcp-use`](https://mcp-use.com/docs/python/integration/anthropic). Same `MCPClient` invocation as the Anthropic SDK example above — the resulting `tools` list plugs into either framework's tool registration.
+
+## Example session
+
+User asks the agent: *"Get me the price of [some product URL]."*
+
+The agent's flow:
+
+1. Calls `fetch_with_ladder(url=...)`. Server walks `chrome133a → chrome124 → safari → firefox` until a profile returns 200. Returns the HTML body (truncated to 64 KB).
+2. Calls `extract_product(html=<body>, base_url=<url>)`. Server returns a normalised `ProductOffer` dict.
+3. Reports `{name}: {price} {currency}` to the user.
+
+If step 1 returns `blocked: true` (all four profiles 403'd), the agent knows the site needs Pattern D and can either escalate to a `hostile_fetch` (not yet exposed in v0.2.0; planned for v0.3.0) or report the block to the user.
+
+## Security
+
+The MCP server runs in **the agent's trust boundary**, not the user's. Two implications:
+
+1. **The agent is responsible for confirming user-data-bearing fetches**. `fetch_with_ladder` will happily fetch any URL it's given. The consuming agent's permission model (Claude's tool-use approval, OpenClaw's plugin gating, etc.) must prompt the user before fetching URLs that could leak personal data.
+2. **The lib does not bundle authentication**. If a fetch needs cookies / OAuth tokens, the agent passes them as `extra_headers` (not yet exposed in v0.2.0; planned for v0.3.0). Don't tunnel secrets through the URL.
+
+Body truncation: responses over 64 KB are truncated server-side so a single fetch can't blow the agent's context window. The `truncated: true` flag in the response signals when this happened — the agent can re-fetch a narrower URL or paginate.
+
+## Versioning
+
+- **v0.2.0** (this release) — `fetch_with_ladder`, `extract_product`, `extract_microdata_price`, `canary`. Stdio transport.
+- **v0.3.0** (planned) — `hostile_fetch` (Scrapling-backed Pattern D), `recon_classify` (auto-decide which pattern fits a URL). HTTP/SSE transport for hosted-agent platforms.
+- **v1.0.0** — API stability commitment; tool surface frozen.
+
+The lib's [`CONTRIBUTING.md`](../CONTRIBUTING.md#quarterly-review-checklist) carries the maintenance contract — quarterly review of the MCP SDK pin and the tool catalogue.
+
+## References
+
+- Model Context Protocol — https://modelcontextprotocol.io
+- Official Python SDK — https://github.com/modelcontextprotocol/python-sdk
+- `mcp-use` (LangChain/AutoGen/Anthropic-SDK bridge) — https://mcp-use.com
+- Playwright MCP (Microsoft, ~29k stars; reference for browser-based MCP servers) — https://playwright.dev/python/agents
+- Stagehand MCP (Browserbase) — https://www.morphllm.com/stagehand-mcp
+- Crawl4AI MCP server — https://github.com/MaitreyaM/WEB-SCRAPING-MCP
+- Bright Data web-scraping-with-mcp — https://github.com/luminati-io/web-scraping-with-mcp
+- OpenClaw vs Hermes Agent — https://petronellatech.com/blog/openclaw-vs-hermes-agent-2026/
