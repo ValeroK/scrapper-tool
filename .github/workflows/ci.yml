@@ -43,7 +43,12 @@ jobs:
     strategy:
       matrix:
         python-version: ["3.12", "3.13", "3.14"]
-        extras: ["dev", "dev,hostile"]
+        # `agent` is included in every matrix entry so test_mcp.py
+        # runs on every build — the MCP server is a first-class
+        # feature in v0.2.0+, not optional flavor. Without `agent`
+        # the importorskip in test_mcp.py kicks in and coverage on
+        # mcp.py drops below the 85% floor.
+        extras: ["dev,agent", "dev,hostile,agent"]
     steps:
       - uses: actions/checkout@v5
       - name: Set up uv
@@ -54,13 +59,13 @@ jobs:
         run: uv python install ${{ matrix.python-version }}
       - name: Install dependencies
         run: uv sync --extra ${{ matrix.extras }}
-        # Note: when extras=dev,hostile, the `[hostile]` extra pulls
-        # Scrapling + Playwright; tests that exercise it should still
+        # Note: when extras includes `hostile`, the `[hostile]` extra
+        # pulls Scrapling + Playwright; tests that exercise it still
         # mock the Playwright session rather than launch a real browser.
       - name: Run tests with coverage
         run: uv run pytest --cov --cov-report=term-missing --cov-fail-under=85
       - name: Upload coverage to Codecov (informational)
-        if: matrix.python-version == '3.13' && matrix.extras == 'dev'
+        if: matrix.python-version == '3.13' && matrix.extras == 'dev,agent'
         uses: codecov/codecov-action@v5
         with:
           fail_ci_if_error: false
