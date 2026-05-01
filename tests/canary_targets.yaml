@@ -1,0 +1,38 @@
+# Live-canary URL set — append-only.
+#
+# When `chrome133a` (or whichever profile is at the head of
+# IMPERSONATE_LADDER) starts 403'ing on >5% of these URLs, that's the
+# signal to bump the primary impersonation profile.
+#
+# URL discipline:
+#   - Public-domain or developer-tooling-stable (RFC-reserved, schema.org,
+#     httpbin) — NEVER a real vendor site. The lib's CI must not generate
+#     detectable load on a third party.
+#   - Append-only: if a canary URL goes away, add a new row above it
+#     and leave a note. Don't edit historical URLs in place.
+
+canary_targets:
+  - url: https://example.com
+    pattern: smoke
+    description: |
+      RFC-2606 reserved domain. Stable HTML. The "is the runner online
+      at all?" canary.
+    added: 2026-05-01
+
+  - url: https://httpbin.org/anything
+    pattern: A
+    description: |
+      Postman's HTTP echo service. JSON response, no anti-bot, no PII.
+      Validates the lib's HTTP core + JSON parsing.
+    added: 2026-05-01
+
+  - url: https://schema.org/Product
+    pattern: B
+    description: |
+      schema.org's developer reference for the Product type. The page
+      may or may not carry a Product ld+json block — we don't require
+      one; the test exercises the extraction pipeline without raising.
+    added: 2026-05-01
+
+# Retired URLs (kept for audit trail — never delete; just append below):
+# (none yet)

@@ -4,6 +4,11 @@ All notable changes to `scrapper-tool` are recorded here. Format follows [Keep a
 
 ## [Unreleased]
 
+### Added
+- M11.5 — Live-canary GitHub Actions workflow (`.github/workflows/live-canary.yml`). Daily cron at 04:17 UTC + `workflow_dispatch`. Three jobs (smoke / Pattern A ladder / Pattern B extraction) probe stable public URLs (`example.com`, `httpbin.org/anything`, `schema.org/Product`); on failure, a fourth job opens (or comments on) a `live-canary-failed` GitHub issue with dedup so we don't get one issue per failed run.
+- M11.5 — `tests/integration/test_live_probes.py` — three opt-in tests gated by `@pytest.mark.live` + `SCRAPPER_TOOL_LIVE=1` env var. Default `pytest` invocation skips them; the live-canary workflow runs them with the env var set. CI matrix unaffected.
+- M11.5 — `tests/canary_targets.yaml` — append-only, dated registry of canary URLs. Discipline: never edit historical URLs in place; add a new row above and leave the predecessor as audit trail.
+
 ## [0.1.0] - 2026-04-30
 
 First public release. Covers Pattern A/B/C/D extraction primitives, the four-profile anti-bot impersonation ladder, deterministic fixture-replay testing, the generic `Adapter` Protocol, and a `scrapper-tool canary` CLI.

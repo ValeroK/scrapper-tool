@@ -1,0 +1,151 @@
+name: Live canary
+
+# Daily canary that fires real HTTP probes against a small, stable set
+# of public URLs to detect:
+#   - chrome133a impersonation profile getting fingerprinted (TLS / JA3)
+#   - extruct/selectolax regressions on real-world structured-data pages
+#   - the ``scrapper-tool canary`` CLI itself bit-rotting
+#
+# This is the lib's own "are we still working?" signal — independent of
+# any consumer adapter. On failure, opens a tagged GitHub issue (with
+# dedup so we don't get one issue per failed run).
+
+on:
+  schedule:
+    # Daily at 04:17 UTC. Off-the-hour to avoid cron storms. Adjust if
+    # the canary target sites have heavier load at this time.
+    - cron: "17 4 * * *"
+  workflow_dispatch: # on-demand trigger from PR comments / manual
+
+permissions:
+  contents: read
+  issues: write # for the auto-issue path on failure
+
+concurrency:
+  group: live-canary
+  cancel-in-progress: false # canary runs are quick; let them all complete
+
+jobs:
+  ladder-canary:
+    name: Pattern A — anti-bot ladder against a stable JSON endpoint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - name: Set up uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+      - name: Install Python 3.13 + lib
+        run: |
+          uv python install 3.13
+          uv sync --extra dev
+      # httpbin.org is a generic JSON echo endpoint — no anti-bot, stable
+      # forever, no PII, MIT-data. Perfect canary for Pattern A and the
+      # impersonation-ladder walk.
+      - name: Canary — httpbin.org
+        run: |
+          uv run scrapper-tool canary https://httpbin.org/anything --json | tee canary-httpbin.json
+          # Fail the job if the lib's exit code is non-zero (all-blocked).
+          uv run scrapper-tool canary https://httpbin.org/anything > /dev/null
+      - name: Upload canary artefact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: canary-ladder-${{ github.run_id }}
+          path: canary-*.json
+          retention-days: 30
+
+  pattern-b-canary:
+    name: Pattern B — schema.org Product extraction on a stable page
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - name: Set up uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+      - name: Install Python 3.13 + lib
+        run: |
+          uv python install 3.13
+          uv sync --extra dev
+      # schema.org's own developer-facing example pages are deliberately
+      # stable for tooling validation. If the JSON-LD extraction breaks
+      # against these we have a real lib bug, not a vendor regression.
+      - name: Canary — schema.org Product extraction smoke
+        run: uv run pytest tests/integration/test_live_probes.py -m live -k pattern_b -v
+        env:
+          # Network probes are gated behind this env var so the same
+          # test file can run in two CI modes without forking the suite.
+          SCRAPPER_TOOL_LIVE: "1"
+
+  smoke-canary:
+    name: Smoke — example.com fetch + lib import
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - name: Set up uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+      - name: Install Python 3.13 + lib
+        run: |
+          uv python install 3.13
+          uv sync --extra dev
+      # example.com is an IANA-reserved domain documented for use as a
+      # placeholder; it returns a stable HTML body. If THIS canary fails,
+      # the runner has lost internet — not a lib problem.
+      - name: Canary — example.com baseline
+        run: uv run scrapper-tool canary https://example.com
+
+  open-issue-on-failure:
+    name: File a tagged issue when a canary fails
+    needs: [ladder-canary, pattern-b-canary, smoke-canary]
+    if: failure()
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/github-script@v8
+        with:
+          script: |
+            // Dedup: re-use the existing open `live-canary-failed` issue
+            // if one is open; otherwise create a new one.
+            const { owner, repo } = context.repo;
+            const today = new Date().toISOString().slice(0, 10);
+            const runUrl = `${context.serverUrl}/${owner}/${repo}/actions/runs/${context.runId}`;
+            const body = [
+              `Live canary failed on ${today}.`,
+              ``,
+              `**Run:** ${runUrl}`,
+              `**Trigger:** ${context.eventName}`,
+              ``,
+              `Likely causes:`,
+              `- A canary URL has gone away (rare; bump in tests/canary_targets.yaml).`,
+              `- An impersonation profile got fingerprinted (likely chrome133a — bump primary).`,
+              `- The lib regressed (look at the most recent merge to main).`,
+              ``,
+              `If this issue was already open, this comment is the most-recent failure record.`,
+            ].join("\n");
+
+            const existing = await github.rest.issues.listForRepo({
+              owner, repo,
+              labels: "live-canary-failed",
+              state: "open",
+              per_page: 5,
+            });
+
+            if (existing.data.length > 0) {
+              const issue = existing.data[0];
+              await github.rest.issues.createComment({
+                owner, repo,
+                issue_number: issue.number,
+                body,
+              });
+              core.notice(`Commented on existing issue #${issue.number}`);
+            } else {
+              const created = await github.rest.issues.create({
+                owner, repo,
+                title: `Live canary failed — ${today}`,
+                labels: ["live-canary-failed"],
+                body,
+              });
+              core.notice(`Opened issue #${created.data.number}`);
+            }
