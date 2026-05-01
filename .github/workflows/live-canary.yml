@@ -12,9 +12,12 @@ name: Live canary
 
 on:
   schedule:
-    # Daily at 04:17 UTC. Off-the-hour to avoid cron storms. Adjust if
-    # the canary target sites have heavier load at this time.
-    - cron: "17 4 * * *"
+    # Weekly Monday at 04:17 UTC. Off-the-hour to avoid cron storms.
+    # Weekly (not daily) per founder direction — the canary URLs are
+    # stable enough that daily is overkill, and weekly halves the
+    # noise floor for the auto-issue path. Bump back to daily if a
+    # head-of-ladder profile starts burning more than once a quarter.
+    - cron: "17 4 * * 1"
   workflow_dispatch: # on-demand trigger from PR comments / manual
 
 permissions:
