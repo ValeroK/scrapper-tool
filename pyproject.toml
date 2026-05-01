@@ -114,8 +114,16 @@ warn_unused_ignores = true
 plugins = ["pydantic.mypy"]
 
 [[tool.mypy.overrides]]
-module = ["curl_cffi.*", "selectolax.*", "extruct.*", "scrapling.*", "structlog.*"]
+module = ["curl_cffi.*", "selectolax.*", "extruct.*", "scrapling.*", "structlog.*", "mcp.*"]
 ignore_missing_imports = true
+
+# FastMCP's @server.tool(...) decorator has no type stubs, so every
+# decorated function shows up as "untyped" under --strict. Suppress that
+# *only* for the MCP module — everywhere else strict typing stays in
+# force.
+[[tool.mypy.overrides]]
+module = "scrapper_tool.mcp"
+disable_error_code = ["untyped-decorator"]
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
