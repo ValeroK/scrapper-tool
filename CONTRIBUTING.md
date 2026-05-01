@@ -22,6 +22,15 @@ Triggers for a new PR:
 - A vendor site we know about (or a community report) shows a new pattern variant the §A-D tree doesn't cover → extend the tree.
 - The MCP SDK ships a major version → migrate `mcp.py` and bump the `[agent]` extra version pin.
 
+## Quarterly review checklist
+
+Every quarter (next: **2026-Q3**), the maintainer:
+
+1. **Re-runs `scrapper-tool canary`** against the URL set in [`tests/canary_targets.yaml`](tests/canary_targets.yaml). If the head-of-ladder profile (currently `chrome133a`) is showing >5 % 403 rate, promote whichever `curl_cffi` profile has stabilised since the last review.
+2. **Reads the latest dated landscape doc** in [`docs/research/`](docs/research/). If a successor (e.g. `2026-Q3-landscape.md`) hasn't been written yet, write one — don't edit the previous one in place. The diff between successive landscape docs is the audit trail.
+3. **Audits the [`do-not-adopt.md`](docs/research/do-not-adopt.md) list** for items that became viable again. Overturning a reject requires a *new* dated entry, never editing the old one.
+4. **Bumps `mcp` SDK pin** in the `[agent]` extra (M13) if a new minor version shipped. Run `tests/unit/test_mcp.py` to catch breaking changes.
+
 ## Development setup
 
 ```bash
