@@ -43,18 +43,25 @@ jobs:
     strategy:
       matrix:
         python-version: ["3.12", "3.13", "3.14"]
-        # `agent` is included in every matrix entry so test_mcp.py
-        # runs on every build — the MCP server is a first-class
-        # feature in v0.2.0+, not optional flavor. Without `agent`
-        # the importorskip in test_mcp.py kicks in and coverage on
-        # mcp.py drops below the 85% floor.
+        # `agent` and `http` are included in every matrix entry:
+        # - `agent` so test_mcp.py runs everywhere (MCP is first-class
+        #   since v0.2.0, not optional flavor — without it the
+        #   importorskip in test_mcp.py kicks in and mcp.py coverage
+        #   drops below the 85% floor).
+        # - `http` so test_http_server.py runs everywhere (REST sidecar
+        #   is first-class since v1.1.0; without it http_server.py
+        #   shows 0% coverage and drops the total below 85%).
         #
-        # The `dev,full,agent` row exercises the lxml-override path that
-        # the published Docker image and recommended SDK install use.
-        # The lighter rows exist to catch regressions in à la carte
-        # extras (some users still install `[hostile]` or `[llm-agent]`
-        # on their own).
-        extras: ["dev,agent", "dev,hostile,agent", "dev,llm-agent,agent", "dev,full,agent,http"]
+        # The `dev,full,agent,http` row exercises the lxml-override path
+        # that the published Docker image and recommended SDK install
+        # use. The lighter rows exist to catch regressions in à la
+        # carte extras (some users still install `[hostile]` or
+        # `[llm-agent]` on their own).
+        extras:
+          - "dev,agent,http"
+          - "dev,hostile,agent,http"
+          - "dev,llm-agent,agent,http"
+          - "dev,full,agent,http"
     steps:
       - uses: actions/checkout@v6
       - name: Set up uv
@@ -71,7 +78,7 @@ jobs:
       - name: Run tests with coverage
         run: uv run pytest --cov --cov-report=term-missing --cov-fail-under=85
       - name: Upload coverage to Codecov (informational)
-        if: matrix.python-version == '3.13' && matrix.extras == 'dev,agent'
+        if: matrix.python-version == '3.13' && matrix.extras == 'dev,agent,http'
         uses: codecov/codecov-action@v6
         with:
           fail_ci_if_error: false
