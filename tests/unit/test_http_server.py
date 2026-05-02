@@ -900,17 +900,18 @@ class TestLLMProbe:
 
 
 class TestBrowserModuleCheck:
-    def test_patchright_ok(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        # patchright is installed in the test env via [llm-agent]
+    def test_patchright_present_or_missing(self) -> None:
+        # patchright ships with [llm-agent]/[full]. Other matrix entries
+        # (dev,agent,http; dev,hostile,agent,http) won't have it.
         result = http_server._check_browser_module("patchright")
-        assert result == "ok"
+        assert result in {"ok", "missing"}
 
     def test_camoufox_present_or_missing(self) -> None:
-        # Camoufox is in [llm-agent] so it should be 'ok' in the test env
+        # Camoufox is in [llm-agent]/[full]; missing in lighter matrix entries.
         result = http_server._check_browser_module("camoufox")
         assert result in {"ok", "missing"}
 
     def test_scrapling_present_or_missing(self) -> None:
-        # Scrapling is in [hostile]/[full] — depends on which test matrix entry
+        # Scrapling is in [hostile]/[full]; missing in lighter matrix entries.
         result = http_server._check_browser_module("scrapling")
         assert result in {"ok", "missing"}
