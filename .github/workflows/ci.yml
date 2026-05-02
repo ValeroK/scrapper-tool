@@ -54,7 +54,7 @@ jobs:
         # The lighter rows exist to catch regressions in à la carte
         # extras (some users still install `[hostile]` or `[llm-agent]`
         # on their own).
-        extras: ["dev,agent", "dev,hostile,agent", "dev,llm-agent,agent", "dev,full,agent"]
+        extras: ["dev,agent", "dev,hostile,agent", "dev,llm-agent,agent", "dev,full,agent,http"]
     steps:
       - uses: actions/checkout@v6
       - name: Set up uv
@@ -98,3 +98,21 @@ jobs:
         # "package not found on PyPI" cases, which is what we want.
         run: uv run pip-audit --skip-editable
         continue-on-error: false   # fail the build on any new CVE
+
+  openapi-spec-check:
+    name: OpenAPI spec is up-to-date
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: astral-sh/setup-uv@v8.1.0
+      - run: uv python install 3.13
+      - run: uv sync --extra dev --extra agent --extra full --extra http
+      # Regenerate the spec; if it differs from what's committed, the
+      # working tree will be dirty and `git diff --exit-code` fails.
+      - run: uv run python scripts/dump_openapi.py
+      - name: Fail if spec drifted
+        run: |
+          if ! git diff --exit-code docs/openapi/; then
+            echo "::error::OpenAPI spec drifted. Run: uv run python scripts/dump_openapi.py and commit docs/openapi/."
+            exit 1
+          fi

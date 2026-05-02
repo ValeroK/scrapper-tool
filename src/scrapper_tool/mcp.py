@@ -24,9 +24,17 @@ Model-Context-Protocol consumer:
 Tools exposed
 -------------
 
-- ``fetch_with_ladder(url, *, method, use_curl_cffi)`` — issue an HTTP
-  request through the impersonation ladder; returns status, body
-  truncated to 64 KB, and the winning profile name.
+- ``auto_scrape(url, schema_json, *, instruction, model, browser, timeout_s)`` —
+  PRIMARY tool (NEW v1.1.0+). Auto-escalates Pattern A/B/C → E1 → E2 in
+  a single call and returns ``pattern_used`` so the agent can see what
+  worked. Use this instead of fetch_with_ladder + agent_extract when
+  you just want data and don't care which pattern produced it.
+- ``fetch_with_ladder(url, *, method, use_curl_cffi, extract_structured)`` —
+  Issue an HTTP request through the impersonation ladder; returns
+  status, body truncated to 64 KB, and the winning profile name. With
+  ``extract_structured=True`` (NEW v1.1.0+) also runs Pattern B + C and
+  includes ``product`` and ``microdata_price`` fields — eliminates the
+  common two-tool pattern (fetch then extract_product).
 - ``extract_product(html, *, base_url)`` — parse a schema.org
   Product+Offer block from HTML (Pattern B); returns a normalised
   ``ProductOffer`` dict or ``null``.
@@ -37,11 +45,11 @@ Tools exposed
   report which profile won; returns the same JSON shape as the CLI's
   ``--json`` mode.
 - ``agent_extract(url, schema_json, *, instruction, model, timeout_s, headful)`` —
-  Pattern E1 (NEW v1.0.0+): render with a stealth browser (Camoufox by
+  Pattern E1 (v1.0.0+): render with a stealth browser (Camoufox by
   default) and run a single local-LLM call to extract structured JSON.
   Requires the ``[llm-agent]`` extra and a running local LLM (Ollama).
 - ``agent_browse(url, instruction, *, model, max_steps, timeout_s, headful)`` —
-  Pattern E2 (NEW v1.0.0+): multi-step LLM-driven browser-use agent for
+  Pattern E2 (v1.0.0+): multi-step LLM-driven browser-use agent for
   interactive tasks (login, multi-step nav, dynamic forms). Same extras
   required as ``agent_extract``.
 
@@ -93,6 +101,21 @@ def _truncate(text: str, limit: int = _BODY_TRUNCATION_BYTES) -> tuple[str, bool
     if len(encoded) <= limit:
         return text, False
     return encoded[:limit].decode("utf-8", errors="replace"), True
+
+
+def _structured_product(html: str, base_url: str | None) -> dict[str, Any] | None:
+    """Pattern B helper — return ProductOffer dict or None."""
+    product = extract_product_offer(html, base_url=base_url)
+    return product.model_dump(mode="json") if product is not None else None
+
+
+def _structured_price(html: str) -> dict[str, Any] | None:
+    """Pattern C helper — return ``{price, currency}`` or None."""
+    result = _extract_microdata_price(html)
+    if result is None:
+        return None
+    price, currency = result
+    return {"price": str(price), "currency": currency}
 
 
 def _agent_error_payload(
@@ -198,11 +221,15 @@ def _build_server(  # noqa: PLR0915 — single-place tool registration
     server = FastMCP(
         name="scrapper-tool",
         instructions=(
-            "Reusable web-scraping toolkit. Use fetch_with_ladder for "
-            "TLS-sensitive fetches, extract_product for schema.org "
-            "Product+Offer parsing, extract_microdata_price for "
-            "<meta itemprop='price'> anchors, canary for fingerprint-"
-            "health probes. See https://github.com/ValeroK/scrapper-tool"
+            "Reusable web-scraping toolkit. RECOMMENDED first tool: "
+            "auto_scrape (auto-escalates A/B/C -> E1 -> E2 in one call). "
+            "Power tools: fetch_with_ladder for TLS-sensitive fetches "
+            "(pass extract_structured=True to also parse JSON-LD), "
+            "extract_product for schema.org Product+Offer parsing on "
+            "raw HTML, extract_microdata_price for <meta itemprop='price'> "
+            "anchors, agent_extract / agent_browse for Pattern E direct, "
+            "canary for fingerprint-health probes. "
+            "See https://github.com/ValeroK/scrapper-tool"
         ),
         host=host,
         port=port,
@@ -224,11 +251,18 @@ def _build_server(  # noqa: PLR0915 — single-place tool registration
         url: str,
         method: str = "GET",
         use_curl_cffi: bool = True,
+        extract_structured: bool = False,
     ) -> dict[str, Any]:
         """Fetch ``url`` through the ladder; return structured result.
 
         When ``use_curl_cffi=False`` this falls back to the plain httpx
         client (no ladder), useful for sites that don't fingerprint.
+
+        When ``extract_structured=True`` (v1.1.0+), also runs Pattern B
+        (extruct JSON-LD/microdata → ProductOffer) and Pattern C (CSS
+        microdata price) on the response body and includes ``product``
+        and ``microdata_price`` fields in the result. Eliminates the
+        common two-tool pattern (fetch then extract_product).
         """
         if use_curl_cffi:
             try:
@@ -244,7 +278,7 @@ def _build_server(  # noqa: PLR0915 — single-place tool registration
                     "error": str(exc),
                 }
             text, truncated = _truncate(resp.text)
-            return {
+            payload: dict[str, Any] = {
                 "url": url,
                 "blocked": False,
                 "winning_profile": profile,
@@ -253,6 +287,10 @@ def _build_server(  # noqa: PLR0915 — single-place tool registration
                 "truncated": truncated,
                 "error": None,
             }
+            if extract_structured and resp.text:
+                payload["product"] = _structured_product(resp.text, str(resp.url))
+                payload["microdata_price"] = _structured_price(resp.text)
+            return payload
 
         # Plain httpx path.
         try:
@@ -269,7 +307,7 @@ def _build_server(  # noqa: PLR0915 — single-place tool registration
                 "error": str(exc),
             }
         text, truncated = _truncate(resp.text)
-        return {
+        payload = {
             "url": url,
             "blocked": False,
             "winning_profile": "httpx",
@@ -278,6 +316,10 @@ def _build_server(  # noqa: PLR0915 — single-place tool registration
             "truncated": truncated,
             "error": None,
         }
+        if extract_structured and resp.text:
+            payload["product"] = _structured_product(resp.text, str(resp.url))
+            payload["microdata_price"] = _structured_price(resp.text)
+        return payload
 
     # ---- Tool: extract_product --------------------------------------------
 
@@ -396,7 +438,7 @@ def _build_server(  # noqa: PLR0915 — single-place tool registration
         schema_json: dict[str, Any] | None = None,
         model: str | None = None,
         browser: str | None = None,
-        max_steps: int = 30,
+        max_steps: int = 50,
         headful: bool = False,
         timeout_s: float = 180.0,
     ) -> dict[str, Any]:
@@ -432,6 +474,124 @@ def _build_server(  # noqa: PLR0915 — single-place tool registration
             return _agent_error_payload(str(exc))
 
         return _agent_result_payload(result)
+
+    # ---- Tool: auto_scrape (NEW v1.1.0) -----------------------------------
+
+    @server.tool(
+        name="auto_scrape",
+        description=(
+            "PRIMARY scraping tool (v1.1.0+). Auto-escalating ladder: "
+            "tries Pattern A/B/C (TLS impersonation + JSON-LD/microdata "
+            "extraction) first; if blocked or schema not satisfied, "
+            "escalates to Pattern E1 (Crawl4AI + LLM); if still blocked, "
+            "escalates to Pattern E2 (browser-use multi-step agent). "
+            "Returns pattern_used + pattern_attempts so the agent can "
+            "see which pattern produced the data. Use this instead of "
+            "fetch_with_ladder + agent_extract when you just want data "
+            "and don't care which pattern produced it."
+        ),
+    )
+    async def auto_scrape(
+        url: str,
+        schema_json: dict[str, Any] | None = None,
+        instruction: str | None = None,
+        model: str | None = None,
+        browser: str | None = None,
+        timeout_s: float = 120.0,
+    ) -> dict[str, Any]:
+        """Run the full A/B/C → E1 → E2 escalation ladder."""
+        attempts: list[str] = []
+        last_error: str | None = None
+
+        # ----- Pattern A/B/C -----
+        attempts.append("a_b_c")
+        try:
+            resp, profile = await request_with_ladder("GET", url)
+            text = resp.text or ""
+            product = _structured_product(text, str(resp.url))
+            price = _structured_price(text)
+            success = schema_json is None and (product is not None or price is not None)
+            if success:
+                truncated_text, truncated = _truncate(text)
+                return {
+                    "pattern_used": "a_b_c",
+                    "pattern_attempts": attempts,
+                    "url": str(resp.url),
+                    "winning_profile": profile,
+                    "product": product,
+                    "microdata_price": price,
+                    "data": None,
+                    "rendered_markdown": None,
+                    "body": truncated_text,
+                    "truncated": truncated,
+                    "blocked": False,
+                    "error": None,
+                }
+        except BlockedError as exc:
+            last_error = f"a_b_c: {exc}"
+
+        # ----- Pattern E1 -----
+        try:
+            from scrapper_tool.agent import AgentConfig  # noqa: PLC0415
+            from scrapper_tool.agent import agent_browse as _agent_browse  # noqa: PLC0415
+            from scrapper_tool.agent import agent_extract as _agent_extract  # noqa: PLC0415
+        except ImportError as exc:  # pragma: no cover
+            return {
+                "pattern_used": None,
+                "pattern_attempts": attempts,
+                "url": url,
+                "blocked": True,
+                "error": _AGENT_NOT_INSTALLED,
+                "error_detail": str(exc),
+                "data": None,
+                "product": None,
+                "rendered_markdown": None,
+            }
+
+        cfg = AgentConfig.from_env()
+        overrides: dict[str, Any] = {"timeout_s": timeout_s}
+        if model:
+            overrides["model"] = model
+        if browser:
+            overrides["browser"] = browser
+
+        attempts.append("e1")
+        schema_for_e1 = schema_json or {"type": "object", "additionalProperties": True}
+        try:
+            result = await _agent_extract(
+                url, schema_for_e1, instruction=instruction, config=cfg, **overrides
+            )
+            if not result.blocked:
+                payload = _agent_result_payload(result)
+                payload["pattern_used"] = "e1"
+                payload["pattern_attempts"] = attempts
+                payload["product"] = None
+                return payload
+            last_error = f"e1: {result.error or 'blocked'}"
+        except AgentBlockedError as exc:
+            last_error = f"e1: {exc}"
+
+        # ----- Pattern E2 -----
+        attempts.append("e2")
+        e2_instruction = instruction or (
+            f"Extract structured data matching: {schema_json}"
+            if schema_json
+            else "Extract the main content of this page"
+        )
+        try:
+            result = await _agent_browse(
+                url, e2_instruction, schema=schema_json, config=cfg, **overrides
+            )
+            payload = _agent_result_payload(result)
+            payload["pattern_used"] = "e2"
+            payload["pattern_attempts"] = attempts
+            payload["product"] = None
+            return payload
+        except AgentBlockedError as exc:
+            return _agent_error_payload(
+                f"All patterns blocked: {', '.join(attempts)}. Last: {last_error or exc}",
+                blocked=True,
+            ) | {"pattern_used": None, "pattern_attempts": attempts, "product": None}
 
     # ---- Tool: canary -----------------------------------------------------
 

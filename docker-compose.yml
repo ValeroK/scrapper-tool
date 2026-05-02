@@ -15,8 +15,11 @@
 #          schema={'type':'object','properties':{'quotes':{'type':'array'}}})))"
 #
 # Profiles:
-#   http   — runs scrapper-tool-mcp-http on :8000 (streamable-HTTP).
+#   http   — runs scrapper-tool-mcp-http on :8000 (streamable-HTTP MCP).
 #            Persistent service for Cursor / Claude Code remote / mcp-use.
+#   rest   — runs scrapper-tool-rest on :5792 (FastAPI REST sidecar).
+#            For non-MCP callers (affiliate-service, Node/Go backends).
+#            See docs/http-sidecar.md for endpoint reference.
 #   live   — runs the live agent integration suite against the LLM.
 #
 # Two ways to wire as an MCP server:
@@ -130,6 +133,69 @@ services:
       # an "I am alive" signal. We just need a non-5xx response.
       test:
         ["CMD-SHELL", "wget -q -O - http://127.0.0.1:8000/mcp 2>&1 | head -c 1 || exit 1"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+
+  # ----------------------------------------------------------------
+  # REST sidecar — call scrapper-tool from any service over plain HTTP.
+  # Designed for non-MCP callers (affiliate-service, Node/Go backends).
+  # The /scrape endpoint runs the full A/B/C -> E1 -> E2 escalation
+  # ladder server-side so callers don't need per-pattern logic.
+  #
+  # Start (creates a dedicated container so the default stdio service
+  # stays available):
+  #   docker compose --profile rest up -d scrapper-tool-rest
+  #
+  # Verify:
+  #   curl http://localhost:5792/health    -> {"status": "ok"}
+  #   curl http://localhost:5792/ready     -> readiness checks (LLM, browser)
+  #   curl http://localhost:5792/openapi.json   -> full OpenAPI 3.1 spec
+  #   open  http://localhost:5792/docs     -> Swagger UI
+  #
+  # Affiliate service example (Python):
+  #   resp = httpx.post("http://scrapper-tool-rest:5792/scrape",
+  #                     json={"url": "https://target.com/p/123"})
+  scrapper-tool-rest:
+    profiles: ["rest"]
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args:
+        INSTALL_CAMOUFOX: "${INSTALL_CAMOUFOX:-0}"
+    image: scrapper-tool:latest
+    container_name: scrapper-tool-rest
+    restart: unless-stopped
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    ports:
+      - "${SCRAPPER_TOOL_HTTP_PORT:-5792}:5792"
+    environment:
+      # ---- HTTP server ----
+      SCRAPPER_TOOL_HTTP_HOST: "0.0.0.0"
+      SCRAPPER_TOOL_HTTP_PORT: "5792"
+      # Leave SCRAPPER_TOOL_HTTP_API_KEY unset for internal-only sidecar
+      # (any service on the docker network can call it). Set it to
+      # require ``X-API-Key: <value>`` on /fetch /scrape /extract /browse.
+      SCRAPPER_TOOL_HTTP_API_KEY: "${SCRAPPER_TOOL_HTTP_API_KEY:-}"
+      SCRAPPER_TOOL_HTTP_CORS_ORIGINS: "${SCRAPPER_TOOL_HTTP_CORS_ORIGINS:-*}"
+      SCRAPPER_TOOL_HTTP_LOG_LEVEL: "${SCRAPPER_TOOL_HTTP_LOG_LEVEL:-info}"
+      # ---- LLM endpoint (forwarded to AgentConfig) ----
+      SCRAPPER_TOOL_AGENT_LLM: "${SCRAPPER_TOOL_AGENT_LLM:-ollama}"
+      SCRAPPER_TOOL_AGENT_OLLAMA_URL: "${SCRAPPER_TOOL_AGENT_OLLAMA_URL:-http://host.docker.internal:11434}"
+      SCRAPPER_TOOL_AGENT_MODEL: "${SCRAPPER_TOOL_AGENT_MODEL:-qwen3-vl:8b}"
+      # ---- Browser backend ----
+      SCRAPPER_TOOL_AGENT_BROWSER: "${SCRAPPER_TOOL_AGENT_BROWSER:-patchright}"
+      SCRAPPER_TOOL_AGENT_HEADFUL: "0"
+      SCRAPPER_TOOL_AGENT_BEHAVIOR: "${SCRAPPER_TOOL_AGENT_BEHAVIOR:-humanlike}"
+      # ---- Captcha cascade (free OSS by default; paid only if key set) ----
+      SCRAPPER_TOOL_CAPTCHA_SOLVER: "${SCRAPPER_TOOL_CAPTCHA_SOLVER:-auto}"
+      SCRAPPER_TOOL_CAPTCHA_KEY: "${SCRAPPER_TOOL_CAPTCHA_KEY:-}"
+      SCRAPPER_TOOL_CAPTCHA_PAID_FALLBACK: "${SCRAPPER_TOOL_CAPTCHA_PAID_FALLBACK:-capsolver}"
+    entrypoint: ["scrapper-tool-serve"]
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:5792/health || exit 1"]
       interval: 30s
       timeout: 5s
       retries: 3

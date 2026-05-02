@@ -35,6 +35,7 @@ Built from the scraping core behind [PartsPilot](https://github.com/ValeroK/affi
 - [Install](#install)
 - [Quickstart](#quickstart)
 - [Run as an MCP server](#run-as-an-mcp-server)
+- [Run as an HTTP REST sidecar](#run-as-an-http-rest-sidecar)
 - [Run with Docker](#run-with-docker)
 - [Settings](#settings)
 - [Documentation](#documentation)
@@ -205,7 +206,8 @@ LangChain) can call.
 
 | Tool | Purpose |
 |------|---------|
-| `fetch_with_ladder(url, method, use_curl_cffi)` | HTTP fetch through the TLS-impersonation ladder. Returns `{status, body (≤64 KB), winning_profile, blocked, error}`. |
+| `auto_scrape(url, schema_json, instruction, model, browser, timeout_s)` *(v1.1.0+)* | **Recommended first tool.** Auto-escalating ladder A/B/C → E1 → E2 in a single call. Returns `pattern_used`. |
+| `fetch_with_ladder(url, method, use_curl_cffi, extract_structured)` | HTTP fetch through the TLS-impersonation ladder. With `extract_structured=True` (v1.1.0+) also runs Pattern B + C. |
 | `extract_product(html, base_url)` | Pattern B — schema.org Product+Offer parser. |
 | `extract_microdata_price(html)` | Pattern C — `<meta itemprop="price">` parser. |
 | `canary(url, profiles)` | Walk the impersonation ladder and report which profile won. |
@@ -313,6 +315,53 @@ way because the agent runs Linux-side):
 
 For framework-specific wiring (AutoGen, LangChain, mcp-use, OpenClaw, Hermes
 Agent), see **[`docs/agent-integration.md`](docs/agent-integration.md)**.
+
+## Run as an HTTP REST sidecar
+
+> Available since **v1.1.0**.
+
+When the consumer is a service (not an LLM agent) — for example the affiliate
+service, a Node/Go backend, or a Python worker that already speaks HTTP —
+spawn the **REST sidecar** on port **5792**:
+
+```bash
+pip install 'scrapper-tool[http]'
+scrapper-tool-serve
+```
+
+Or via Docker (bundles all five patterns):
+
+```bash
+docker compose --profile rest up -d scrapper-tool-rest
+curl http://localhost:5792/health    # {"status": "ok"}
+```
+
+The primary endpoint is **`POST /scrape`** — it runs the full A/B/C → E1 → E2
+escalation ladder server-side so callers don't need per-pattern decision logic:
+
+```bash
+curl -s -X POST http://localhost:5792/scrape \
+  -H "Content-Type: application/json" \
+  -d '{"url":"https://example.com/product/123"}'
+```
+
+| Endpoint | Purpose |
+|---|---|
+| `POST /scrape` | **Primary.** Auto-escalating ladder A/B/C → E1 → E2. Returns `pattern_used`. |
+| `POST /fetch` | Pattern A/B/C with optional Pattern B/C structured extraction. |
+| `POST /extract` | Pattern E1 direct (Crawl4AI + LLM, 1 call). |
+| `POST /browse` | Pattern E2 direct (browser-use multi-step agent). |
+| `GET /health` | Liveness probe — always 200. |
+| `GET /ready` | Readiness with detailed component checks (Ollama, model, browser). |
+| `GET /version` | Version + installed-extras info. |
+| `GET /docs` | Swagger UI. |
+| `GET /openapi.json` | Raw OpenAPI 3.1 spec — for typed-client codegen. |
+
+Optional `X-API-Key` auth via `SCRAPPER_TOOL_HTTP_API_KEY`. Full reference and
+examples in **[`docs/http-sidecar.md`](docs/http-sidecar.md)**; static OpenAPI
+spec at [`docs/openapi/openapi.yaml`](docs/openapi/openapi.yaml) for
+generating typed clients (Python via `openapi-python-client`, TypeScript via
+`openapi-typescript-codegen`).
 
 ## Run with Docker
 

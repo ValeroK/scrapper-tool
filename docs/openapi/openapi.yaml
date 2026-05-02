@@ -1,0 +1,432 @@
+openapi: 3.1.0
+info:
+  title: scrapper-tool REST sidecar
+  description: "REST sidecar for scrapper-tool. Exposes the full A-E capability stack\
+    \ over plain JSON/HTTP. The /scrape endpoint runs the full A/B/C \u2192 E1 \u2192\
+    \ E2 auto-escalation ladder server-side so callers don't need per-pattern logic."
+  version: 1.1.0
+paths:
+  /health:
+    get:
+      tags:
+      - operational
+      summary: Liveness probe
+      description: Always returns 200 if the process is up. Use for orchestrator liveness.
+      operationId: health
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                additionalProperties:
+                  type: string
+                type: object
+                title: Response Health
+  /version:
+    get:
+      tags:
+      - operational
+      summary: Version + installed-extras info
+      operationId: version
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                additionalProperties: true
+                type: object
+                title: Response Version
+  /ready:
+    get:
+      tags:
+      - operational
+      summary: Readiness with detailed component checks
+      description: Returns ready / degraded / not_ready in body (always HTTP 200).
+        Body distinguishes 'sidecar crashed' (no response) from 'sidecar up but LLM
+        unavailable' (degraded).
+      operationId: ready
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                additionalProperties: true
+                type: object
+                title: Response Ready
+  /fetch:
+    post:
+      tags:
+      - scraping
+      summary: "Pattern A/B/C \u2014 TLS-impersonation ladder fetch"
+      description: Walks the impersonation ladder (chrome133a / chrome124 / safari18_0
+        / firefox135) until a profile returns non-403/503. With extract_structured=true
+        (default), also runs Pattern B (extruct JSON-LD / microdata) and Pattern C
+        (microdata price).
+      operationId: fetch
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/FetchRequest'
+        required: true
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                additionalProperties: true
+                type: object
+                title: Response Fetch
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+      security:
+      - APIKeyHeader: []
+  /scrape:
+    post:
+      tags:
+      - scraping
+      summary: Auto-escalating scrape (PRIMARY endpoint)
+      description: "Runs Pattern A/B/C \u2192 E1 \u2192 E2 in sequence and returns\
+        \ the first one that succeeds. Use for 95% of scraping tasks; the response\
+        \ includes pattern_used so callers can see which pattern produced the data."
+      operationId: scrape
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ScrapeRequest'
+        required: true
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                additionalProperties: true
+                type: object
+                title: Response Scrape
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+      security:
+      - APIKeyHeader: []
+  /extract:
+    post:
+      tags:
+      - agent
+      summary: "Pattern E1 \u2014 Crawl4AI + LLM extraction (1 LLM call)"
+      description: Renders the URL with a stealth browser, then makes a single LLM
+        call to extract structured JSON matching schema_json. Faster and more reliable
+        than /browse for non-interactive pages. Requires the [llm-agent] extra.
+      operationId: extract
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ExtractRequest'
+        required: true
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                additionalProperties: true
+                type: object
+                title: Response Extract
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+      security:
+      - APIKeyHeader: []
+  /browse:
+    post:
+      tags:
+      - agent
+      summary: "Pattern E2 \u2014 browser-use multi-step agent loop"
+      description: Multi-step LLM-driven agent loop. Use ONLY for interactive flows
+        (login, paginate, dynamic forms). Slower and more expensive than /extract.
+        Requires the [llm-agent] extra.
+      operationId: browse
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/BrowseRequest'
+        required: true
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                additionalProperties: true
+                type: object
+                title: Response Browse
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+      security:
+      - APIKeyHeader: []
+components:
+  schemas:
+    BrowseRequest:
+      properties:
+        url:
+          type: string
+          title: Url
+        instruction:
+          type: string
+          title: Instruction
+        schema_json:
+          anyOf:
+          - additionalProperties: true
+            type: object
+          - items: {}
+            type: array
+          - type: 'null'
+          title: Schema Json
+        browser:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Browser
+        model:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Model
+        max_steps:
+          anyOf:
+          - type: integer
+          - type: 'null'
+          title: Max Steps
+        timeout_s:
+          anyOf:
+          - type: number
+          - type: 'null'
+          title: Timeout S
+        headful:
+          type: boolean
+          title: Headful
+          default: false
+      type: object
+      required:
+      - url
+      - instruction
+      title: BrowseRequest
+      description: Body of POST /browse.
+    ExtractRequest:
+      properties:
+        url:
+          type: string
+          title: Url
+        schema_json:
+          anyOf:
+          - additionalProperties: true
+            type: object
+          - items: {}
+            type: array
+          - type: string
+          title: Schema Json
+        instruction:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Instruction
+        browser:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Browser
+        model:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Model
+        timeout_s:
+          anyOf:
+          - type: number
+          - type: 'null'
+          title: Timeout S
+        headful:
+          type: boolean
+          title: Headful
+          default: false
+      type: object
+      required:
+      - url
+      - schema_json
+      title: ExtractRequest
+      description: Body of POST /extract.
+    FetchRequest:
+      properties:
+        url:
+          type: string
+          title: Url
+          description: Target URL
+          examples:
+          - https://example.com
+        method:
+          type: string
+          title: Method
+          description: HTTP method
+          default: GET
+        headers:
+          anyOf:
+          - additionalProperties:
+              type: string
+            type: object
+          - type: 'null'
+          title: Headers
+          description: Extra request headers
+        timeout:
+          type: number
+          title: Timeout
+          description: Per-request timeout (seconds)
+          default: 10.0
+        proxy:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Proxy
+          description: Optional proxy URL (http://user:pass@host:port)
+        extract_structured:
+          type: boolean
+          title: Extract Structured
+          description: Run Pattern B (JSON-LD/microdata) + Pattern C (microdata price)
+            on the response HTML. Adds `product`, `json_ld`, `microdata_price` fields.
+          default: true
+      type: object
+      required:
+      - url
+      title: FetchRequest
+      description: Body of POST /fetch.
+    HTTPValidationError:
+      properties:
+        detail:
+          items:
+            $ref: '#/components/schemas/ValidationError'
+          type: array
+          title: Detail
+      type: object
+      title: HTTPValidationError
+    ScrapeRequest:
+      properties:
+        url:
+          type: string
+          title: Url
+          description: Target URL
+          examples:
+          - https://example.com/product/123
+        schema_json:
+          anyOf:
+          - additionalProperties: true
+            type: object
+          - items: {}
+            type: array
+          - type: string
+          - type: 'null'
+          title: Schema Json
+          description: What shape to extract. JSON Schema dict, list-of-fields, or
+            natural-language string. If None, returns auto-detected ProductOffer from
+            JSON-LD/microdata when A/B/C succeeds.
+        instruction:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Instruction
+          description: Optional extraction guidance for the LLM
+        mode:
+          type: string
+          enum:
+          - auto
+          - fetch
+          - extract
+          - browse
+          title: Mode
+          description: "auto: full ladder (A/B/C \u2192 E1 \u2192 E2). fetch/extract/browse:\
+            \ force a specific pattern."
+          default: auto
+        browser:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Browser
+          description: Override SCRAPPER_TOOL_AGENT_BROWSER
+        model:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Model
+          description: Override SCRAPPER_TOOL_AGENT_MODEL
+        timeout_s:
+          anyOf:
+          - type: number
+          - type: 'null'
+          title: Timeout S
+          description: Override AgentConfig.timeout_s
+        max_steps:
+          anyOf:
+          - type: integer
+          - type: 'null'
+          title: Max Steps
+          description: Override AgentConfig.max_steps (E2 only)
+        headful:
+          type: boolean
+          title: Headful
+          description: Run browser headful (debugging)
+          default: false
+      type: object
+      required:
+      - url
+      title: ScrapeRequest
+      description: Body of POST /scrape (the primary endpoint).
+    ValidationError:
+      properties:
+        loc:
+          items:
+            anyOf:
+            - type: string
+            - type: integer
+          type: array
+          title: Location
+        msg:
+          type: string
+          title: Message
+        type:
+          type: string
+          title: Error Type
+        input:
+          title: Input
+        ctx:
+          type: object
+          title: Context
+      type: object
+      required:
+      - loc
+      - msg
+      - type
+      title: ValidationError
+  securitySchemes:
+    APIKeyHeader:
+      type: apiKey
+      in: header
+      name: X-API-Key

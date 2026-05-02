@@ -105,7 +105,7 @@ The library auto-detects vision-capable models by name (`vl`, `vision`, `llava`,
 
 | Field | Env var | Default | Notes |
 |-------|---------|---------|-------|
-| `max_steps` | `SCRAPPER_TOOL_AGENT_MAX_STEPS` | `20` | E2 only. Once exhausted, returns `AgentResult(error="no-match")` (does not raise). |
+| `max_steps` | `SCRAPPER_TOOL_AGENT_MAX_STEPS` | `50` | E2 only. Once exhausted, returns `AgentResult(error="no-match")` (does not raise). |
 | `timeout_s` | `SCRAPPER_TOOL_AGENT_TIMEOUT_S` | `120` | Hard ceiling. Exceeded → `AgentTimeoutError`. |
 
 ### ToS / safety
@@ -233,3 +233,18 @@ from scrapper_tool.agent import AgentConfig
 
 cfg = AgentConfig.from_env()   # reads all SCRAPPER_TOOL_* vars
 ```
+
+---
+
+## HTTP REST sidecar (scrapper-tool-serve)
+
+Available since v1.1.0. See [`http-sidecar.md`](http-sidecar.md) for the endpoint reference. These env vars configure the FastAPI server itself — agent / browser / captcha settings (above) are forwarded automatically.
+
+| Field | Env var | Default | Notes |
+|-------|---------|---------|-------|
+| `host` | `SCRAPPER_TOOL_HTTP_HOST` | `0.0.0.0` | Bind address. Use `127.0.0.1` to restrict to localhost. |
+| `port` | `SCRAPPER_TOOL_HTTP_PORT` | `5792` | TCP port. Avoids the crowded 8000/8080 range. |
+| `api_key` | `SCRAPPER_TOOL_HTTP_API_KEY` | (unset) | When set, all `/fetch /scrape /extract /browse` requests must include `X-API-Key: <value>`. Leave unset for internal-only sidecar networks. |
+| `cors_origins` | `SCRAPPER_TOOL_HTTP_CORS_ORIGINS` | `*` | Comma-separated CORS allowed origins. Use explicit origins (`https://app.example.com`) in production. |
+| `log_level` | `SCRAPPER_TOOL_HTTP_LOG_LEVEL` | `info` | Uvicorn log level. One of: `debug` / `info` / `warning` / `error` / `critical`. |
+| `serve_docs` | `SCRAPPER_TOOL_HTTP_DOCS` | `1` | When `0`, `/docs` and `/redoc` are not served. `/openapi.json` always works. Disable in production for reduced attack surface. |

@@ -105,7 +105,7 @@ class AgentConfig(BaseModel):
     ollama_url: str = "http://localhost:11434"
 
     # --- Run budget
-    max_steps: int = 20
+    max_steps: int = 50
     timeout_s: float = 120.0
 
     # --- Captcha cascade — auto-engages free OSS tiers, paid only if key set
@@ -141,7 +141,7 @@ class AgentConfig(BaseModel):
                 "llm": env.get("SCRAPPER_TOOL_AGENT_LLM", "ollama"),
                 "model": env.get("SCRAPPER_TOOL_AGENT_MODEL", "qwen3-vl:8b"),
                 "ollama_url": env.get("SCRAPPER_TOOL_AGENT_OLLAMA_URL", "http://localhost:11434"),
-                "max_steps": int(env.get("SCRAPPER_TOOL_AGENT_MAX_STEPS", "20")),
+                "max_steps": int(env.get("SCRAPPER_TOOL_AGENT_MAX_STEPS", "50")),
                 "timeout_s": float(env.get("SCRAPPER_TOOL_AGENT_TIMEOUT_S", "120")),
                 "captcha_solver": env.get("SCRAPPER_TOOL_CAPTCHA_SOLVER", "auto"),
                 "captcha_api_key": SecretStr(captcha_key) if captcha_key else None,

@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "scrapper-tool"
-version = "1.0.0"
+version = "1.1.0"
 description = "Reusable web-scraping toolkit — Pattern A/B/C/D ladder, TLS-impersonation fallback chain, deterministic fixture-replay testing, and an optional MCP server for LLM agents."
 readme = "README.md"
 requires-python = ">=3.12"
@@ -79,6 +79,17 @@ full = [
     "scrapper-tool[llm-agent]",
     "scrapper-tool[turnstile-solver]",
 ]
+# M15 (v1.1.0): HTTP REST sidecar — exposes the full A-E capability stack
+# over plain JSON/HTTP for service-to-service callers (affiliate-service,
+# Node/Go backends, etc.). Provides scrapper-tool-serve console script that
+# starts a FastAPI server on port 5792 by default. The /scrape endpoint
+# auto-escalates A/B/C → D → E1 → E2 server-side so callers don't need
+# per-pattern logic. See docs/http-sidecar.md for full reference.
+http = [
+    "fastapi>=0.115",
+    "uvicorn[standard]>=0.32",
+    "PyYAML>=6.0",          # used by scripts/dump_openapi.py for openapi.yaml
+]
 # Optional alternative browser backends.
 zendriver-backend = ["zendriver>=0.5"]
 botasaurus-backend = ["botasaurus-driver>=4.0"]
@@ -97,6 +108,7 @@ dev = [
 [project.scripts]
 scrapper-tool = "scrapper_tool.canary:main"
 scrapper-tool-mcp = "scrapper_tool.mcp:main"
+scrapper-tool-serve = "scrapper_tool.http_server:main"
 
 # Verify the console scripts are wired:
 #     pip install -e .                  # canary CLI
@@ -239,6 +251,9 @@ module = [
     "langchain_openai.*",
     "turnstile_solver.*",
     "PIL.*",
+    "fastapi.*",
+    "uvicorn.*",
+    "yaml.*",
 ]
 ignore_missing_imports = true
 
@@ -255,6 +270,12 @@ disable_error_code = ["untyped-decorator"]
 # stays on for the rest of the agent surface.
 [[tool.mypy.overrides]]
 module = ["scrapper_tool.agent.browse", "scrapper_tool.agent.extract"]
+disable_error_code = ["untyped-decorator", "no-any-return"]
+
+# FastAPI's @app.get / @app.post / @app.exception_handler decorators
+# are untyped under --strict. Suppress *only* for the http_server module.
+[[tool.mypy.overrides]]
+module = "scrapper_tool.http_server"
 disable_error_code = ["untyped-decorator", "no-any-return"]
 
 [tool.pytest.ini_options]

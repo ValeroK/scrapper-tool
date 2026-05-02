@@ -1,5 +1,7 @@
 # Agent integration — MCP server
 
+> **Picking the right surface:** if your client is an LLM agent that selects tools dynamically (Claude Desktop, Claude Code, Cursor, mcp-use), use this MCP server. If your client is a service that calls a fixed endpoint (the affiliate service, a Node/Go backend, a worker), use the [HTTP REST sidecar](http-sidecar.md) instead — it's a flat REST API with the same capabilities.
+
 `scrapper-tool` ships an optional MCP server (Model Context Protocol) that exposes the lib's helpers as tools any LLM agent can call. Available since **v0.2.0** (M13). Install:
 
 ```bash
@@ -18,14 +20,15 @@ This is a stdio MCP server compatible with **Claude Desktop**, **Claude Code**, 
 
 | Tool | Input | Output | Use when |
 |---|---|---|---|
-| `fetch_with_ladder` | `url, method?, use_curl_cffi?` | `{status, body (≤64 KB), winning_profile, blocked, error}` | Agent needs to fetch a URL that may TLS-fingerprint |
-| `extract_product` | `html, base_url?` | `ProductOffer` dict or `null` | Agent has HTML and wants schema.org Product+Offer fields |
+| `auto_scrape` *(v1.1.0+)* | `url, schema_json?, instruction?, model?, browser?, timeout_s?` | `{pattern_used, pattern_attempts, product?, data?, blocked, ...}` | **Recommended first tool.** Auto-escalates Pattern A/B/C → E1 → E2. Returns `pattern_used` so the agent can see what worked. |
+| `fetch_with_ladder` | `url, method?, use_curl_cffi?, extract_structured?` | `{status, body, winning_profile, blocked, error, product?, microdata_price?}` | Agent needs to fetch a URL that may TLS-fingerprint. With `extract_structured=True` (v1.1.0+) also runs Pattern B + C — eliminates the two-tool fetch+extract pattern. |
+| `extract_product` | `html, base_url?` | `ProductOffer` dict or `null` | Agent already has HTML and wants schema.org Product+Offer fields |
 | `extract_microdata_price` | `html` | `{price, currency}` or `null` | Agent has HTML with `<meta itemprop="price">` anchors |
 | `canary` | `url, profiles?` | Per-profile probe results | Agent diagnosing which TLS fingerprint a site rejects |
-| `agent_extract` *(v1.0.0+)* | `url, schema_json?, instruction?, model?, browser?, headful?, timeout_s?` | `AgentResult` dict (data, blocked, screenshots, actions, ...) | Render with stealth browser + 1 LLM call to extract structured JSON. Default for "scrape protected data". Requires `[llm-agent]` extra. |
+| `agent_extract` *(v1.0.0+)* | `url, schema_json?, instruction?, model?, browser?, headful?, timeout_s?` | `AgentResult` dict | Render with stealth browser + 1 LLM call to extract structured JSON. Use directly when `auto_scrape` is too coarse. Requires `[llm-agent]` extra. |
 | `agent_browse` *(v1.0.0+)* | `url, instruction, schema_json?, model?, browser?, max_steps?, headful?, timeout_s?` | `AgentResult` dict | Multi-step LLM-driven agent loop for interactive tasks (login, paginate, dynamic forms). Requires `[llm-agent]` extra. |
 
-When `[llm-agent]` is not installed, the two agent tools return a `{error: "scrapper-tool[llm-agent] extra not installed", blocked: false, ...}` envelope instead of raising — the consuming agent stays operational.
+When `[llm-agent]` is not installed, `auto_scrape`, `agent_extract`, and `agent_browse` return an `{error: "scrapper-tool[llm-agent] extra not installed", blocked: false, ...}` envelope instead of raising — the consuming agent stays operational.
 
 ## Wiring it up
 

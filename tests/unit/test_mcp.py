@@ -214,6 +214,75 @@ class TestCanaryTool:
         assert result["winning_profile"] == "chrome142"
 
 
+# ---- v1.1.0 additions: extract_structured + auto_scrape -----------------
+
+
+class TestFetchWithLadderStructured:
+    @pytest.mark.asyncio
+    async def test_extract_structured_true_runs_pattern_b(
+        self,
+        server: object,
+        fake_curl: type[FakeCurlSession],
+    ) -> None:
+        product_html = (
+            '<html><head><script type="application/ld+json">'
+            '{"@context":"https://schema.org","@type":"Product","name":"Widget X",'
+            '"sku":"X1","offers":{"@type":"Offer","price":"19.99","priceCurrency":"USD"}}'
+            "</script></head><body></body></html>"
+        )
+        fake_curl.STATUS_FOR_PROFILE = {"chrome133a": 200}
+        fake_curl.RESPONSE_TEXT_FOR_PROFILE = {"chrome133a": product_html}
+
+        tool = _get_tool(server, "fetch_with_ladder")
+        result = await tool.fn(  # type: ignore[attr-defined]
+            url="https://example.test/p", extract_structured=True
+        )
+        assert result["status"] == 200
+        assert result["product"] is not None
+        assert result["product"]["name"] == "Widget X"
+        assert result["product"]["price"] == "19.99"
+        assert result["product"]["currency"] == "USD"
+
+    @pytest.mark.asyncio
+    async def test_extract_structured_false_omits_product(
+        self,
+        server: object,
+        fake_curl: type[FakeCurlSession],
+    ) -> None:
+        fake_curl.STATUS_FOR_PROFILE = {"chrome133a": 200}
+        fake_curl.RESPONSE_TEXT_FOR_PROFILE = {"chrome133a": "<html>plain</html>"}
+
+        tool = _get_tool(server, "fetch_with_ladder")
+        result = await tool.fn(url="https://example.test/p")  # type: ignore[attr-defined]
+        # Default is extract_structured=False so 'product' should not be in keys
+        assert "product" not in result
+
+
+class TestAutoScrape:
+    @pytest.mark.asyncio
+    async def test_auto_scrape_succeeds_on_a_b_c(
+        self,
+        server: object,
+        fake_curl: type[FakeCurlSession],
+    ) -> None:
+        product_html = (
+            '<html><head><script type="application/ld+json">'
+            '{"@context":"https://schema.org","@type":"Product","name":"Widget Y",'
+            '"sku":"Y1","offers":{"@type":"Offer","price":"29.99","priceCurrency":"USD"}}'
+            "</script></head><body></body></html>"
+        )
+        fake_curl.STATUS_FOR_PROFILE = {"chrome133a": 200}
+        fake_curl.RESPONSE_TEXT_FOR_PROFILE = {"chrome133a": product_html}
+
+        tool = _get_tool(server, "auto_scrape")
+        result = await tool.fn(url="https://example.test/p")  # type: ignore[attr-defined]
+        assert result["pattern_used"] == "a_b_c"
+        assert result["pattern_attempts"] == ["a_b_c"]
+        assert result["product"] is not None
+        assert result["product"]["name"] == "Widget Y"
+        assert result["blocked"] is False
+
+
 # ---- Truncation -----------------------------------------------------------
 
 

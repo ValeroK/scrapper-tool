@@ -19,4 +19,5 @@ A reusable Python web-scraping toolkit. See the [README](../README.md) for the e
   - [2026-04-30 landscape snapshot](research/2026-04-30-landscape.md) — why these tools, sourced.
   - [Tool catalog](research/tool-catalog.md) — adopted / candidate / rejected matrix.
   - [Do-not-adopt list](research/do-not-adopt.md) — append-only rejects with dates + reasons.
+- **[HTTP REST sidecar](http-sidecar.md)** — call scrapper-tool from any service over plain HTTP (v1.1.0+). OpenAPI spec at [`openapi/openapi.yaml`](openapi/openapi.yaml).
 - **[Agent integration](agent-integration.md)** — MCP wiring for LLM agents (v0.2.0+).

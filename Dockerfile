@@ -46,8 +46,9 @@ COPY src/ ./src/
 
 ENV UV_LINK_MODE=copy
 # `[full]` pulls hostile + llm-agent + turnstile-solver + agent.
+# `[http]` pulls FastAPI + uvicorn for the REST sidecar (`scrapper-tool-serve`).
 # The lxml override in pyproject.toml's [tool.uv] section makes this resolve.
-RUN uv sync --frozen --extra dev --extra agent --extra full
+RUN uv sync --frozen --extra dev --extra agent --extra full --extra http
 
 # ---- Stage 2: runtime --------------------------------------------------------
 
@@ -126,8 +127,9 @@ ARG INSTALL_CAMOUFOX=0
 RUN if [ "$INSTALL_CAMOUFOX" = "1" ]; then /app/.venv/bin/camoufox fetch || true ; fi
 
 # 8000 — default HTTP/SSE / streamable-HTTP MCP port (when transport != stdio).
+# 5792 — REST sidecar (`scrapper-tool-serve`). Affiliate-service / non-MCP callers.
 # 8080 — reserved for HTTP-based MCP behind a reverse proxy.
-EXPOSE 8000 8080
+EXPOSE 8000 5792 8080
 
 HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
     CMD python -c "from scrapper_tool import agent; from scrapper_tool.patterns import d; from scrapper_tool.agent.types import AgentConfig; AgentConfig.from_env()" || exit 1

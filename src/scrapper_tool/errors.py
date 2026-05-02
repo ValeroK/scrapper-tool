@@ -68,6 +68,22 @@ class ParseError(ScrapingError):
     """
 
 
+class ConfigurationError(ScrapingError):
+    """Raised when a required component is missing or misconfigured locally.
+
+    Examples: browser binary not found (patchright/camoufox not installed),
+    required extra not installed (``[llm-agent]``), Ollama model not pulled
+    yet. Distinct from :class:`AgentLLMError` (which covers live connectivity
+    failures) — this is a static environment / install issue that the
+    operator can fix without restarting any external service.
+
+    The HTTP sidecar maps this to ``503 Service Unavailable`` with
+    ``{"error": "configuration_error", "detail": "..."}`` so callers
+    distinguish "scrapper-tool is misconfigured here" from "the target
+    site is down" (502) or "the LLM is down" (502 ``llm_unreachable``).
+    """
+
+
 # --- Pattern E (LLM-agent) errors -----------------------------------------
 
 
@@ -128,6 +144,7 @@ __all__ = [
     "AgentTimeoutError",
     "BlockedError",
     "CaptchaSolveError",
+    "ConfigurationError",
     "ParseError",
     "ScrapingError",
     "VendorHTTPError",
