@@ -37,9 +37,9 @@ jobs:
       SCRAPPER_TOOL_AGENT_MODEL: ${{ inputs.model }}
       SCRAPPER_TOOL_AGENT_OLLAMA_URL: ${{ inputs.ollama_url }}
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v6
       - name: Set up uv
-        uses: astral-sh/setup-uv@v5
+        uses: astral-sh/setup-uv@v8
         with:
           enable-cache: true
       - name: Install Python 3.13
@@ -65,7 +65,7 @@ jobs:
         continue-on-error: true
       - name: Auto-open issue on failure
         if: ${{ steps.live.outcome == 'failure' }}
-        uses: actions/github-script@v7
+        uses: actions/github-script@v9
         env:
           OUTCOME: ${{ steps.live.outcome }}
           BROWSER: ${{ inputs.browser }}
