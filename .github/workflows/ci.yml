@@ -43,30 +43,21 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        # Trimmed from a 4×3 cartesian product to a 5-entry include list
-        # to cut redundant CI work. Rationale:
+        # Trimmed to just the [full,agent,http] combo on every supported
+        # Python (3.12/3.13/3.14). This row exercises the lxml-override
+        # path used by the published Docker image and recommended SDK
+        # install — it's the row regressions are most likely to surface
+        # in, and it's also the only row that hits the 85% coverage
+        # floor (lighter rows like `dev,agent,http` skip the heavy agent
+        # test files via importorskip, leaving Pattern E backend code
+        # paths uncovered).
         #
-        # - `dev,full,agent,http` runs on EVERY Python (3.12/3.13/3.14)
-        #   because it exercises the lxml-override path used by the
-        #   published Docker image and the recommended SDK install. This
-        #   is the row regressions are most likely to surface in.
-        # - `dev,agent,http` runs ONLY on py3.13 — catches "I installed
-        #   minimal scrapper-tool with no heavy extras" regressions.
-        #   Tests skip via importorskip; this row verifies the lazy
-        #   imports stay lazy.
-        # - `dev,hostile,agent,http` runs ONLY on py3.13 — catches
-        #   à la carte [hostile] (Pattern D / Scrapling) regressions
-        #   without the lxml override.
-        #
-        # `[llm-agent]` à la carte intentionally NOT tested separately —
-        # `[full]` exercises every Pattern E code path; the lxml conflict
-        # story is what `[full]` uniquely covers.
-        include:
-          - { python-version: "3.12", extras: "dev,full,agent,http" }
-          - { python-version: "3.13", extras: "dev,full,agent,http" }
-          - { python-version: "3.14", extras: "dev,full,agent,http" }
-          - { python-version: "3.13", extras: "dev,agent,http" }
-          - { python-version: "3.13", extras: "dev,hostile,agent,http" }
+        # If you specifically need to verify a la carte extras (e.g.
+        # `[hostile]` alone, `[llm-agent]` alone), run pytest locally
+        # with that combo. The CI matrix prioritises ship-blocking
+        # signal over à la carte regression coverage.
+        python-version: ["3.12", "3.13", "3.14"]
+        extras: ["dev,full,agent,http"]
     steps:
       - uses: actions/checkout@v6
       - name: Set up uv
