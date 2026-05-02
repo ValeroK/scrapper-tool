@@ -146,7 +146,8 @@ async def hostile_client(
         headless=headless,
         block_resources=block_resources,
     )
-    fetcher = StealthyFetcher(**init_kwargs)  # type: ignore[no-untyped-call]
+    # Scrapling is untyped on some installs but typed on others; tolerate both.
+    fetcher = StealthyFetcher(**init_kwargs)  # type: ignore[no-untyped-call,unused-ignore]
     try:
         yield fetcher
     finally:

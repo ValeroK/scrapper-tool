@@ -138,7 +138,8 @@ class CamoufoxBackend:
         if proxy:
             kwargs["proxy"] = {"server": proxy}
 
-        ctx = AsyncCamoufox(**kwargs)  # type: ignore[no-untyped-call]
+        # Camoufox is untyped on some installs but typed on others; tolerate both.
+        ctx = AsyncCamoufox(**kwargs)  # type: ignore[no-untyped-call,unused-ignore]
         browser = await ctx.__aenter__()
 
         async def shutdown() -> None:
