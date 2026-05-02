@@ -1,0 +1,32 @@
+{
+  "_comment": "Recorded shape of browser-use's AgentHistoryList — used by test_agent_browse to replay a deterministic agent run without launching a real browser.",
+  "history": [
+    {
+      "step": 1,
+      "model_action": "goto",
+      "url": "https://example.com",
+      "selector": null,
+      "screenshot": null,
+      "extracted_content": null
+    },
+    {
+      "step": 2,
+      "model_action": "click",
+      "url": "https://example.com",
+      "selector": "a[href='/more']",
+      "screenshot": null,
+      "extracted_content": null
+    },
+    {
+      "step": 3,
+      "model_action": "extract",
+      "url": "https://example.com/more",
+      "selector": "main h1",
+      "screenshot": null,
+      "extracted_content": "More Information..."
+    }
+  ],
+  "final_url": "https://example.com/more",
+  "final_result": "{\"title\": \"More Information...\"}",
+  "total_input_tokens": 4321
+}

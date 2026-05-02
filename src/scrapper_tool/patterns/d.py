@@ -146,7 +146,7 @@ async def hostile_client(
         headless=headless,
         block_resources=block_resources,
     )
-    fetcher = StealthyFetcher(**init_kwargs)
+    fetcher = StealthyFetcher(**init_kwargs)  # type: ignore[no-untyped-call]
     try:
         yield fetcher
     finally:

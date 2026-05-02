@@ -48,7 +48,13 @@ jobs:
         # feature in v0.2.0+, not optional flavor. Without `agent`
         # the importorskip in test_mcp.py kicks in and coverage on
         # mcp.py drops below the 85% floor.
-        extras: ["dev,agent", "dev,hostile,agent"]
+        #
+        # The `dev,full,agent` row exercises the lxml-override path that
+        # the published Docker image and recommended SDK install use.
+        # The lighter rows exist to catch regressions in à la carte
+        # extras (some users still install `[hostile]` or `[llm-agent]`
+        # on their own).
+        extras: ["dev,agent", "dev,hostile,agent", "dev,llm-agent,agent", "dev,full,agent"]
     steps:
       - uses: actions/checkout@v5
       - name: Set up uv

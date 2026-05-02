@@ -1,0 +1,163 @@
+# scrapper-tool — full-stack docker-compose.
+#
+# Brings up an all-capabilities scrapper-tool image (Pattern A/B/C/D/E + MCP).
+# The LLM (Ollama / LM Studio / llama.cpp / vLLM) runs OUTSIDE the container —
+# either on the host or another machine — and is reached via
+# host.docker.internal or an explicit URL.
+#
+# Default expectation: an LLM server is running on the host on port 11434
+# (Ollama) or 1234 (LM Studio). Configure via environment variables — see the
+# `environment:` block below or `.env.example` for full reference.
+#
+#   docker compose run --rm scrapper-tool python -c \
+#       "import asyncio; from scrapper_tool.agent import agent_extract; \
+#        print(asyncio.run(agent_extract('https://quotes.toscrape.com/', \
+#          schema={'type':'object','properties':{'quotes':{'type':'array'}}})))"
+#
+# Profiles:
+#   http   — runs scrapper-tool-mcp-http on :8000 (streamable-HTTP).
+#            Persistent service for Cursor / Claude Code remote / mcp-use.
+#   live   — runs the live agent integration suite against the LLM.
+#
+# Two ways to wire as an MCP server:
+#
+# 1) Persistent HTTP service (RECOMMENDED for Cursor / Claude Code remote):
+#
+#    docker compose --profile http up -d scrapper-tool-mcp-http
+#
+#    Then in your client's MCP config:
+#
+#       {"mcpServers": {"scrapper-tool":
+#         {"url": "http://localhost:8000/mcp", "type": "http"}}}
+#
+# 2) Spawn-per-call stdio (Claude Desktop's local pattern):
+#
+#       {"mcpServers": {"scrapper-tool": {
+#         "command": "docker",
+#         "args": ["compose", "-f", "/abs/path/to/docker-compose.yml",
+#                  "run", "--rm", "-T", "scrapper-tool"]}}}
+
+services:
+  # All five patterns in one image. Builds from Dockerfile, which uses
+  # scrapper-tool[full] (Pattern D Scrapling + Pattern E Camoufox /
+  # Crawl4AI / browser-use, coexisting via the lxml override in
+  # pyproject.toml's [tool.uv] section).
+  scrapper-tool:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args:
+        # Bake Camoufox into the image (~300 MB extra). Set to "1" to
+        # enable the highest-stealth backend. Patchright works either way.
+        INSTALL_CAMOUFOX: "${INSTALL_CAMOUFOX:-0}"
+    image: scrapper-tool:latest
+    container_name: scrapper-tool
+    # Lets the container reach the host (where Ollama / LM Studio /
+    # llama.cpp / vLLM typically run). Works on Linux too via the
+    # explicit host-gateway. On Mac/Windows Docker Desktop maps
+    # ``host.docker.internal`` automatically.
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    environment:
+      # ---- LLM endpoint (REQUIRED — point at your external server) ----
+      # Defaults below assume Ollama on the host's port 11434. Override
+      # in .env for LM Studio (1234), llama.cpp (8080), vLLM (8000), or a
+      # remote URL.
+      SCRAPPER_TOOL_AGENT_LLM: "${SCRAPPER_TOOL_AGENT_LLM:-ollama}"
+      SCRAPPER_TOOL_AGENT_OLLAMA_URL: "${SCRAPPER_TOOL_AGENT_OLLAMA_URL:-http://host.docker.internal:11434}"
+      SCRAPPER_TOOL_AGENT_MODEL: "${SCRAPPER_TOOL_AGENT_MODEL:-qwen3-vl:8b}"
+      # ---- LM Studio example ----
+      # SCRAPPER_TOOL_AGENT_LLM=openai_compat
+      # SCRAPPER_TOOL_AGENT_OLLAMA_URL=http://host.docker.internal:1234
+      # SCRAPPER_TOOL_AGENT_MODEL=qwen3-vl-8b-instruct
+      #
+      # ---- Browser backend ----
+      SCRAPPER_TOOL_AGENT_BROWSER: "${SCRAPPER_TOOL_AGENT_BROWSER:-patchright}"
+      SCRAPPER_TOOL_AGENT_HEADFUL: "0"
+      SCRAPPER_TOOL_AGENT_BEHAVIOR: "${SCRAPPER_TOOL_AGENT_BEHAVIOR:-humanlike}"
+      # ---- Captcha cascade (free OSS by default; paid only if key set) ----
+      SCRAPPER_TOOL_CAPTCHA_SOLVER: "${SCRAPPER_TOOL_CAPTCHA_SOLVER:-auto}"
+      SCRAPPER_TOOL_CAPTCHA_KEY: "${SCRAPPER_TOOL_CAPTCHA_KEY:-}"
+      SCRAPPER_TOOL_CAPTCHA_PAID_FALLBACK: "${SCRAPPER_TOOL_CAPTCHA_PAID_FALLBACK:-capsolver}"
+    # Default entrypoint is `scrapper-tool-mcp` — the stdio MCP server.
+    # Pass `-T` to docker compose run to keep stdio attached cleanly.
+    stdin_open: true
+    tty: false
+    # No ports exposed: the MCP server speaks over stdin/stdout.
+
+  # HTTP-based MCP service — long-running, listens on :8000 with the
+  # streamable-HTTP transport. Wire any external MCP client (Claude Code,
+  # Cursor, mcp-use) to ``http://localhost:8000/mcp`` and they get all
+  # six tools.
+  #
+  # Start:
+  #   docker compose --profile http up -d scrapper-tool-mcp-http
+  # Verify:
+  #   curl http://localhost:8000/mcp  # Streamable HTTP endpoint (POST/GET)
+  scrapper-tool-mcp-http:
+    profiles: ["http"]
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args:
+        INSTALL_CAMOUFOX: "${INSTALL_CAMOUFOX:-0}"
+    image: scrapper-tool:latest
+    container_name: scrapper-tool-mcp-http
+    restart: unless-stopped
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    ports:
+      - "${SCRAPPER_TOOL_MCP_PORT:-8000}:8000"
+    environment:
+      # Switch the MCP server to streamable-HTTP and bind to 0.0.0.0 so
+      # the published port is reachable from the host.
+      SCRAPPER_TOOL_MCP_TRANSPORT: "streamable-http"
+      SCRAPPER_TOOL_MCP_HOST: "0.0.0.0"
+      SCRAPPER_TOOL_MCP_PORT: "8000"
+      # Forward the same agent / LLM / captcha settings as the stdio
+      # service so Pattern E tools work identically.
+      SCRAPPER_TOOL_AGENT_LLM: "${SCRAPPER_TOOL_AGENT_LLM:-ollama}"
+      SCRAPPER_TOOL_AGENT_OLLAMA_URL: "${SCRAPPER_TOOL_AGENT_OLLAMA_URL:-http://host.docker.internal:11434}"
+      SCRAPPER_TOOL_AGENT_MODEL: "${SCRAPPER_TOOL_AGENT_MODEL:-qwen3-vl:8b}"
+      SCRAPPER_TOOL_AGENT_BROWSER: "${SCRAPPER_TOOL_AGENT_BROWSER:-patchright}"
+      SCRAPPER_TOOL_AGENT_HEADFUL: "0"
+      SCRAPPER_TOOL_AGENT_BEHAVIOR: "${SCRAPPER_TOOL_AGENT_BEHAVIOR:-humanlike}"
+      SCRAPPER_TOOL_CAPTCHA_SOLVER: "${SCRAPPER_TOOL_CAPTCHA_SOLVER:-auto}"
+      SCRAPPER_TOOL_CAPTCHA_KEY: "${SCRAPPER_TOOL_CAPTCHA_KEY:-}"
+      SCRAPPER_TOOL_CAPTCHA_PAID_FALLBACK: "${SCRAPPER_TOOL_CAPTCHA_PAID_FALLBACK:-capsolver}"
+    healthcheck:
+      # Streamable-HTTP returns 406 on bare GET (no Accept header) — that's
+      # an "I am alive" signal. We just need a non-5xx response.
+      test:
+        ["CMD-SHELL", "wget -q -O - http://127.0.0.1:8000/mcp 2>&1 | head -c 1 || exit 1"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+
+  # Optional canary service — runs the live agent integration suite
+  # against the external LLM. Enable with the ``live`` profile:
+  #   docker compose --profile live up canary
+  canary:
+    profiles: ["live"]
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: scrapper-tool:latest
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    environment:
+      SCRAPPER_TOOL_LIVE: "1"
+      SCRAPPER_TOOL_AGENT: "1"
+      SCRAPPER_TOOL_AGENT_LLM: "${SCRAPPER_TOOL_AGENT_LLM:-ollama}"
+      SCRAPPER_TOOL_AGENT_OLLAMA_URL: "${SCRAPPER_TOOL_AGENT_OLLAMA_URL:-http://host.docker.internal:11434}"
+      SCRAPPER_TOOL_AGENT_MODEL: "${SCRAPPER_TOOL_AGENT_MODEL:-qwen3-vl:8b}"
+      SCRAPPER_TOOL_AGENT_BROWSER: "${SCRAPPER_TOOL_AGENT_BROWSER:-patchright}"
+    entrypoint:
+      [
+        "pytest",
+        "tests/integration/test_agent_live.py",
+        "-m",
+        "live and agent",
+        "-v",
+      ]

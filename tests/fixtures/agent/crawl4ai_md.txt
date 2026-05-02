@@ -1,0 +1,15 @@
+# Stub fixture — clean markdown that "Crawl4AI" would produce after rendering.
+# Used by test_agent_extract to stand in for a live render+LLM cycle.
+
+# Quotes to Scrape
+
+A page of quotes for testing scrapers.
+
+> "The world as we have created it is a process of our thinking. It cannot be changed without changing our thinking."
+>     — Albert Einstein  (tags: change, deep-thoughts, thinking, world)
+
+> "It is our choices, Harry, that show what we truly are, far more than our abilities."
+>     — J.K. Rowling  (tags: abilities, choices)
+
+> "There are only two ways to live your life. One is as though nothing is a miracle. The other is as though everything is a miracle."
+>     — Albert Einstein  (tags: inspirational, life, live, miracle, miracles)

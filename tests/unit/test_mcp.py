@@ -278,6 +278,145 @@ class TestMain:
         assert "[agent] extra" in captured.err
 
 
+class TestParseArgs:
+    """Unit tests for ``mcp_module._parse_args`` - transport flag plumbing.
+
+    Important contract: the same set of values is reachable via either
+    --transport / --host / --port flags OR the matching env vars, and
+    flags win over env.
+    """
+
+    def test_default_returns_stdio_localhost_8000(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        for k in (
+            "SCRAPPER_TOOL_MCP_TRANSPORT",
+            "SCRAPPER_TOOL_MCP_HOST",
+            "SCRAPPER_TOOL_MCP_PORT",
+        ):
+            monkeypatch.delenv(k, raising=False)
+        result = mcp_module._parse_args([])
+        assert result == ("stdio", "127.0.0.1", 8000)
+
+    def test_help_exits_0(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        capsys: pytest.CaptureFixture[str],
+    ) -> None:
+        monkeypatch.delenv("SCRAPPER_TOOL_MCP_TRANSPORT", raising=False)
+        result = mcp_module._parse_args(["--help"])
+        assert result == 0
+        captured = capsys.readouterr()
+        assert "USAGE" in captured.out
+
+    def test_flags_override_env(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setenv("SCRAPPER_TOOL_MCP_TRANSPORT", "sse")
+        monkeypatch.setenv("SCRAPPER_TOOL_MCP_HOST", "10.0.0.1")
+        monkeypatch.setenv("SCRAPPER_TOOL_MCP_PORT", "9999")
+        result = mcp_module._parse_args(
+            ["--transport", "streamable-http", "--host", "0.0.0.0", "--port", "8765"]
+        )
+        assert result == ("streamable-http", "0.0.0.0", 8765)
+
+    def test_env_used_when_no_flags(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setenv("SCRAPPER_TOOL_MCP_TRANSPORT", "sse")
+        monkeypatch.setenv("SCRAPPER_TOOL_MCP_HOST", "0.0.0.0")
+        monkeypatch.setenv("SCRAPPER_TOOL_MCP_PORT", "8765")
+        result = mcp_module._parse_args([])
+        assert result == ("sse", "0.0.0.0", 8765)
+
+    def test_invalid_transport_returns_2(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        capsys: pytest.CaptureFixture[str],
+    ) -> None:
+        for k in (
+            "SCRAPPER_TOOL_MCP_TRANSPORT",
+            "SCRAPPER_TOOL_MCP_HOST",
+            "SCRAPPER_TOOL_MCP_PORT",
+        ):
+            monkeypatch.delenv(k, raising=False)
+        result = mcp_module._parse_args(["--transport", "telegram"])
+        assert result == 2
+        captured = capsys.readouterr()
+        assert "telegram" in captured.err
+
+    def test_unknown_arg_returns_2(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        capsys: pytest.CaptureFixture[str],
+    ) -> None:
+        for k in (
+            "SCRAPPER_TOOL_MCP_TRANSPORT",
+            "SCRAPPER_TOOL_MCP_HOST",
+            "SCRAPPER_TOOL_MCP_PORT",
+        ):
+            monkeypatch.delenv(k, raising=False)
+        result = mcp_module._parse_args(["--frobnicate"])
+        assert result == 2
+
+    def test_non_int_port_via_flag_returns_2(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        for k in (
+            "SCRAPPER_TOOL_MCP_TRANSPORT",
+            "SCRAPPER_TOOL_MCP_HOST",
+            "SCRAPPER_TOOL_MCP_PORT",
+        ):
+            monkeypatch.delenv(k, raising=False)
+        result = mcp_module._parse_args(["--port", "eight"])
+        assert result == 2
+
+    def test_non_int_port_via_env_returns_2(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        monkeypatch.setenv("SCRAPPER_TOOL_MCP_PORT", "not-an-int")
+        result = mcp_module._parse_args([])
+        assert result == 2
+
+
+class TestMainTransportPlumbing:
+    """End-to-end main() with the new --transport flag wired into server.run."""
+
+    def test_streamable_http_transport_calls_run_with_correct_kwargs(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        capsys: pytest.CaptureFixture[str],
+    ) -> None:
+        for k in (
+            "SCRAPPER_TOOL_MCP_TRANSPORT",
+            "SCRAPPER_TOOL_MCP_HOST",
+            "SCRAPPER_TOOL_MCP_PORT",
+        ):
+            monkeypatch.delenv(k, raising=False)
+        fake_server = MagicMock()
+        build_mock = MagicMock(return_value=fake_server)
+        monkeypatch.setattr(mcp_module, "_build_server", build_mock)
+        monkeypatch.setattr(
+            "sys.argv",
+            [
+                "scrapper-tool-mcp",
+                "--transport",
+                "streamable-http",
+                "--host",
+                "0.0.0.0",
+                "--port",
+                "8765",
+            ],
+        )
+        exit_code = mcp_module.main()
+        assert exit_code == 0
+        # _build_server gets host/port so SSE/HTTP knows where to bind.
+        build_mock.assert_called_once_with(host="0.0.0.0", port=8765)
+        # server.run() gets the transport name.
+        fake_server.run.assert_called_once_with(transport="streamable-http")
+        # Listening banner went to stderr (so stdio JSON-RPC consumers
+        # never see it on stdin).
+        captured = capsys.readouterr()
+        assert "streamable-http" in captured.err
+        assert "0.0.0.0:8765" in captured.err
+
+
 # ---- Module surface -------------------------------------------------------
 
 

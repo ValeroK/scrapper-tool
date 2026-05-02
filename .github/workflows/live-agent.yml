@@ -1,0 +1,93 @@
+name: Live agent canary
+
+# Pattern E (Camoufox + browser-use + Ollama) live canary.
+# Manual-dispatch only — running an end-to-end agent loop on a hosted
+# Ollama is non-trivial. This workflow exists so the team can re-run
+# the integration suite on demand against the production stack.
+
+on:
+  workflow_dispatch:
+    inputs:
+      browser:
+        description: "Browser backend (camoufox / patchright)"
+        required: false
+        default: "patchright"
+      model:
+        description: "Ollama model"
+        required: false
+        default: "qwen3-vl:8b"
+      ollama_url:
+        description: "Ollama base URL"
+        required: false
+        default: "http://localhost:11434"
+
+permissions:
+  contents: read
+  issues: write   # auto-open an issue on regression, mirroring live-canary.yml
+
+jobs:
+  live-agent:
+    name: Pattern E live canary
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      SCRAPPER_TOOL_LIVE: "1"
+      SCRAPPER_TOOL_AGENT: "1"
+      SCRAPPER_TOOL_AGENT_BROWSER: ${{ inputs.browser }}
+      SCRAPPER_TOOL_AGENT_MODEL: ${{ inputs.model }}
+      SCRAPPER_TOOL_AGENT_OLLAMA_URL: ${{ inputs.ollama_url }}
+    steps:
+      - uses: actions/checkout@v5
+      - name: Set up uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+      - name: Install Python 3.13
+        run: uv python install 3.13
+      - name: Install [llm-agent] extra
+        run: uv sync --extra dev --extra agent --extra llm-agent
+      - name: Install Playwright/Patchright Chromium
+        run: |
+          uv run patchright install chromium --with-deps || true
+      - name: Install Camoufox (best-effort)
+        if: ${{ inputs.browser == 'camoufox' }}
+        run: |
+          uv run camoufox fetch || echo "Camoufox fetch failed; tests will skip if backend not ready"
+      - name: Pull Ollama model (skipped — assume external Ollama)
+        run: |
+          # If you run Ollama on the same runner, uncomment below.
+          # curl -sS https://ollama.com/install.sh | sh
+          # ollama pull "${SCRAPPER_TOOL_AGENT_MODEL}"
+          echo "Assuming Ollama is reachable at ${SCRAPPER_TOOL_AGENT_OLLAMA_URL}"
+      - name: Run live agent tests
+        id: live
+        run: uv run pytest tests/integration/test_agent_live.py -m "live and agent" -v --tb=short
+        continue-on-error: true
+      - name: Auto-open issue on failure
+        if: ${{ steps.live.outcome == 'failure' }}
+        uses: actions/github-script@v7
+        env:
+          OUTCOME: ${{ steps.live.outcome }}
+          BROWSER: ${{ inputs.browser }}
+          MODEL: ${{ inputs.model }}
+        with:
+          script: |
+            const title = `live-agent canary failed (${process.env.BROWSER} + ${process.env.MODEL})`;
+            const body = [
+              `Live Pattern E canary failed in workflow ${context.runId}.`,
+              `Backend: ${process.env.BROWSER}`,
+              `Model: ${process.env.MODEL}`,
+              `Outcome: ${process.env.OUTCOME}`,
+              ``,
+              `Logs: ${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}`,
+            ].join('\n');
+            await github.rest.issues.create({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              title,
+              body,
+              labels: ['canary', 'pattern-e'],
+            });
+      - name: Fail the job after issue opened
+        if: ${{ steps.live.outcome == 'failure' }}
+        run: exit 1

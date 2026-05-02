@@ -4,6 +4,50 @@ All notable changes to `scrapper-tool` are recorded here. Format follows [Keep a
 
 ## [Unreleased]
 
+## [1.0.0] - 2026-05-02
+
+First stable release. Adds **Pattern E** — local-LLM-driven scraping for any protected site — and ships a unified Docker image / SDK install (`[full]`) that bundles every pattern in one environment. Zero API cost: the LLM runs externally (Ollama / LM Studio / llama.cpp / vLLM) and the lib calls out to it.
+
+The public API (`scrapper_tool.{request_with_ladder, hostile_client, agent_extract, agent_browse, agent_session, AgentResult, AgentConfig, errors.*}`) and the MCP tool surface (`fetch_with_ladder`, `extract_product`, `extract_microdata_price`, `canary`, `agent_extract`, `agent_browse`) are now considered stable under SemVer.
+
+### Added
+
+- M14 — `scrapper_tool.agent` package + `patterns/e.py` re-export shim. Two modes:
+  - `agent_extract(url, schema, …)` — E1: render with stealth browser + 1 LLM call to produce structured JSON. Default for "scrape any data". Backed by Crawl4AI.
+  - `agent_browse(url, instruction, …)` — E2: multi-step LLM-driven agent loop for interactive tasks (login, paginate, dynamic forms). Backed by browser-use.
+  - `agent_session()` async context manager for batched calls with a warm config.
+- M14 — Five-backend stealth browser stack (`scrapper_tool.agent.backends.browser`): **Camoufox** (default — ~0% headless detection on 2026 benchmarks), Patchright (fast mode), Zendriver, Botasaurus, Scrapling.
+- M14 — Multi-backend LLM (`scrapper_tool.agent.backends.llm`): Ollama (default), llama.cpp / vLLM / generic OpenAI-compat. Pre-flight `/api/tags` probe at session start so misconfiguration fails fast.
+- M14 — Two-tier free OSS captcha cascade (`scrapper_tool.agent.backends.captcha`): Tier 0 Camoufox auto-pass → Tier 1 [Theyka/Turnstile-Solver](https://github.com/Theyka/Turnstile-Solver). Optional paid Tier 2 (CapSolver, NopeCHA, 2Captcha) auto-engages when `SCRAPPER_TOOL_CAPTCHA_KEY` is set. Disclaimer in docs: no OSS solver matches CapSolver's coverage of hCaptcha v3 / reCAPTCHA v3 / Funcaptcha / DataDome.
+- M14 — Humanlike behavior layer (`scrapper_tool.agent.backends.behavior`): jittered keystrokes (log-normal 60–180 ms median), bezier mouse paths, variable scroll cadence. Defeats DataDome behavioral detection. `fast` / `off` policies for unprotected sites.
+- M14 — Per-session Browserforge fingerprint generator (`scrapper_tool.agent.backends.fingerprint`) for non-Camoufox backends.
+- M14 — MCP server gains two new tools: `agent_extract` and `agent_browse`. Same lazy-import + helpful "extra not installed" error envelope as the `[hostile]`/`[agent]` flow. Body, screenshot, and DOM-snippet truncation to bound MCP context.
+- M14 — Agent error hierarchy: `AgentError`, `AgentTimeoutError`, `AgentBlockedError` (multi-inherits `BlockedError` for backward compat), `AgentLLMError`, `AgentSchemaError`, `CaptchaSolveError`.
+- M14 — `[full]` extra: bundles `[hostile]` + `[llm-agent]` + `[turnstile-solver]` so all five patterns coexist. Uses `[tool.uv] override-dependencies = ["lxml>=6.0.3"]` to coerce Scrapling (`lxml>=6`) and Crawl4AI (`lxml~=5.3`) onto a single resolved lxml. uv-only.
+- M14 — Single Docker image (`Dockerfile`) bundling Pattern A/B/C/D/E + MCP server. Built on `[full,agent]`. Docker-compose ships the image talking to an external LLM via `host.docker.internal` (Ollama / LM Studio / llama.cpp / vLLM). Image does NOT bundle an LLM. `INSTALL_CAMOUFOX=1` build arg bakes in Camoufox's patched Firefox (+300 MB).
+- M14 — `docker-release.yml` workflow publishes the image to GHCR (`ghcr.io/valerok/scrapper-tool`) on every `v*.*.*` tag with `<version>`, `<major>.<minor>`, and `latest` tags.
+- M14 — `scripts/e2e/bench_model.py` + `scripts/e2e/compare_benches.py` — benchmark harness that runs E1/E2 trials against the loaded LM Studio model and produces a side-by-side markdown comparison report. Used in CI hand-off to validate model swaps.
+- M14 — `scripts/e2e/test_mcp_session.py` + `test_mcp_session_http.py` — sample MCP-client SDK scripts that exercise every advertised tool over stdio (in-container) and streamable-HTTP transports.
+- M14 — `live-agent.yml` GitHub workflow — manual-dispatch live canary running `tests/integration/test_agent_live.py` against the image, auto-opens issue on regression.
+- M14 — Documentation:
+  - [`docs/patterns/e-llm-agent.md`](docs/patterns/e-llm-agent.md) — when to use which mode, hardware sizing, captcha disclaimer, ToS notes.
+  - [`docs/SETTINGS.md`](docs/SETTINGS.md) — full env-var reference, where settings go when used as a library, install-extras matrix.
+  - [`.env.example`](.env.example) — drop-in starter file with every variable annotated.
+  - README extended with capability matrix, MCP runtime + Docker run guide, external-LLM (LM Studio / llama.cpp / vLLM / remote Ollama) wiring table.
+- M14 — Tests: 21 new test files (`tests/unit/test_agent_*.py`, `tests/integration/test_agent_live.py`), browser-use / Crawl4AI all mocked so unit tests run in the default `[dev]` install. **247 tests pass**, 86.7% coverage.
+
+### Fixed
+- M14 — `agent_extract` for object schemas with a single top-level array property: smaller LLMs (e.g. qwen3-vl-8b) sometimes return the flat list `[item, item, …]` directly instead of wrapping it in `{key: [items]}`. `_unwrap_crawl4ai_singleton` now detects this shape and re-wraps to match the schema. Discovered via the new bench harness comparing gemma-4-e4b vs qwen3-vl-8b.
+- M14 — Switched `browser_use` LLM bridge from langchain wrappers to `browser_use.llm.{ollama,openai}.chat.*` native classes; browser-use 0.5+ rejects langchain chat objects with `ValueError: invalid llm`.
+
+### Changed
+- Bumped to `v1.0.0` (graduating from alpha — public API and MCP tool surface are now stable under SemVer). Default `AgentConfig` model is `qwen3-vl:8b` (May 2026 SOTA for agentic UI grounding at 16 GB VRAM).
+- `[hostile]` extra now requests `scrapling[fetchers]>=0.3` (was `scrapling>=0.3`) so `StealthyFetcher` actually loads — Scrapling 0.4 split browser deps into a `[fetchers]` extra. This was a latent runtime-only failure before.
+- CI matrix extended to four extras combinations: `[dev,agent]`, `[dev,hostile,agent]`, `[dev,llm-agent,agent]`, `[dev,full,agent]`.
+
+### Removed
+- Bundled Ollama service from `docker-compose.yml`. The container always calls an external LLM endpoint via `host.docker.internal` (or a remote URL) — a deliberate simplification.
+
 ## [0.2.0] - 2026-05-01
 
 Adds an optional MCP server so LLM agents (Claude, OpenClaw, Hermes Agent, AutoGen, LangChain) can drive the scraper directly. Last milestone of the M0–M13 roadmap.

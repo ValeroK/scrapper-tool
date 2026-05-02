@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "scrapper-tool"
-version = "0.2.0"
+version = "1.0.0"
 description = "Reusable web-scraping toolkit — Pattern A/B/C/D ladder, TLS-impersonation fallback chain, deterministic fixture-replay testing, and an optional MCP server for LLM agents."
 readme = "README.md"
 requires-python = ">=3.12"
@@ -13,7 +13,7 @@ license-files = ["LICENSE"]
 authors = [{ name = "ValeroK" }]
 keywords = ["web-scraping", "html-parsing", "anti-bot", "mcp", "llm-agents", "curl-cffi", "extruct"]
 classifiers = [
-    "Development Status :: 3 - Alpha",
+    "Development Status :: 5 - Production/Stable",
     "Intended Audience :: Developers",
     "License :: OSI Approved :: MIT License",
     "Operating System :: OS Independent",
@@ -35,12 +35,55 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-hostile = ["scrapling>=0.3"]
+# Scrapling 0.4+ splits browser/fetcher deps into a [fetchers] extra
+# (msgspec, playwright, patchright, browserforge, …). We pull that
+# transitively so ``scrapling.fetchers.StealthyFetcher`` actually loads.
+hostile = ["scrapling[fetchers]>=0.3"]
 # M13: filled. Provides scrapper-tool-mcp console script (stdio MCP server)
 # exposing fetch_with_ladder / extract_product / extract_microdata_price /
 # canary tools for LLM agents (Claude Desktop, Claude Code, OpenClaw,
 # Hermes Agent, AutoGen, LangChain via mcp-use).
 agent = ["mcp>=1.2"]
+# M14 (v1.0.0): Pattern E — LLM-driven scraping for any protected site.
+# Bundles the default stack: Camoufox (0% headless detection), Patchright
+# (fast-mode alternative), Browserforge per-session fingerprints,
+# browser-use agent loop, Crawl4AI extract-after-render, langchain-ollama
+# for the local LLM bridge. Captcha solver clients (CapSolver / NopeCHA /
+# 2Captcha) are HTTP-only and use the existing httpx core dep — no extra
+# install. They stay inert unless SCRAPPER_TOOL_CAPTCHA_KEY is set.
+llm-agent = [
+    "crawl4ai>=0.5",
+    "browser-use>=0.5",
+    "camoufox>=0.4",
+    "patchright>=1.49",
+    "browserforge>=1.2",
+    "pillow>=10",
+    # NB: browser-use 0.5+ ships its own LLM wrappers
+    # (``browser_use.llm.ollama.ChatOllama`` / ``.openai.ChatOpenAI`` /
+    # etc.) so we don't pin langchain-ollama or langchain-openai
+    # explicitly. browser-use brings whichever OpenAI / Ollama client it
+    # needs as a transitive dep.
+]
+# Theyka/Turnstile-Solver — Tier 1 of the captcha cascade (free OSS).
+# Available on PyPI as the `turnstile-solver` package (current 0.1.x).
+turnstile-solver = ["turnstile-solver>=0.1.4"]
+# Pattern D (Scrapling) + Pattern E (Crawl4AI) in one environment.
+# Requires the lxml override declared in [tool.uv]. Both libraries
+# declare conservative lxml pins (Crawl4AI ~=5.3, Scrapling >=6.0.2)
+# but actually use the stable HTML/XPath surface that's compatible
+# across lxml 5/6. When you use this extra, uv overrides both pins to
+# install lxml>=6.0.3 and resolves cleanly. This is the recommended
+# install for SDK use and is what the bundled Dockerfile installs.
+full = [
+    "scrapper-tool[hostile]",
+    "scrapper-tool[llm-agent]",
+    "scrapper-tool[turnstile-solver]",
+]
+# Optional alternative browser backends.
+zendriver-backend = ["zendriver>=0.5"]
+botasaurus-backend = ["botasaurus-driver>=4.0"]
+# Optional alternative agent framework for E2 form-filling.
+skyvern-backend = ["skyvern>=0.4"]
 dev = [
     "pytest>=8",
     "pytest-asyncio>=0.24",
@@ -66,6 +109,31 @@ Homepage = "https://github.com/ValeroK/scrapper-tool"
 Repository = "https://github.com/ValeroK/scrapper-tool"
 Issues = "https://github.com/ValeroK/scrapper-tool/issues"
 Changelog = "https://github.com/ValeroK/scrapper-tool/blob/main/CHANGELOG.md"
+
+[tool.uv]
+# Crawl4AI's latest line is in pre-release; allow it during resolution
+# so the [llm-agent] extra resolves cleanly.
+prerelease = "allow"
+
+# Override transitive lxml constraints so [hostile] and [llm-agent] can
+# coexist via the [full] extra. Crawl4AI declares ``lxml~=5.3`` and
+# Scrapling declares ``lxml>=6.0.2`` — both are conservative pins and
+# the actual HTML/XPath APIs they use are stable across lxml 5/6. The
+# override forces lxml>=6 (newer is generally more compatible) and
+# tests confirm both libraries function. If a future Crawl4AI release
+# starts depending on lxml-5-only API, install [hostile] and [llm-agent]
+# in separate environments instead of using [full].
+override-dependencies = ["lxml>=6.0.3"]
+
+# When NOT using the [full] extra, ``[hostile]`` and ``[llm-agent]``
+# stay separate. Declaring the extras as conflicting tells uv to lock
+# them independently when [full] isn't requested.
+conflicts = [
+    [
+        { extra = "hostile" },
+        { extra = "llm-agent" },
+    ],
+]
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/scrapper_tool"]
@@ -104,7 +172,36 @@ ignore = [
 ]
 
 [tool.ruff.lint.per-file-ignores]
-"tests/**" = ["S", "PLR2004"]
+# Tests do legitimate lazy-imports inside test bodies (to monkeypatch
+# modules that haven't been loaded yet) and use mutable class-level
+# state for fake-object registries. These are intentional, not smells.
+"tests/**" = [
+    "S",        # bandit security rules — fine inside tests
+    "PLR2004",  # magic values — fine inside assertions
+    "PLC0415",  # inline imports — needed for module-mocking
+    "RUF012",   # mutable class defaults — fakes use class-level state
+    "TC002",    # typing-only third-party imports — pytest in tests
+    "SIM117",
+    "PLW2901",  # redefined-loop-name — fine in test scoping
+    "ASYNC109", # tests stub asyncio.wait_for whose signature has `timeout`
+    "E501",     # tests can have long fixture lines for clarity
+]
+# Operator-runnable E2E scripts: same relaxed rules as tests, plus a
+# few of their own (long log strings, ad-hoc assertions, non-crypto rng).
+"scripts/**" = [
+    "S",
+    "PLR2004",
+    "PLC0415",
+    "PLR0915",  # main() functions narrate sequentially
+    "RUF012",
+    "TC002",
+    "SIM117",
+    "RUF100",   # noqa drift across versions OK
+    "BLE001",   # broad-except is intentional in error-taxonomy probes
+    "ASYNC109",
+    "E501",
+    "T201",     # print() is the API
+]
 
 [tool.mypy]
 python_version = "3.12"
@@ -114,7 +211,26 @@ warn_unused_ignores = true
 plugins = ["pydantic.mypy"]
 
 [[tool.mypy.overrides]]
-module = ["curl_cffi.*", "selectolax.*", "extruct.*", "scrapling.*", "structlog.*", "mcp.*"]
+module = [
+    "curl_cffi.*",
+    "selectolax.*",
+    "extruct.*",
+    "scrapling.*",
+    "structlog.*",
+    "mcp.*",
+    "crawl4ai.*",
+    "browser_use.*",
+    "patchright.*",
+    "camoufox.*",
+    "zendriver.*",
+    "botasaurus.*",
+    "botasaurus_driver.*",
+    "browserforge.*",
+    "langchain_ollama.*",
+    "langchain_openai.*",
+    "turnstile_solver.*",
+    "PIL.*",
+]
 ignore_missing_imports = true
 
 # FastMCP's @server.tool(...) decorator has no type stubs, so every
@@ -125,11 +241,19 @@ ignore_missing_imports = true
 module = "scrapper_tool.mcp"
 disable_error_code = ["untyped-decorator"]
 
+# The agent layer wraps two heavy frameworks (browser-use, Crawl4AI)
+# whose APIs use untyped decorators / dynamic kwargs. Strict typing
+# stays on for the rest of the agent surface.
+[[tool.mypy.overrides]]
+module = ["scrapper_tool.agent.browse", "scrapper_tool.agent.extract"]
+disable_error_code = ["untyped-decorator", "no-any-return"]
+
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
 testpaths = ["tests"]
 markers = [
     "live: tests that hit the live internet (skipped by default in CI; opt in with -m live)",
+    "agent: Pattern E LLM-agent tests requiring a local LLM (Ollama). Combined with `live` for end-to-end probes; opt in with SCRAPPER_TOOL_AGENT=1.",
 ]
 addopts = [
     "-ra",

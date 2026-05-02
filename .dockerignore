@@ -1,0 +1,37 @@
+# Source-only context for the Dockerfile build.
+# Excludes everything not needed to resolve deps and import the package.
+
+.git
+.github
+.venv
+.mypy_cache
+.pytest_cache
+.ruff_cache
+__pycache__
+*.pyc
+*.pyo
+*.egg-info
+
+# Dev / docs / tests are not needed at build time.
+docs/
+tests/
+*.md
+!README.md
+
+# Local environment files / build artifacts.
+.env
+.env.*
+!.env.example
+dist/
+build/
+htmlcov/
+.coverage*
+
+# IDE / OS noise.
+.idea
+.vscode
+.DS_Store
+Thumbs.db
+
+# Plans and research outputs.
+.claude/

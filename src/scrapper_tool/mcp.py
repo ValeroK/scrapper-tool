@@ -36,6 +36,14 @@ Tools exposed
 - ``canary(url, *, profiles)`` — walk the impersonation ladder and
   report which profile won; returns the same JSON shape as the CLI's
   ``--json`` mode.
+- ``agent_extract(url, schema_json, *, instruction, model, timeout_s, headful)`` —
+  Pattern E1 (NEW v1.0.0+): render with a stealth browser (Camoufox by
+  default) and run a single local-LLM call to extract structured JSON.
+  Requires the ``[llm-agent]`` extra and a running local LLM (Ollama).
+- ``agent_browse(url, instruction, *, model, max_steps, timeout_s, headful)`` —
+  Pattern E2 (NEW v1.0.0+): multi-step LLM-driven browser-use agent for
+  interactive tasks (login, multi-step nav, dynamic forms). Same extras
+  required as ``agent_extract``.
 
 Security
 --------
@@ -53,18 +61,30 @@ so a single fetch can't exhaust the agent's context window.
 
 from __future__ import annotations
 
+import base64
 import sys
 from typing import Any
 
 from scrapper_tool import __version__
 from scrapper_tool.canary import run_canary
-from scrapper_tool.errors import BlockedError, VendorHTTPError
+from scrapper_tool.errors import (
+    AgentBlockedError,
+    AgentError,
+    BlockedError,
+    VendorHTTPError,
+)
 from scrapper_tool.http import request_with_retry, vendor_client
 from scrapper_tool.ladder import IMPERSONATE_LADDER, request_with_ladder
 from scrapper_tool.patterns.b import extract_product_offer
 from scrapper_tool.patterns.c import extract_microdata_price as _extract_microdata_price
 
 _BODY_TRUNCATION_BYTES = 64 * 1024
+_MAX_AGENT_SCREENSHOTS = 3
+_MAX_DOM_SNIPPET_STEPS = 5
+_AGENT_NOT_INSTALLED = (
+    "scrapper-tool[llm-agent] extra not installed. "
+    "Install with: pip install scrapper-tool[llm-agent]"
+)
 
 
 def _truncate(text: str, limit: int = _BODY_TRUNCATION_BYTES) -> tuple[str, bool]:
@@ -75,7 +95,78 @@ def _truncate(text: str, limit: int = _BODY_TRUNCATION_BYTES) -> tuple[str, bool
     return encoded[:limit].decode("utf-8", errors="replace"), True
 
 
-def _build_server() -> Any:
+def _agent_error_payload(
+    message: str,
+    *,
+    blocked: bool = False,
+    original: str | None = None,
+) -> dict[str, Any]:
+    """Uniform error envelope returned to MCP clients on agent failure."""
+    payload: dict[str, Any] = {
+        "blocked": blocked,
+        "data": None,
+        "error": message,
+        "final_url": None,
+        "screenshots": None,
+        "actions": [],
+        "rendered_markdown": None,
+        "duration_s": 0.0,
+        "steps_used": 0,
+    }
+    if original is not None:
+        payload["error_detail"] = original
+    return payload
+
+
+def _agent_result_payload(result: Any) -> dict[str, Any]:
+    """Serialize an :class:`AgentResult` for MCP transport.
+
+    - Body / markdown truncated to 64 KB.
+    - Screenshots base64-encoded, capped at :data:`_MAX_AGENT_SCREENSHOTS`.
+    - DOM snippets dropped after :data:`_MAX_DOM_SNIPPET_STEPS` steps.
+    """
+    markdown_raw = result.rendered_markdown
+    markdown, markdown_trunc = _truncate(markdown_raw) if markdown_raw else (None, False)
+
+    actions: list[dict[str, Any]] = []
+    for trace in result.actions or []:
+        keep_dom = trace.step <= _MAX_DOM_SNIPPET_STEPS
+        actions.append(
+            {
+                "step": trace.step,
+                "action": trace.action,
+                "target": trace.target,
+                "screenshot_idx": trace.screenshot_idx,
+                "dom_snippet": trace.dom_snippet if keep_dom else None,
+                "latency_ms": trace.latency_ms,
+            }
+        )
+
+    screenshots: list[str] | None = None
+    if result.screenshots:
+        screenshots = [
+            base64.b64encode(s).decode("ascii") for s in result.screenshots[:_MAX_AGENT_SCREENSHOTS]
+        ]
+
+    return {
+        "mode": result.mode,
+        "data": result.data,
+        "final_url": result.final_url,
+        "rendered_markdown": markdown,
+        "rendered_markdown_truncated": markdown_trunc,
+        "screenshots": screenshots,
+        "actions": actions,
+        "tokens_used": result.tokens_used,
+        "blocked": result.blocked,
+        "error": result.error,
+        "duration_s": result.duration_s,
+        "steps_used": result.steps_used,
+    }
+
+
+def _build_server(  # noqa: PLR0915 — single-place tool registration
+    *, host: str = "127.0.0.1", port: int = 8000
+) -> Any:
     """Lazy-construct the FastMCP server.
 
     Lazy because the ``mcp`` SDK is an optional extra
@@ -83,6 +174,17 @@ def _build_server() -> Any:
     would break ``import scrapper_tool.mcp`` for consumers without the
     extra. The unit tests mock this function to avoid a real SDK
     dependency in the default test profile.
+
+    Parameters
+    ----------
+    host
+        Network bind address used by the SSE / streamable-HTTP
+        transports. Default ``127.0.0.1`` (localhost-only). Set to
+        ``0.0.0.0`` to expose the server on a published Docker port or
+        to a LAN.
+    port
+        TCP port for SSE / streamable-HTTP. Default 8000. Ignored for
+        the stdio transport.
     """
     try:
         from mcp.server.fastmcp import FastMCP  # noqa: PLC0415
@@ -102,6 +204,8 @@ def _build_server() -> Any:
             "<meta itemprop='price'> anchors, canary for fingerprint-"
             "health probes. See https://github.com/ValeroK/scrapper-tool"
         ),
+        host=host,
+        port=port,
     )
 
     # ---- Tool: fetch_with_ladder ------------------------------------------
@@ -213,6 +317,122 @@ def _build_server() -> Any:
         price, currency = result
         return {"price": str(price), "currency": currency}
 
+    # ---- Tool: agent_extract (Pattern E1) ---------------------------------
+
+    @server.tool(
+        name="agent_extract",
+        description=(
+            "Pattern E1 — render a page with a stealth browser (Camoufox by "
+            "default) and run a SINGLE local-LLM call to extract structured "
+            "JSON matching the supplied schema. Fast path for protected "
+            "sites — escalate here only when the TLS-impersonation ladder "
+            "AND Pattern D have failed. Requires the [llm-agent] extra and a "
+            "running local LLM server (Ollama by default; "
+            "set SCRAPPER_TOOL_AGENT_LLM and SCRAPPER_TOOL_AGENT_MODEL to "
+            "configure). Returns {data, blocked, error, final_url, "
+            "rendered_markdown, actions, duration_s, steps_used}."
+        ),
+    )
+    async def agent_extract(
+        url: str,
+        schema_json: dict[str, Any] | None = None,
+        instruction: str | None = None,
+        model: str | None = None,
+        browser: str | None = None,
+        headful: bool = False,
+        timeout_s: float = 120.0,
+    ) -> dict[str, Any]:
+        """Run Pattern E1 (Crawl4AI extraction) and return a serializable dict."""
+        try:
+            from scrapper_tool.agent import AgentConfig  # noqa: PLC0415
+            from scrapper_tool.agent import agent_extract as _agent_extract  # noqa: PLC0415
+        except ImportError as exc:  # pragma: no cover — covered by mock
+            return _agent_error_payload(_AGENT_NOT_INSTALLED, original=str(exc))
+
+        cfg = AgentConfig.from_env()
+        overrides: dict[str, Any] = {
+            "headful": headful,
+            "timeout_s": timeout_s,
+        }
+        if model:
+            overrides["model"] = model
+        if browser:
+            overrides["browser"] = browser
+
+        schema = schema_json or "Extract the page's salient data into a JSON object."
+
+        try:
+            result = await _agent_extract(
+                url,
+                schema,
+                instruction=instruction,
+                config=cfg,
+                **overrides,
+            )
+        except AgentBlockedError as exc:
+            return _agent_error_payload(str(exc), blocked=True)
+        except AgentError as exc:
+            return _agent_error_payload(str(exc))
+
+        return _agent_result_payload(result)
+
+    # ---- Tool: agent_browse (Pattern E2) ----------------------------------
+
+    @server.tool(
+        name="agent_browse",
+        description=(
+            "Pattern E2 — multi-step LLM-driven agent loop for interactive "
+            "tasks (login, multi-step navigation, dynamic forms, 'click "
+            "load more' pagination). Higher latency than agent_extract — "
+            "use only when the page requires interaction. Requires the "
+            "[llm-agent] extra and a local LLM. Returns {data, blocked, "
+            "error, final_url, screenshots (base64 PNG), actions, "
+            "duration_s, steps_used}."
+        ),
+    )
+    async def agent_browse(
+        url: str,
+        instruction: str,
+        schema_json: dict[str, Any] | None = None,
+        model: str | None = None,
+        browser: str | None = None,
+        max_steps: int = 30,
+        headful: bool = False,
+        timeout_s: float = 180.0,
+    ) -> dict[str, Any]:
+        """Run Pattern E2 (browser-use agent) and return a serializable dict."""
+        try:
+            from scrapper_tool.agent import AgentConfig  # noqa: PLC0415
+            from scrapper_tool.agent import agent_browse as _agent_browse  # noqa: PLC0415
+        except ImportError as exc:  # pragma: no cover
+            return _agent_error_payload(_AGENT_NOT_INSTALLED, original=str(exc))
+
+        cfg = AgentConfig.from_env()
+        overrides: dict[str, Any] = {
+            "headful": headful,
+            "timeout_s": timeout_s,
+            "max_steps": max_steps,
+        }
+        if model:
+            overrides["model"] = model
+        if browser:
+            overrides["browser"] = browser
+
+        try:
+            result = await _agent_browse(
+                url,
+                instruction,
+                schema=schema_json,
+                config=cfg,
+                **overrides,
+            )
+        except AgentBlockedError as exc:
+            return _agent_error_payload(str(exc), blocked=True)
+        except AgentError as exc:
+            return _agent_error_payload(str(exc))
+
+        return _agent_result_payload(result)
+
     # ---- Tool: canary -----------------------------------------------------
 
     @server.tool(
@@ -234,29 +454,120 @@ def _build_server() -> Any:
     return server
 
 
+_VALID_TRANSPORTS = {"stdio", "sse", "streamable-http"}
+
+_HELP_TEXT = """\
+scrapper-tool-mcp {version}
+MCP server exposing scrapper-tool helpers (fetch_with_ladder,
+extract_product, extract_microdata_price, canary, agent_extract,
+agent_browse) as tools any MCP-aware LLM agent can call.
+
+USAGE:
+  scrapper-tool-mcp [--transport stdio|sse|streamable-http]
+                    [--host HOST] [--port PORT]
+
+TRANSPORTS:
+  stdio (default)    JSON-RPC over stdin/stdout. Used by clients that
+                     spawn the server as a subprocess (Claude Desktop,
+                     Claude Code's local MCP wiring).
+  sse                Server-Sent Events over HTTP. Mount /sse on the
+                     given host:port. Older but widely-supported.
+  streamable-http    Streamable HTTP (the modern MCP transport). Mount
+                     /mcp on the given host:port. Recommended for
+                     Cursor, Claude Code remote, and most 2026 clients.
+
+ENVIRONMENT (override flags):
+  SCRAPPER_TOOL_MCP_TRANSPORT  Same as --transport.
+  SCRAPPER_TOOL_MCP_HOST       Same as --host. Default 127.0.0.1.
+                               Use 0.0.0.0 inside Docker.
+  SCRAPPER_TOOL_MCP_PORT       Same as --port. Default 8000.
+
+EXAMPLES:
+  # Local stdio (Claude Desktop / Claude Code spawn pattern)
+  scrapper-tool-mcp
+
+  # HTTP service for Cursor / Claude Code remote / mcp-use:
+  scrapper-tool-mcp --transport streamable-http --host 0.0.0.0 --port 8000
+
+See docs/agent-integration.md for client wiring patterns.
+"""
+
+
+def _parse_args(argv: list[str]) -> tuple[str, str, int] | int:
+    """Parse argv → (transport, host, port). Returns int exit code on --help.
+
+    Pure parsing; mocked easily in tests.
+    """
+    import os  # noqa: PLC0415
+
+    transport = os.environ.get("SCRAPPER_TOOL_MCP_TRANSPORT", "stdio")
+    host = os.environ.get("SCRAPPER_TOOL_MCP_HOST", "127.0.0.1")
+    try:
+        port = int(os.environ.get("SCRAPPER_TOOL_MCP_PORT", "8000"))
+    except ValueError:
+        sys.stderr.write("SCRAPPER_TOOL_MCP_PORT must be an integer\n")
+        return 2
+
+    i = 0
+    while i < len(argv):
+        arg = argv[i]
+        if arg in {"-h", "--help"}:
+            print(_HELP_TEXT.format(version=__version__))
+            return 0
+        if arg == "--transport" and i + 1 < len(argv):
+            transport = argv[i + 1]
+            i += 2
+            continue
+        if arg == "--host" and i + 1 < len(argv):
+            host = argv[i + 1]
+            i += 2
+            continue
+        if arg == "--port" and i + 1 < len(argv):
+            try:
+                port = int(argv[i + 1])
+            except ValueError:
+                sys.stderr.write(f"--port must be an integer, got {argv[i + 1]!r}\n")
+                return 2
+            i += 2
+            continue
+        sys.stderr.write(f"unknown argument: {arg!r}\n")
+        sys.stderr.write("Run with --help for usage.\n")
+        return 2
+
+    if transport not in _VALID_TRANSPORTS:
+        sys.stderr.write(
+            f"invalid --transport {transport!r}. Choose from: {sorted(_VALID_TRANSPORTS)}\n"
+        )
+        return 2
+
+    return transport, host, port
+
+
 def main() -> int:
     """Entry point for the ``scrapper-tool-mcp`` console script.
 
-    Starts a stdio MCP server. Exits with code 0 on clean shutdown,
-    1 on the ``[agent]`` extra not installed, 2 on argv error.
+    Supports three transports — stdio (default, used by Claude
+    Desktop's spawn pattern) and the HTTP-based SSE / streamable-http
+    transports (used when the server runs as a long-lived service in
+    Docker and external clients connect via URL).
+
+    Exits with code 0 on clean shutdown, 1 on the ``[agent]`` extra not
+    installed, 2 on argv error.
     """
-    if len(sys.argv) > 1 and sys.argv[1] in {"-h", "--help"}:
-        print(
-            f"scrapper-tool-mcp {__version__}\n"
-            "MCP server exposing scrapper-tool helpers as LLM-agent tools.\n"
-            "Wire into Claude Desktop / Claude Code / OpenClaw / Hermes "
-            "Agent / AutoGen / LangChain via .mcp.json or mcp-use.\n"
-            "See docs/agent-integration.md."
-        )
-        return 0
+    parsed = _parse_args(sys.argv[1:])
+    if isinstance(parsed, int):
+        return parsed
+    transport, host, port = parsed
 
     try:
-        server = _build_server()
+        server = _build_server(host=host, port=port)
     except ImportError as exc:
         sys.stderr.write(f"{exc}\n")
         return 1
 
-    server.run()
+    if transport != "stdio":
+        sys.stderr.write(f"scrapper-tool-mcp listening on {transport} at {host}:{port}\n")
+    server.run(transport=transport)
     return 0
 
 
