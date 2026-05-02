@@ -4,7 +4,7 @@ info:
   description: "REST sidecar for scrapper-tool. Exposes the full A-E capability stack\
     \ over plain JSON/HTTP. The /scrape endpoint runs the full A/B/C \u2192 E1 \u2192\
     \ E2 auto-escalation ladder server-side so callers don't need per-pattern logic."
-  version: 1.1.0
+  version: 1.1.1
 paths:
   /health:
     get:

@@ -4,6 +4,19 @@ All notable changes to `scrapper-tool` are recorded here. Format follows [Keep a
 
 ## [Unreleased]
 
+## [1.1.1] - 2026-05-02
+
+Security-only patch release. Resolves three Dependabot alerts on the `litellm` transitive dependency: SQL injection in proxy API key verification (critical, GHSA), SSTI in `/prompts/test`, and authenticated RCE via MCP stdio test endpoints. All three were fixed upstream in `litellm 1.83.7`.
+
+### Removed
+
+- `[skyvern-backend]` install extra. It was the only consumer of the vulnerable `litellm` versions, was already declared conflicting with `[full]` in `[tool.uv].conflicts`, and was never bundled in any published Docker image or recommended SDK install path. `skyvern>=1.0.32` itself has internally inconsistent transitive pins (requires both `litellm>=1.83.7` and `jsonschema>=4.25.1`, but `litellm>=1.83.7` pins `jsonschema==4.23.0`), so the extra cannot be re-locked at a safe version until upstream skyvern fixes its dep tree. No consumer impact — this was an opt-in alternative agent backend with no published install path that pulled it.
+
+### Migration notes
+
+- If you were using `pip install 'scrapper-tool[skyvern-backend]'` (no known consumers), pin `scrapper-tool<1.1.1` and continue using v1.1.0, or wait for an upstream skyvern release that fixes the transitive dep conflict.
+- All other install paths (`scrapper-tool[full,agent,http]`, `[hostile]`, `[llm-agent]`, `[agent]`, `[http]`) are unaffected and behave identically to v1.1.0.
+
 ## [1.1.0] - 2026-05-02
 
 Adds an **HTTP REST sidecar** so any service (not just MCP-aware LLM agents) can call scrapper-tool over plain JSON. The new `/scrape` endpoint runs the full A/B/C → E1 → E2 escalation ladder server-side, removing per-pattern decision logic from callers. The MCP server gains a matching `auto_scrape` tool and a structured-extraction shortcut on `fetch_with_ladder`. New `[http]` install extra and `scrapper-tool-serve` console script.
