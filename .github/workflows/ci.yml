@@ -41,27 +41,32 @@ jobs:
     name: Tests (py${{ matrix.python-version }}, extras=${{ matrix.extras }})
     runs-on: ubuntu-latest
     strategy:
+      fail-fast: false
       matrix:
-        python-version: ["3.12", "3.13", "3.14"]
-        # `agent` and `http` are included in every matrix entry:
-        # - `agent` so test_mcp.py runs everywhere (MCP is first-class
-        #   since v0.2.0, not optional flavor — without it the
-        #   importorskip in test_mcp.py kicks in and mcp.py coverage
-        #   drops below the 85% floor).
-        # - `http` so test_http_server.py runs everywhere (REST sidecar
-        #   is first-class since v1.1.0; without it http_server.py
-        #   shows 0% coverage and drops the total below 85%).
+        # Trimmed from a 4×3 cartesian product to a 5-entry include list
+        # to cut redundant CI work. Rationale:
         #
-        # The `dev,full,agent,http` row exercises the lxml-override path
-        # that the published Docker image and recommended SDK install
-        # use. The lighter rows exist to catch regressions in à la
-        # carte extras (some users still install `[hostile]` or
-        # `[llm-agent]` on their own).
-        extras:
-          - "dev,agent,http"
-          - "dev,hostile,agent,http"
-          - "dev,llm-agent,agent,http"
-          - "dev,full,agent,http"
+        # - `dev,full,agent,http` runs on EVERY Python (3.12/3.13/3.14)
+        #   because it exercises the lxml-override path used by the
+        #   published Docker image and the recommended SDK install. This
+        #   is the row regressions are most likely to surface in.
+        # - `dev,agent,http` runs ONLY on py3.13 — catches "I installed
+        #   minimal scrapper-tool with no heavy extras" regressions.
+        #   Tests skip via importorskip; this row verifies the lazy
+        #   imports stay lazy.
+        # - `dev,hostile,agent,http` runs ONLY on py3.13 — catches
+        #   à la carte [hostile] (Pattern D / Scrapling) regressions
+        #   without the lxml override.
+        #
+        # `[llm-agent]` à la carte intentionally NOT tested separately —
+        # `[full]` exercises every Pattern E code path; the lxml conflict
+        # story is what `[full]` uniquely covers.
+        include:
+          - { python-version: "3.12", extras: "dev,full,agent,http" }
+          - { python-version: "3.13", extras: "dev,full,agent,http" }
+          - { python-version: "3.14", extras: "dev,full,agent,http" }
+          - { python-version: "3.13", extras: "dev,agent,http" }
+          - { python-version: "3.13", extras: "dev,hostile,agent,http" }
     steps:
       - uses: actions/checkout@v6
       - name: Set up uv
