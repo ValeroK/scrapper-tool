@@ -2,22 +2,65 @@ version = 1
 revision = 3
 requires-python = ">=3.12"
 resolution-markers = [
-    "python_full_version >= '3.15' and sys_platform == 'win32'",
-    "python_full_version >= '3.15' and sys_platform == 'emscripten'",
-    "python_full_version >= '3.15' and sys_platform != 'emscripten' and sys_platform != 'win32'",
-    "python_full_version == '3.13.*' and sys_platform == 'win32'",
-    "python_full_version == '3.13.*' and sys_platform == 'emscripten'",
-    "python_full_version == '3.13.*' and sys_platform != 'emscripten' and sys_platform != 'win32'",
-    "python_full_version < '3.13' and sys_platform == 'win32'",
-    "python_full_version < '3.13' and sys_platform == 'emscripten'",
-    "python_full_version < '3.13' and sys_platform != 'emscripten' and sys_platform != 'win32'",
-    "python_full_version == '3.14.*' and sys_platform == 'win32'",
-    "python_full_version == '3.14.*' and sys_platform == 'emscripten'",
-    "python_full_version == '3.14.*' and sys_platform != 'emscripten' and sys_platform != 'win32'",
+    "python_full_version >= '3.15' and sys_platform == 'win32' and extra != 'extra-13-scrapper-tool-full' and extra != 'extra-13-scrapper-tool-hostile' and extra == 'extra-13-scrapper-tool-llm-agent' and extra == 'extra-13-scrapper-tool-skyvern-backend'",
+    "python_full_version >= '3.15' and sys_platform == 'emscripten' and extra != 'extra-13-scrapper-tool-full' and extra != 'extra-13-scrapper-tool-hostile' and extra == 'extra-13-scrapper-tool-llm-agent' and extra == 'extra-13-scrapper-tool-skyvern-backend'",
+    "python_full_version >= '3.15' and sys_platform != 'emscripten' and sys_platform != 'win32' and extra != 'extra-13-scrapper-tool-full' and extra != 'extra-13-scrapper-tool-hostile' and extra == 'extra-13-scrapper-tool-llm-agent' and extra == 'extra-13-scrapper-tool-skyvern-backend'",
+    "python_full_version == '3.13.*' and sys_platform == 'win32' and extra != 'extra-13-scrapper-tool-full' and extra != 'extra-13-scrapper-tool-hostile' and extra == 'extra-13-scrapper-tool-llm-agent' and extra == 'extra-13-scrapper-tool-skyvern-backend'",
+    "python_full_version == '3.13.*' and sys_platform == 'emscripten' and extra != 'extra-13-scrapper-tool-full' and extra != 'extra-13-scrapper-tool-hostile' and extra == 'extra-13-scrapper-tool-llm-agent' and extra == 'extra-13-scrapper-tool-skyvern-backend'",
+    "python_full_version == '3.13.*' and sys_platform != 'emscripten' and sys_platform != 'win32' and extra != 'extra-13-scrapper-tool-full' and extra != 'extra-13-scrapper-tool-hostile' and extra == 'extra-13-scrapper-tool-llm-agent' and extra == 'extra-13-scrapper-tool-skyvern-backend'",
+    "python_full_version < '3.13' and sys_platform == 'win32' and extra != 'extra-13-scrapper-tool-full' and extra != 'extra-13-scrapper-tool-hostile' and extra == 'extra-13-scrapper-tool-llm-agent' and extra == 'extra-13-scrapper-tool-skyvern-backend'",
+    "python_full_version < '3.13' and sys_platform == 'emscripten' and extra != 'extra-13-scrapper-tool-full' and extra != 'extra-13-scrapper-tool-hostile' and extra == 'extra-13-scrapper-tool-llm-agent' and extra == 'extra-13-scrapper-tool-skyvern-backend'",
+    "python_full_version < '3.13' and sys_platform != 'emscripten' and sys_platform != 'win32' and extra != 'extra-13-scrapper-tool-full' and extra != 'extra-13-scrapper-tool-hostile' and extra == 'extra-13-scrapper-tool-llm-agent' and extra == 'extra-13-scrapper-tool-skyvern-backend'",
+    "python_full_version == '3.14.*' and sys_platform == 'win32' and extra != 'extra-13-scrapper-tool-full' and extra != 'extra-13-scrapper-tool-hostile' and extra == 'extra-13-scrapper-tool-llm-agent' and extra == 'extra-13-scrapper-tool-skyvern-backend'",
+    "python_full_version == '3.14.*' and sys_platform == 'emscripten' and extra != 'extra-13-scrapper-tool-full' and extra != 'extra-13-scrapper-tool-hostile' and extra == 'extra-13-scrapper-tool-llm-agent' and extra == 'extra-13-scrapper-tool-skyvern-backend'",
+    "python_full_version == '3.14.*' and sys_platform != 'emscripten' and sys_platform != 'win32' and extra != 'extra-13-scrapper-tool-full' and extra != 'extra-13-scrapper-tool-hostile' and extra == 'extra-13-scrapper-tool-llm-agent' and extra == 'extra-13-scrapper-tool-skyvern-backend'",
+    "python_full_version >= '3.15' and extra == 'extra-13-scrapper-tool-full' and extra != 'extra-13-scrapper-tool-hostile' and extra == 'extra-13-scrapper-tool-llm-agent' and extra != 'extra-13-scrapper-tool-skyvern-backend'",
+    "python_full_version >= '3.13' and python_full_version < '3.15' and extra == 'extra-13-scrapper-tool-full' and extra != 'extra-13-scrapper-tool-hostile' and extra == 'extra-13-scrapper-tool-llm-agent' and extra != 'extra-13-scrapper-tool-skyvern-backend'",
+    "python_full_version < '3.13' and extra == 'extra-13-scrapper-tool-full' and extra != 'extra-13-scrapper-tool-hostile' and extra == 'extra-13-scrapper-tool-llm-agent' and extra != 'extra-13-scrapper-tool-skyvern-backend'",
+    "python_full_version >= '3.15' and extra != 'extra-13-scrapper-tool-full' and extra != 'extra-13-scrapper-tool-hostile' and extra == 'extra-13-scrapper-tool-llm-agent' and extra != 'extra-13-scrapper-tool-skyvern-backend'",
+    "python_full_version >= '3.13' and python_full_version < '3.15' and extra != 'extra-13-scrapper-tool-full' and extra != 'extra-13-scrapper-tool-hostile' and extra == 'extra-13-scrapper-tool-llm-agent' and extra != 'extra-13-scrapper-tool-skyvern-backend'",
+    "python_full_version < '3.13' and extra != 'extra-13-scrapper-tool-full' and extra != 'extra-13-scrapper-tool-hostile' and extra == 'extra-13-scrapper-tool-llm-agent' and extra != 'extra-13-scrapper-tool-skyvern-backend'",
+    "python_full_version >= '3.15' and sys_platform == 'win32' and extra != 'extra-13-scrapper-tool-full' and extra == 'extra-13-scrapper-tool-hostile' and extra != 'extra-13-scrapper-tool-llm-agent' and extra == 'extra-13-scrapper-tool-skyvern-backend'",
+    "python_full_version >= '3.15' and sys_platform == 'emscripten' and extra != 'extra-13-scrapper-tool-full' and extra == 'extra-13-scrapper-tool-hostile' and extra != 'extra-13-scrapper-tool-llm-agent' and extra == 'extra-13-scrapper-tool-skyvern-backend'",
+    "python_full_version >= '3.15' and sys_platform != 'emscripten' and sys_platform != 'win32' and extra != 'extra-13-scrapper-tool-full' and extra == 'extra-13-scrapper-tool-hostile' and extra != 'extra-13-scrapper-tool-llm-agent' and extra == 'extra-13-scrapper-tool-skyvern-backend'",
+    "python_full_version == '3.13.*' and sys_platform == 'win32' and extra != 'extra-13-scrapper-tool-full' and extra == 'extra-13-scrapper-tool-hostile' and extra != 'extra-13-scrapper-tool-llm-agent' and extra == 'extra-13-scrapper-tool-skyvern-backend'",
+    "python_full_version == '3.13.*' and sys_platform == 'emscripten' and extra != 'extra-13-scrapper-tool-full' and extra == 'extra-13-scrapper-tool-hostile' and extra != 'extra-13-scrapper-tool-llm-agent' and extra == 'extra-13-scrapper-tool-skyvern-backend'",
+    "python_full_version == '3.13.*' and sys_platform != 'emscripten' and sys_platform != 'win32' and extra != 'extra-13-scrapper-tool-full' and extra == 'extra-13-scrapper-tool-hostile' and extra != 'extra-13-scrapper-tool-llm-agent' and extra == 'extra-13-scrapper-tool-skyvern-backend'",
+    "python_full_version < '3.13' and sys_platform == 'win32' and extra != 'extra-13-scrapper-tool-full' and extra == 'extra-13-scrapper-tool-hostile' and extra != 'extra-13-scrapper-tool-llm-agent' and extra == 'extra-13-scrapper-tool-skyvern-backend'",
+    "python_full_version < '3.13' and sys_platform == 'emscripten' and extra != 'extra-13-scrapper-tool-full' and extra == 'extra-13-scrapper-tool-hostile' and extra != 'extra-13-scrapper-tool-llm-agent' and extra == 'extra-13-scrapper-tool-skyvern-backend'",
+    "python_full_version < '3.13' and sys_platform != 'emscripten' and sys_platform != 'win32' and extra != 'extra-13-scrapper-tool-full' and extra == 'extra-13-scrapper-tool-hostile' and extra != 'extra-13-scrapper-tool-llm-agent' and extra == 'extra-13-scrapper-tool-skyvern-backend'",
+    "python_full_version == '3.14.*' and sys_platform == 'win32' and extra != 'extra-13-scrapper-tool-full' and extra == 'extra-13-scrapper-tool-hostile' and extra != 'extra-13-scrapper-tool-llm-agent' and extra == 'extra-13-scrapper-tool-skyvern-backend'",
+    "python_full_version == '3.14.*' and sys_platform == 'emscripten' and extra != 'extra-13-scrapper-tool-full' and extra == 'extra-13-scrapper-tool-hostile' and extra != 'extra-13-scrapper-tool-llm-agent' and extra == 'extra-13-scrapper-tool-skyvern-backend'",
+    "python_full_version == '3.14.*' and sys_platform != 'emscripten' and sys_platform != 'win32' and extra != 'extra-13-scrapper-tool-full' and extra == 'extra-13-scrapper-tool-hostile' and extra != 'extra-13-scrapper-tool-llm-agent' and extra == 'extra-13-scrapper-tool-skyvern-backend'",
+    "python_full_version >= '3.15' and extra == 'extra-13-scrapper-tool-full' and extra == 'extra-13-scrapper-tool-hostile' and extra != 'extra-13-scrapper-tool-llm-agent' and extra != 'extra-13-scrapper-tool-skyvern-backend'",
+    "python_full_version >= '3.13' and python_full_version < '3.15' and extra == 'extra-13-scrapper-tool-full' and extra == 'extra-13-scrapper-tool-hostile' and extra != 'extra-13-scrapper-tool-llm-agent' and extra != 'extra-13-scrapper-tool-skyvern-backend'",
+    "python_full_version < '3.13' and extra == 'extra-13-scrapper-tool-full' and extra == 'extra-13-scrapper-tool-hostile' and extra != 'extra-13-scrapper-tool-llm-agent' and extra != 'extra-13-scrapper-tool-skyvern-backend'",
+    "python_full_version >= '3.15' and extra != 'extra-13-scrapper-tool-full' and extra == 'extra-13-scrapper-tool-hostile' and extra != 'extra-13-scrapper-tool-llm-agent' and extra != 'extra-13-scrapper-tool-skyvern-backend'",
+    "python_full_version < '3.15' and extra != 'extra-13-scrapper-tool-full' and extra == 'extra-13-scrapper-tool-hostile' and extra != 'extra-13-scrapper-tool-llm-agent' and extra != 'extra-13-scrapper-tool-skyvern-backend'",
+    "python_full_version >= '3.15' and sys_platform == 'win32' and extra != 'extra-13-scrapper-tool-full' and extra != 'extra-13-scrapper-tool-hostile' and extra != 'extra-13-scrapper-tool-llm-agent' and extra == 'extra-13-scrapper-tool-skyvern-backend'",
+    "python_full_version >= '3.15' and sys_platform == 'emscripten' and extra != 'extra-13-scrapper-tool-full' and extra != 'extra-13-scrapper-tool-hostile' and extra != 'extra-13-scrapper-tool-llm-agent' and extra == 'extra-13-scrapper-tool-skyvern-backend'",
+    "python_full_version >= '3.15' and sys_platform != 'emscripten' and sys_platform != 'win32' and extra != 'extra-13-scrapper-tool-full' and extra != 'extra-13-scrapper-tool-hostile' and extra != 'extra-13-scrapper-tool-llm-agent' and extra == 'extra-13-scrapper-tool-skyvern-backend'",
+    "python_full_version == '3.13.*' and sys_platform == 'win32' and extra != 'extra-13-scrapper-tool-full' and extra != 'extra-13-scrapper-tool-hostile' and extra != 'extra-13-scrapper-tool-llm-agent' and extra == 'extra-13-scrapper-tool-skyvern-backend'",
+    "python_full_version == '3.13.*' and sys_platform == 'emscripten' and extra != 'extra-13-scrapper-tool-full' and extra != 'extra-13-scrapper-tool-hostile' and extra != 'extra-13-scrapper-tool-llm-agent' and extra == 'extra-13-scrapper-tool-skyvern-backend'",
+    "python_full_version == '3.13.*' and sys_platform != 'emscripten' and sys_platform != 'win32' and extra != 'extra-13-scrapper-tool-full' and extra != 'extra-13-scrapper-tool-hostile' and extra != 'extra-13-scrapper-tool-llm-agent' and extra == 'extra-13-scrapper-tool-skyvern-backend'",
+    "python_full_version < '3.13' and sys_platform == 'win32' and extra != 'extra-13-scrapper-tool-full' and extra != 'extra-13-scrapper-tool-hostile' and extra != 'extra-13-scrapper-tool-llm-agent' and extra == 'extra-13-scrapper-tool-skyvern-backend'",
+    "python_full_version < '3.13' and sys_platform == 'emscripten' and extra != 'extra-13-scrapper-tool-full' and extra != 'extra-13-scrapper-tool-hostile' and extra != 'extra-13-scrapper-tool-llm-agent' and extra == 'extra-13-scrapper-tool-skyvern-backend'",
+    "python_full_version < '3.13' and sys_platform != 'emscripten' and sys_platform != 'win32' and extra != 'extra-13-scrapper-tool-full' and extra != 'extra-13-scrapper-tool-hostile' and extra != 'extra-13-scrapper-tool-llm-agent' and extra == 'extra-13-scrapper-tool-skyvern-backend'",
+    "python_full_version == '3.14.*' and sys_platform == 'win32' and extra != 'extra-13-scrapper-tool-full' and extra != 'extra-13-scrapper-tool-hostile' and extra != 'extra-13-scrapper-tool-llm-agent' and extra == 'extra-13-scrapper-tool-skyvern-backend'",
+    "python_full_version == '3.14.*' and sys_platform == 'emscripten' and extra != 'extra-13-scrapper-tool-full' and extra != 'extra-13-scrapper-tool-hostile' and extra != 'extra-13-scrapper-tool-llm-agent' and extra == 'extra-13-scrapper-tool-skyvern-backend'",
+    "python_full_version == '3.14.*' and sys_platform != 'emscripten' and sys_platform != 'win32' and extra != 'extra-13-scrapper-tool-full' and extra != 'extra-13-scrapper-tool-hostile' and extra != 'extra-13-scrapper-tool-llm-agent' and extra == 'extra-13-scrapper-tool-skyvern-backend'",
+    "python_full_version >= '3.15' and extra == 'extra-13-scrapper-tool-full' and extra != 'extra-13-scrapper-tool-hostile' and extra != 'extra-13-scrapper-tool-llm-agent' and extra != 'extra-13-scrapper-tool-skyvern-backend'",
+    "python_full_version >= '3.13' and python_full_version < '3.15' and extra == 'extra-13-scrapper-tool-full' and extra != 'extra-13-scrapper-tool-hostile' and extra != 'extra-13-scrapper-tool-llm-agent' and extra != 'extra-13-scrapper-tool-skyvern-backend'",
+    "python_full_version < '3.13' and extra == 'extra-13-scrapper-tool-full' and extra != 'extra-13-scrapper-tool-hostile' and extra != 'extra-13-scrapper-tool-llm-agent' and extra != 'extra-13-scrapper-tool-skyvern-backend'",
+    "python_full_version >= '3.15' and extra != 'extra-13-scrapper-tool-full' and extra != 'extra-13-scrapper-tool-hostile' and extra != 'extra-13-scrapper-tool-llm-agent' and extra != 'extra-13-scrapper-tool-skyvern-backend'",
+    "python_full_version < '3.15' and extra != 'extra-13-scrapper-tool-full' and extra != 'extra-13-scrapper-tool-hostile' and extra != 'extra-13-scrapper-tool-llm-agent' and extra != 'extra-13-scrapper-tool-skyvern-backend'",
 ]
 conflicts = [[
     { package = "scrapper-tool", extra = "hostile" },
     { package = "scrapper-tool", extra = "llm-agent" },
+], [
+    { package = "scrapper-tool", extra = "full" },
+    { package = "scrapper-tool", extra = "skyvern-backend" },
 ]]
 
 [options]
@@ -31,7 +74,7 @@ name = "aioboto3"
 version = "14.3.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
-    { name = "aiobotocore", extra = ["boto3"] },
+    { name = "aiobotocore", extra = ["boto3"], marker = "(extra == 'extra-13-scrapper-tool-hostile' and extra == 'extra-13-scrapper-tool-llm-agent') or (extra != 'extra-13-scrapper-tool-llm-agent' and extra == 'extra-13-scrapper-tool-skyvern-backend') or (extra != 'extra-13-scrapper-tool-hostile' and extra == 'extra-13-scrapper-tool-skyvern-backend')" },
     { name = "aiofiles" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/79/b7/2f0d45cf31f77f8432102d7225d189e6e65cc7a16a32a8ac929eabd719a7/aioboto3-14.3.0.tar.gz", hash = "sha256:1d18f88bb56835c607b62bb6cb907754d717bedde3ddfff6935727cb48a80135", size = 322658, upload-time = "2025-05-07T15:23:59.262Z" }
@@ -97,13 +140,13 @@ name = "aiohttp"
 version = "3.13.5"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
-    { name = "aiohappyeyeballs" },
-    { name = "aiosignal" },
-    { name = "attrs" },
-    { name = "frozenlist" },
-    { name = "multidict" },
-    { name = "propcache" },
-    { name = "yarl" },
+    { name = "aiohappyeyeballs", marker = "extra == 'extra-13-scrapper-tool-full' or extra == 'extra-13-scrapper-tool-llm-agent' or extra == 'extra-13-scrapper-tool-skyvern-backend'" },
+    { name = "aiosignal", marker = "extra == 'extra-13-scrapper-tool-full' or extra == 'extra-13-scrapper-tool-llm-agent' or extra == 'extra-13-scrapper-tool-skyvern-backend'" },
+    { name = "attrs", marker = "extra == 'extra-13-scrapper-tool-full' or extra == 'extra-13-scrapper-tool-llm-agent' or extra == 'extra-13-scrapper-tool-skyvern-backend'" },
+    { name = "frozenlist", marker = "extra == 'extra-13-scrapper-tool-full' or extra == 'extra-13-scrapper-tool-llm-agent' or extra == 'extra-13-scrapper-tool-skyvern-backend'" },
+    { name = "multidict", marker = "extra == 'extra-13-scrapper-tool-full' or extra == 'extra-13-scrapper-tool-llm-agent' or extra == 'extra-13-scrapper-tool-skyvern-backend'" },
+    { name = "propcache", marker = "extra == 'extra-13-scrapper-tool-full' or extra == 'extra-13-scrapper-tool-llm-agent' or extra == 'extra-13-scrapper-tool-skyvern-backend'" },
+    { name = "yarl", marker = "extra == 'extra-13-scrapper-tool-full' or extra == 'extra-13-scrapper-tool-llm-agent' or extra == 'extra-13-scrapper-tool-skyvern-backend'" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/77/9a/152096d4808df8e4268befa55fba462f440f14beab85e8ad9bf990516918/aiohttp-3.13.5.tar.gz", hash = "sha256:9d98cc980ecc96be6eb4c1994ce35d28d8b1f5e5208a23b421187d1209dbb7d1", size = 7858271, upload-time = "2026-03-31T22:01:03.343Z" }
 wheels = [
@@ -217,8 +260,8 @@ name = "aiosignal"
 version = "1.4.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
-    { name = "frozenlist" },
-    { name = "typing-extensions", marker = "python_full_version < '3.13' or (extra == 'extra-13-scrapper-tool-hostile' and extra == 'extra-13-scrapper-tool-llm-agent')" },
+    { name = "frozenlist", marker = "extra == 'extra-13-scrapper-tool-full' or extra == 'extra-13-scrapper-tool-llm-agent' or extra == 'extra-13-scrapper-tool-skyvern-backend'" },
+    { name = "typing-extensions", marker = "(python_full_version < '3.13' and extra == 'extra-13-scrapper-tool-full') or (python_full_version < '3.13' and extra == 'extra-13-scrapper-tool-llm-agent') or (python_full_version < '3.13' and extra == 'extra-13-scrapper-tool-skyvern-backend') or (extra == 'extra-13-scrapper-tool-full' and extra == 'extra-13-scrapper-tool-skyvern-backend') or (extra == 'extra-13-scrapper-tool-hostile' and extra == 'extra-13-scrapper-tool-llm-agent')" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/61/62/06741b579156360248d1ec624842ad0edf697050bbaf7c3e46394e106ad1/aiosignal-1.4.0.tar.gz", hash = "sha256:f47eecd9468083c2029cc99945502cb7708b082c232f9aca65da147157b251c7", size = 25007, upload-time = "2025-07-03T22:54:43.528Z" }
 wheels = [
@@ -290,14 +333,14 @@ name = "anthropic"
 version = "0.88.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
-    { name = "anyio" },
-    { name = "distro" },
-    { name = "docstring-parser" },
-    { name = "httpx" },
-    { name = "jiter" },
-    { name = "pydantic" },
-    { name = "sniffio" },
-    { name = "typing-extensions" },
+    { name = "anyio", marker = "extra == 'extra-13-scrapper-tool-full' or extra == 'extra-13-scrapper-tool-llm-agent' or extra == 'extra-13-scrapper-tool-skyvern-backend'" },
+    { name = "distro", marker = "extra == 'extra-13-scrapper-tool-full' or extra == 'extra-13-scrapper-tool-llm-agent' or extra == 'extra-13-scrapper-tool-skyvern-backend'" },
+    { name = "docstring-parser", marker = "extra == 'extra-13-scrapper-tool-full' or extra == 'extra-13-scrapper-tool-llm-agent' or extra == 'extra-13-scrapper-tool-skyvern-backend'" },
+    { name = "httpx", marker = "extra == 'extra-13-scrapper-tool-full' or extra == 'extra-13-scrapper-tool-llm-agent' or extra == 'extra-13-scrapper-tool-skyvern-backend'" },
+    { name = "jiter", marker = "extra == 'extra-13-scrapper-tool-full' or extra == 'extra-13-scrapper-tool-llm-agent' or extra == 'extra-13-scrapper-tool-skyvern-backend'" },
+    { name = "pydantic", marker = "extra == 'extra-13-scrapper-tool-full' or extra == 'extra-13-scrapper-tool-llm-agent' or extra == 'extra-13-scrapper-tool-skyvern-backend'" },
+    { name = "sniffio", marker = "extra == 'extra-13-scrapper-tool-full' or extra == 'extra-13-scrapper-tool-llm-agent' or extra == 'extra-13-scrapper-tool-skyvern-backend'" },
+    { name = "typing-extensions", marker = "extra == 'extra-13-scrapper-tool-full' or extra == 'extra-13-scrapper-tool-llm-agent' or extra == 'extra-13-scrapper-tool-skyvern-backend'" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/86/68/565f13059c0a6a6fd5f96f306f2a0fb478a0e1174ec18a4df16b5fac9379/anthropic-0.88.0.tar.gz", hash = "sha256:f4c7f6863d08c869913516f08d658fe53caaf8bcc4fbea3218df343d2a876c58", size = 596654, upload-time = "2026-04-01T19:59:05.287Z" }
 wheels = [
@@ -310,7 +353,7 @@ version = "4.13.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "idna" },
-    { name = "typing-extensions", marker = "python_full_version < '3.13' or (extra == 'extra-13-scrapper-tool-hostile' and extra == 'extra-13-scrapper-tool-llm-agent')" },
+    { name = "typing-extensions", marker = "python_full_version < '3.13' or (extra == 'extra-13-scrapper-tool-full' and extra == 'extra-13-scrapper-tool-skyvern-backend') or (extra == 'extra-13-scrapper-tool-hostile' and extra == 'extra-13-scrapper-tool-llm-agent')" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/19/14/2c5dd9f512b66549ae92767a9c7b330ae88e1932ca57876909410251fe13/anyio-4.13.0.tar.gz", hash = "sha256:334b70e641fd2221c1505b3890c69882fe4a2df910cba14d97019b90b24439dc", size = 231622, upload-time = "2026-03-24T12:59:09.671Z" }
 wheels = [
@@ -419,8 +462,8 @@ name = "authlib"
 version = "1.7.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
-    { name = "cryptography" },
-    { name = "joserfc" },
+    { name = "cryptography", marker = "extra == 'extra-13-scrapper-tool-full' or extra == 'extra-13-scrapper-tool-llm-agent' or extra == 'extra-13-scrapper-tool-skyvern-backend'" },
+    { name = "joserfc", marker = "extra == 'extra-13-scrapper-tool-full' or extra == 'extra-13-scrapper-tool-llm-agent' or extra == 'extra-13-scrapper-tool-skyvern-backend'" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/d9/82/4d0603f30c1b4629b1f091bb266b0d7986434891d6940a8c87f8098db24e/authlib-1.7.0.tar.gz", hash = "sha256:b3e326c9aa9cc3ea95fe7d89fd880722d3608da4d00e8a27e061e64b48d801d5", size = 175890, upload-time = "2026-04-18T11:00:28.559Z" }
 wheels = [
@@ -654,12 +697,12 @@ dependencies = [
     { name = "posthog" },
     { name = "psutil" },
     { name = "pydantic" },
-    { name = "pyobjc", marker = "platform_system == 'darwin' or (extra == 'extra-13-scrapper-tool-hostile' and extra == 'extra-13-scrapper-tool-llm-agent')" },
+    { name = "pyobjc", marker = "(platform_system == 'darwin' and extra == 'extra-13-scrapper-tool-full') or (platform_system == 'darwin' and extra == 'extra-13-scrapper-tool-llm-agent') or (extra == 'extra-13-scrapper-tool-full' and extra == 'extra-13-scrapper-tool-skyvern-backend') or (extra == 'extra-13-scrapper-tool-hostile' and extra == 'extra-13-scrapper-tool-llm-agent')" },
     { name = "pypdf" },
     { name = "pyperclip" },
     { name = "python-dotenv" },
     { name = "requests" },
-    { name = "screeninfo", marker = "platform_system != 'darwin' or (extra == 'extra-13-scrapper-tool-hostile' and extra == 'extra-13-scrapper-tool-llm-agent')" },
+    { name = "screeninfo", marker = "(platform_system != 'darwin' and extra == 'extra-13-scrapper-tool-full') or (platform_system != 'darwin' and extra == 'extra-13-scrapper-tool-llm-agent') or (extra == 'extra-13-scrapper-tool-full' and extra == 'extra-13-scrapper-tool-skyvern-backend') or (extra == 'extra-13-scrapper-tool-hostile' and extra == 'extra-13-scrapper-tool-llm-agent')" },
     { name = "typing-extensions" },
     { name = "uuid7" },
 ]
@@ -786,7 +829,7 @@ name = "cffi"
 version = "2.0.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
-    { name = "pycparser", marker = "implementation_name != 'PyPy' or (extra == 'extra-13-scrapper-tool-hostile' and extra == 'extra-13-scrapper-tool-llm-agent')" },
+    { name = "pycparser", marker = "implementation_name != 'PyPy' or (extra == 'extra-13-scrapper-tool-full' and extra == 'extra-13-scrapper-tool-skyvern-backend') or (extra == 'extra-13-scrapper-tool-hostile' and extra == 'extra-13-scrapper-tool-llm-agent')" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/eb/56/b1ba7935a17738ae8453301356628e8147c79dbb825bcbc73dc7401f9846/cffi-2.0.0.tar.gz", hash = "sha256:44d1b5909021139fe36001ae048dbdde8214afa20200eda0f64c068cac5d5529", size = 523588, upload-time = "2025-09-08T23:24:04.541Z" }
 wheels = [
@@ -947,7 +990,7 @@ name = "click"
 version = "8.3.3"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
-    { name = "colorama", marker = "sys_platform == 'win32' or (extra == 'extra-13-scrapper-tool-hostile' and extra == 'extra-13-scrapper-tool-llm-agent')" },
+    { name = "colorama", marker = "sys_platform == 'win32' or (extra == 'extra-13-scrapper-tool-full' and extra == 'extra-13-scrapper-tool-skyvern-backend') or (extra == 'extra-13-scrapper-tool-hostile' and extra == 'extra-13-scrapper-tool-llm-agent')" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/bb/63/f9e1ea081ce35720d8b92acde70daaedace594dc93b693c869e0d5910718/click-8.3.3.tar.gz", hash = "sha256:398329ad4837b2ff7cbe1dd166a4c0f8900c3ca3a218de04466f38f6497f18a2", size = 328061, upload-time = "2026-04-22T15:11:27.506Z" }
 wheels = [
@@ -1084,7 +1127,7 @@ dependencies = [
     { name = "click" },
     { name = "cssselect" },
     { name = "fake-useragent" },
-    { name = "httpx", extra = ["http2"] },
+    { name = "httpx", extra = ["http2"], marker = "extra == 'extra-13-scrapper-tool-full' or extra == 'extra-13-scrapper-tool-llm-agent'" },
     { name = "humanize" },
     { name = "lark" },
     { name = "lxml" },
@@ -1130,7 +1173,7 @@ name = "cryptography"
 version = "47.0.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
-    { name = "cffi", marker = "platform_python_implementation != 'PyPy' or (extra == 'extra-13-scrapper-tool-hostile' and extra == 'extra-13-scrapper-tool-llm-agent')" },
+    { name = "cffi", marker = "platform_python_implementation != 'PyPy' or (extra == 'extra-13-scrapper-tool-full' and extra == 'extra-13-scrapper-tool-skyvern-backend') or (extra == 'extra-13-scrapper-tool-hostile' and extra == 'extra-13-scrapper-tool-llm-agent')" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/ef/b2/7ffa7fe8207a8c42147ffe70c3e360b228160c1d85dc3faff16aaa3244c0/cryptography-47.0.0.tar.gz", hash = "sha256:9f8e55fe4e63613a5e1cc5819030f27b97742d720203a087802ce4ce9ceb52bb", size = 830863, upload-time = "2026-04-24T19:54:57.056Z" }
 wheels = [
@@ -1239,7 +1282,7 @@ dependencies = [
     { name = "packageurl-python" },
     { name = "py-serializable" },
     { name = "sortedcontainers" },
-    { name = "typing-extensions", marker = "python_full_version < '3.13' or (extra == 'extra-13-scrapper-tool-hostile' and extra == 'extra-13-scrapper-tool-llm-agent')" },
+    { name = "typing-extensions", marker = "python_full_version < '3.13' or (extra == 'extra-13-scrapper-tool-full' and extra == 'extra-13-scrapper-tool-skyvern-backend') or (extra == 'extra-13-scrapper-tool-hostile' and extra == 'extra-13-scrapper-tool-llm-agent')" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/21/0d/64f02d3fd9c116d6f50a540d04d1e4f2e3c487f5062d2db53733ddb25917/cyclonedx_python_lib-11.7.0.tar.gz", hash = "sha256:fb1bc3dedfa31208444dbd743007f478ab6984010a184e5bd466bffd969e936e", size = 1411174, upload-time = "2026-03-17T15:19:16.606Z" }
 wheels = [
@@ -1451,8 +1494,8 @@ dependencies = [
     { name = "opentelemetry-api" },
     { name = "packaging" },
     { name = "platformdirs" },
-    { name = "py-key-value-aio", extra = ["filetree", "keyring", "memory"] },
-    { name = "pydantic", extra = ["email"] },
+    { name = "py-key-value-aio", extra = ["filetree", "keyring", "memory"], marker = "(extra == 'extra-13-scrapper-tool-hostile' and extra == 'extra-13-scrapper-tool-llm-agent') or (extra != 'extra-13-scrapper-tool-llm-agent' and extra == 'extra-13-scrapper-tool-skyvern-backend') or (extra != 'extra-13-scrapper-tool-hostile' and extra == 'extra-13-scrapper-tool-skyvern-backend')" },
+    { name = "pydantic", extra = ["email"], marker = "(extra == 'extra-13-scrapper-tool-hostile' and extra == 'extra-13-scrapper-tool-llm-agent') or (extra != 'extra-13-scrapper-tool-llm-agent' and extra == 'extra-13-scrapper-tool-skyvern-backend') or (extra != 'extra-13-scrapper-tool-hostile' and extra == 'extra-13-scrapper-tool-skyvern-backend')" },
     { name = "pyperclip" },
     { name = "python-dotenv" },
     { name = "pyyaml" },
@@ -1629,11 +1672,11 @@ name = "google-api-core"
 version = "2.30.3"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
-    { name = "google-auth" },
-    { name = "googleapis-common-protos" },
-    { name = "proto-plus" },
-    { name = "protobuf" },
-    { name = "requests" },
+    { name = "google-auth", marker = "extra == 'extra-13-scrapper-tool-full' or extra == 'extra-13-scrapper-tool-llm-agent' or extra == 'extra-13-scrapper-tool-skyvern-backend'" },
+    { name = "googleapis-common-protos", marker = "extra == 'extra-13-scrapper-tool-full' or extra == 'extra-13-scrapper-tool-llm-agent' or extra == 'extra-13-scrapper-tool-skyvern-backend'" },
+    { name = "proto-plus", marker = "extra == 'extra-13-scrapper-tool-full' or extra == 'extra-13-scrapper-tool-llm-agent' or extra == 'extra-13-scrapper-tool-skyvern-backend'" },
+    { name = "protobuf", marker = "extra == 'extra-13-scrapper-tool-full' or extra == 'extra-13-scrapper-tool-llm-agent' or extra == 'extra-13-scrapper-tool-skyvern-backend'" },
+    { name = "requests", marker = "extra == 'extra-13-scrapper-tool-full' or extra == 'extra-13-scrapper-tool-llm-agent' or extra == 'extra-13-scrapper-tool-skyvern-backend'" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/16/ce/502a57fb0ec752026d24df1280b162294b22a0afb98a326084f9a979138b/google_api_core-2.30.3.tar.gz", hash = "sha256:e601a37f148585319b26db36e219df68c5d07b6382cff2d580e83404e44d641b", size = 177001, upload-time = "2026-04-10T00:41:28.035Z" }
 wheels = [
@@ -1667,8 +1710,8 @@ name = "google-auth"
 version = "2.50.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
-    { name = "cryptography" },
-    { name = "pyasn1-modules" },
+    { name = "cryptography", marker = "extra == 'extra-13-scrapper-tool-full' or extra == 'extra-13-scrapper-tool-llm-agent' or extra == 'extra-13-scrapper-tool-skyvern-backend'" },
+    { name = "pyasn1-modules", marker = "extra == 'extra-13-scrapper-tool-full' or extra == 'extra-13-scrapper-tool-llm-agent' or extra == 'extra-13-scrapper-tool-skyvern-backend'" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/5f/18/238d7021d151bdab868f23433817b027dd759135202f4dfce0670d1230ca/google_auth-2.50.0.tar.gz", hash = "sha256:f35eafb191195328e8ce10a7883970877e7aeb49c2bfaa54aa0e394316d353d0", size = 336523, upload-time = "2026-04-30T21:19:29.659Z" }
 wheels = [
@@ -1677,7 +1720,7 @@ wheels = [
 
 [package.optional-dependencies]
 requests = [
-    { name = "requests" },
+    { name = "requests", marker = "extra == 'extra-13-scrapper-tool-full' or extra == 'extra-13-scrapper-tool-llm-agent' or extra == 'extra-13-scrapper-tool-skyvern-backend'" },
 ]
 
 [[package]]
@@ -1712,7 +1755,7 @@ version = "1.149.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "docstring-parser" },
-    { name = "google-api-core", extra = ["grpc"] },
+    { name = "google-api-core", extra = ["grpc"], marker = "(extra == 'extra-13-scrapper-tool-hostile' and extra == 'extra-13-scrapper-tool-llm-agent') or (extra != 'extra-13-scrapper-tool-llm-agent' and extra == 'extra-13-scrapper-tool-skyvern-backend') or (extra != 'extra-13-scrapper-tool-hostile' and extra == 'extra-13-scrapper-tool-skyvern-backend')" },
     { name = "google-auth" },
     { name = "google-cloud-bigquery" },
     { name = "google-cloud-resource-manager" },
@@ -1734,7 +1777,7 @@ name = "google-cloud-bigquery"
 version = "3.41.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
-    { name = "google-api-core", extra = ["grpc"] },
+    { name = "google-api-core", extra = ["grpc"], marker = "(extra == 'extra-13-scrapper-tool-hostile' and extra == 'extra-13-scrapper-tool-llm-agent') or (extra != 'extra-13-scrapper-tool-llm-agent' and extra == 'extra-13-scrapper-tool-skyvern-backend') or (extra != 'extra-13-scrapper-tool-hostile' and extra == 'extra-13-scrapper-tool-skyvern-backend')" },
     { name = "google-auth" },
     { name = "google-cloud-core" },
     { name = "google-resumable-media" },
@@ -1765,7 +1808,7 @@ name = "google-cloud-resource-manager"
 version = "1.17.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
-    { name = "google-api-core", extra = ["grpc"] },
+    { name = "google-api-core", extra = ["grpc"], marker = "(extra == 'extra-13-scrapper-tool-hostile' and extra == 'extra-13-scrapper-tool-llm-agent') or (extra != 'extra-13-scrapper-tool-llm-agent' and extra == 'extra-13-scrapper-tool-skyvern-backend') or (extra != 'extra-13-scrapper-tool-hostile' and extra == 'extra-13-scrapper-tool-skyvern-backend')" },
     { name = "google-auth" },
     { name = "grpc-google-iam-v1" },
     { name = "grpcio" },
@@ -1822,16 +1865,16 @@ name = "google-genai"
 version = "1.74.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
-    { name = "anyio" },
-    { name = "distro" },
-    { name = "google-auth", extra = ["requests"] },
-    { name = "httpx" },
-    { name = "pydantic" },
-    { name = "requests" },
-    { name = "sniffio" },
-    { name = "tenacity" },
-    { name = "typing-extensions" },
-    { name = "websockets" },
+    { name = "anyio", marker = "extra == 'extra-13-scrapper-tool-full' or extra == 'extra-13-scrapper-tool-llm-agent' or extra == 'extra-13-scrapper-tool-skyvern-backend'" },
+    { name = "distro", marker = "extra == 'extra-13-scrapper-tool-full' or extra == 'extra-13-scrapper-tool-llm-agent' or extra == 'extra-13-scrapper-tool-skyvern-backend'" },
+    { name = "google-auth", extra = ["requests"], marker = "extra == 'extra-13-scrapper-tool-full' or extra == 'extra-13-scrapper-tool-llm-agent' or extra == 'extra-13-scrapper-tool-skyvern-backend'" },
+    { name = "httpx", marker = "extra == 'extra-13-scrapper-tool-full' or extra == 'extra-13-scrapper-tool-llm-agent' or extra == 'extra-13-scrapper-tool-skyvern-backend'" },
+    { name = "pydantic", marker = "extra == 'extra-13-scrapper-tool-full' or extra == 'extra-13-scrapper-tool-llm-agent' or extra == 'extra-13-scrapper-tool-skyvern-backend'" },
+    { name = "requests", marker = "extra == 'extra-13-scrapper-tool-full' or extra == 'extra-13-scrapper-tool-llm-agent' or extra == 'extra-13-scrapper-tool-skyvern-backend'" },
+    { name = "sniffio", marker = "extra == 'extra-13-scrapper-tool-full' or extra == 'extra-13-scrapper-tool-llm-agent' or extra == 'extra-13-scrapper-tool-skyvern-backend'" },
+    { name = "tenacity", marker = "extra == 'extra-13-scrapper-tool-full' or extra == 'extra-13-scrapper-tool-llm-agent' or extra == 'extra-13-scrapper-tool-skyvern-backend'" },
+    { name = "typing-extensions", marker = "extra == 'extra-13-scrapper-tool-full' or extra == 'extra-13-scrapper-tool-llm-agent' or extra == 'extra-13-scrapper-tool-skyvern-backend'" },
+    { name = "websockets", marker = "extra == 'extra-13-scrapper-tool-full' or extra == 'extra-13-scrapper-tool-llm-agent' or extra == 'extra-13-scrapper-tool-skyvern-backend'" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/33/c8/4a8f1de0a3268d526a345b8c74456b3e1e6ffd200982626326cf7ca83e5b/google_genai-1.74.0.tar.gz", hash = "sha256:c4c473cebdeb6e5adbb0639326de66a3a85a2209e0d32de7d66bf05c698abae8", size = 536772, upload-time = "2026-04-29T22:16:35.881Z" }
 wheels = [
@@ -1855,7 +1898,7 @@ name = "googleapis-common-protos"
 version = "1.74.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
-    { name = "protobuf" },
+    { name = "protobuf", marker = "extra == 'extra-13-scrapper-tool-full' or extra == 'extra-13-scrapper-tool-llm-agent' or extra == 'extra-13-scrapper-tool-skyvern-backend'" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/20/18/a746c8344152d368a5aac738d4c857012f2c5d1fd2eac7e17b647a7861bd/googleapis_common_protos-1.74.0.tar.gz", hash = "sha256:57971e4eeeba6aad1163c1f0fc88543f965bb49129b8bb55b2b7b26ecab084f1", size = 151254, upload-time = "2026-04-02T21:23:26.679Z" }
 wheels = [
@@ -1951,7 +1994,7 @@ name = "grpc-google-iam-v1"
 version = "0.14.4"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
-    { name = "googleapis-common-protos", extra = ["grpc"] },
+    { name = "googleapis-common-protos", extra = ["grpc"], marker = "(extra == 'extra-13-scrapper-tool-hostile' and extra == 'extra-13-scrapper-tool-llm-agent') or (extra != 'extra-13-scrapper-tool-llm-agent' and extra == 'extra-13-scrapper-tool-skyvern-backend') or (extra != 'extra-13-scrapper-tool-hostile' and extra == 'extra-13-scrapper-tool-skyvern-backend')" },
     { name = "grpcio" },
     { name = "protobuf" },
 ]
@@ -2255,15 +2298,15 @@ name = "huggingface-hub"
 version = "1.13.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
-    { name = "filelock" },
-    { name = "fsspec" },
-    { name = "hf-xet", marker = "platform_machine == 'AMD64' or platform_machine == 'aarch64' or platform_machine == 'amd64' or platform_machine == 'arm64' or platform_machine == 'x86_64' or (extra == 'extra-13-scrapper-tool-hostile' and extra == 'extra-13-scrapper-tool-llm-agent')" },
-    { name = "httpx" },
-    { name = "packaging" },
-    { name = "pyyaml" },
-    { name = "tqdm" },
-    { name = "typer" },
-    { name = "typing-extensions" },
+    { name = "filelock", marker = "extra == 'extra-13-scrapper-tool-full' or extra == 'extra-13-scrapper-tool-llm-agent' or extra == 'extra-13-scrapper-tool-skyvern-backend'" },
+    { name = "fsspec", marker = "extra == 'extra-13-scrapper-tool-full' or extra == 'extra-13-scrapper-tool-llm-agent' or extra == 'extra-13-scrapper-tool-skyvern-backend'" },
+    { name = "hf-xet", marker = "(platform_machine == 'AMD64' and extra == 'extra-13-scrapper-tool-full') or (platform_machine == 'AMD64' and extra == 'extra-13-scrapper-tool-llm-agent') or (platform_machine == 'AMD64' and extra == 'extra-13-scrapper-tool-skyvern-backend') or (platform_machine == 'aarch64' and extra == 'extra-13-scrapper-tool-full') or (platform_machine == 'aarch64' and extra == 'extra-13-scrapper-tool-llm-agent') or (platform_machine == 'aarch64' and extra == 'extra-13-scrapper-tool-skyvern-backend') or (platform_machine == 'amd64' and extra == 'extra-13-scrapper-tool-full') or (platform_machine == 'amd64' and extra == 'extra-13-scrapper-tool-llm-agent') or (platform_machine == 'amd64' and extra == 'extra-13-scrapper-tool-skyvern-backend') or (platform_machine == 'arm64' and extra == 'extra-13-scrapper-tool-full') or (platform_machine == 'arm64' and extra == 'extra-13-scrapper-tool-llm-agent') or (platform_machine == 'arm64' and extra == 'extra-13-scrapper-tool-skyvern-backend') or (platform_machine == 'x86_64' and extra == 'extra-13-scrapper-tool-full') or (platform_machine == 'x86_64' and extra == 'extra-13-scrapper-tool-llm-agent') or (platform_machine == 'x86_64' and extra == 'extra-13-scrapper-tool-skyvern-backend') or (extra == 'extra-13-scrapper-tool-full' and extra == 'extra-13-scrapper-tool-skyvern-backend') or (extra == 'extra-13-scrapper-tool-hostile' and extra == 'extra-13-scrapper-tool-llm-agent')" },
+    { name = "httpx", marker = "extra == 'extra-13-scrapper-tool-full' or extra == 'extra-13-scrapper-tool-llm-agent' or extra == 'extra-13-scrapper-tool-skyvern-backend'" },
+    { name = "packaging", marker = "extra == 'extra-13-scrapper-tool-full' or extra == 'extra-13-scrapper-tool-llm-agent' or extra == 'extra-13-scrapper-tool-skyvern-backend'" },
+    { name = "pyyaml", marker = "extra == 'extra-13-scrapper-tool-full' or extra == 'extra-13-scrapper-tool-llm-agent' or extra == 'extra-13-scrapper-tool-skyvern-backend'" },
+    { name = "tqdm", marker = "extra == 'extra-13-scrapper-tool-full' or extra == 'extra-13-scrapper-tool-llm-agent' or extra == 'extra-13-scrapper-tool-skyvern-backend'" },
+    { name = "typer", marker = "extra == 'extra-13-scrapper-tool-full' or extra == 'extra-13-scrapper-tool-llm-agent' or extra == 'extra-13-scrapper-tool-skyvern-backend'" },
+    { name = "typing-extensions", marker = "extra == 'extra-13-scrapper-tool-full' or extra == 'extra-13-scrapper-tool-llm-agent' or extra == 'extra-13-scrapper-tool-skyvern-backend'" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/89/ff/ec7ed2eb43bd7ce8bb2233d109cc235c3e807ffe5e469dc09db261fac05e/huggingface_hub-1.13.0.tar.gz", hash = "sha256:f6df2dac5abe82ce2fe05873d10d5ff47bc677d616a2f521f4ee26db9415d9d0", size = 781788, upload-time = "2026-04-30T11:57:33.858Z" }
 wheels = [
@@ -2302,7 +2345,7 @@ name = "importlib-metadata"
 version = "8.7.1"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
-    { name = "zipp" },
+    { name = "zipp", marker = "extra == 'extra-13-scrapper-tool-full' or extra == 'extra-13-scrapper-tool-llm-agent' or extra == 'extra-13-scrapper-tool-skyvern-backend'" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/f3/49/3b30cad09e7771a4982d9975a8cbf64f00d4a1ececb53297f1d9a7be1b10/importlib_metadata-8.7.1.tar.gz", hash = "sha256:49fef1ae6440c182052f407c8d34a68f72efc36db9ca90dc0113398f2fdde8bb", size = 57107, upload-time = "2025-12-21T10:00:19.278Z" }
 wheels = [
@@ -2442,7 +2485,7 @@ name = "jinja2"
 version = "3.1.6"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
-    { name = "markupsafe" },
+    { name = "markupsafe", marker = "extra == 'extra-13-scrapper-tool-full' or extra == 'extra-13-scrapper-tool-llm-agent' or extra == 'extra-13-scrapper-tool-skyvern-backend'" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/df/bf/f7da0350254c0ed7c72f3e33cef02e048281fec7ecec5f032d4aac52226b/jinja2-3.1.6.tar.gz", hash = "sha256:0137fb05990d35f1275a587e9aee6d56da821fc83491a0fb838183be43f66d6d", size = 245115, upload-time = "2025-03-05T20:05:02.478Z" }
 wheels = [
@@ -2544,7 +2587,7 @@ name = "joserfc"
 version = "1.6.4"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
-    { name = "cryptography" },
+    { name = "cryptography", marker = "extra == 'extra-13-scrapper-tool-full' or extra == 'extra-13-scrapper-tool-llm-agent' or extra == 'extra-13-scrapper-tool-skyvern-backend'" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/de/c6/de8fdbdfa75c8ca04fead38a82d573df8a82906e984c349d58665f459558/joserfc-1.6.4.tar.gz", hash = "sha256:34ce5f499bfcc5e9ad4cc75077f9278ab3227b71da9aaf28f9ab705f8a560d3c", size = 231866, upload-time = "2026-04-13T13:15:40.632Z" }
 wheels = [
@@ -2928,8 +2971,8 @@ name = "markdown-pdf"
 version = "1.5"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
-    { name = "markdown-it-py" },
-    { name = "pymupdf" },
+    { name = "markdown-it-py", marker = "extra == 'extra-13-scrapper-tool-full' or extra == 'extra-13-scrapper-tool-llm-agent'" },
+    { name = "pymupdf", marker = "extra == 'extra-13-scrapper-tool-full' or extra == 'extra-13-scrapper-tool-llm-agent'" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/7d/a5/2cc13bcfdd7aac1788f66961023840fdd6ae62cd70d243cca517e13b8a5f/markdown_pdf-1.5.tar.gz", hash = "sha256:685f67149445eb569fd505791796114c3a592096bd298a23ef540103dc0ee21d", size = 5937, upload-time = "2025-03-18T05:24:21.99Z" }
 wheels = [
@@ -3037,12 +3080,12 @@ dependencies = [
     { name = "pydantic-settings" },
     { name = "pyjwt", extra = ["crypto"] },
     { name = "python-multipart" },
-    { name = "pywin32", marker = "sys_platform == 'win32' or (extra == 'extra-13-scrapper-tool-hostile' and extra == 'extra-13-scrapper-tool-llm-agent')" },
+    { name = "pywin32", marker = "sys_platform == 'win32' or (extra == 'extra-13-scrapper-tool-full' and extra == 'extra-13-scrapper-tool-skyvern-backend') or (extra == 'extra-13-scrapper-tool-hostile' and extra == 'extra-13-scrapper-tool-llm-agent')" },
     { name = "sse-starlette" },
     { name = "starlette" },
     { name = "typing-extensions" },
     { name = "typing-inspection" },
-    { name = "uvicorn", marker = "sys_platform != 'emscripten' or (extra == 'extra-13-scrapper-tool-hostile' and extra == 'extra-13-scrapper-tool-llm-agent')" },
+    { name = "uvicorn", marker = "sys_platform != 'emscripten' or (extra == 'extra-13-scrapper-tool-full' and extra == 'extra-13-scrapper-tool-skyvern-backend') or (extra == 'extra-13-scrapper-tool-hostile' and extra == 'extra-13-scrapper-tool-llm-agent')" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/8b/eb/c0cfc62075dc6e1ec1c64d352ae09ac051d9334311ed226f1f425312848a/mcp-1.27.0.tar.gz", hash = "sha256:d3dc35a7eec0d458c1da4976a48f982097ddaab87e278c5511d5a4a56e852b83", size = 607509, upload-time = "2026-04-02T14:48:08.88Z" }
 wheels = [
@@ -3096,8 +3139,8 @@ version = "0.1.3"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "pyperclip" },
-    { name = "python3-xlib", marker = "sys_platform == 'linux' or (extra == 'extra-13-scrapper-tool-hostile' and extra == 'extra-13-scrapper-tool-llm-agent')" },
-    { name = "rubicon-objc", marker = "sys_platform == 'darwin' or (extra == 'extra-13-scrapper-tool-hostile' and extra == 'extra-13-scrapper-tool-llm-agent')" },
+    { name = "python3-xlib", marker = "sys_platform == 'linux' or (extra == 'extra-13-scrapper-tool-full' and extra == 'extra-13-scrapper-tool-skyvern-backend') or (extra == 'extra-13-scrapper-tool-hostile' and extra == 'extra-13-scrapper-tool-llm-agent')" },
+    { name = "rubicon-objc", marker = "sys_platform == 'darwin' or (extra == 'extra-13-scrapper-tool-full' and extra == 'extra-13-scrapper-tool-skyvern-backend') or (extra == 'extra-13-scrapper-tool-hostile' and extra == 'extra-13-scrapper-tool-llm-agent')" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/28/fa/b2ba8229b9381e8f6381c1dcae6f4159a7f72349e414ed19cfbbd1817173/MouseInfo-0.1.3.tar.gz", hash = "sha256:2c62fb8885062b8e520a3cce0a297c657adcc08c60952eb05bc8256ef6f7f6e7", size = 10850, upload-time = "2020-03-27T21:20:10.136Z" }
 
@@ -3107,7 +3150,7 @@ version = "1.36.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "cryptography" },
-    { name = "pyjwt", extra = ["crypto"] },
+    { name = "pyjwt", extra = ["crypto"], marker = "(extra == 'extra-13-scrapper-tool-hostile' and extra == 'extra-13-scrapper-tool-llm-agent') or (extra != 'extra-13-scrapper-tool-llm-agent' and extra == 'extra-13-scrapper-tool-skyvern-backend') or (extra != 'extra-13-scrapper-tool-hostile' and extra == 'extra-13-scrapper-tool-skyvern-backend')" },
     { name = "requests" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/de/cb/b02b0f748ac668922364ccb3c3bff5b71628a05f5adfec2ba2a5c3031483/msal-1.36.0.tar.gz", hash = "sha256:3f6a4af2b036b476a4215111c4297b4e6e236ed186cd804faefba23e4990978b", size = 174217, upload-time = "2026-04-09T10:20:33.525Z" }
@@ -3324,7 +3367,7 @@ name = "mypy"
 version = "1.20.2"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
-    { name = "librt", marker = "platform_python_implementation != 'PyPy' or (extra == 'extra-13-scrapper-tool-hostile' and extra == 'extra-13-scrapper-tool-llm-agent')" },
+    { name = "librt", marker = "platform_python_implementation != 'PyPy' or (extra == 'extra-13-scrapper-tool-full' and extra == 'extra-13-scrapper-tool-skyvern-backend') or (extra == 'extra-13-scrapper-tool-hostile' and extra == 'extra-13-scrapper-tool-llm-agent')" },
     { name = "mypy-extensions" },
     { name = "pathspec" },
     { name = "typing-extensions" },
@@ -3504,14 +3547,14 @@ name = "openai"
 version = "2.33.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
-    { name = "anyio" },
-    { name = "distro" },
-    { name = "httpx" },
-    { name = "jiter" },
-    { name = "pydantic" },
-    { name = "sniffio" },
-    { name = "tqdm" },
-    { name = "typing-extensions" },
+    { name = "anyio", marker = "extra == 'extra-13-scrapper-tool-full' or extra == 'extra-13-scrapper-tool-llm-agent' or extra == 'extra-13-scrapper-tool-skyvern-backend'" },
+    { name = "distro", marker = "extra == 'extra-13-scrapper-tool-full' or extra == 'extra-13-scrapper-tool-llm-agent' or extra == 'extra-13-scrapper-tool-skyvern-backend'" },
+    { name = "httpx", marker = "extra == 'extra-13-scrapper-tool-full' or extra == 'extra-13-scrapper-tool-llm-agent' or extra == 'extra-13-scrapper-tool-skyvern-backend'" },
+    { name = "jiter", marker = "extra == 'extra-13-scrapper-tool-full' or extra == 'extra-13-scrapper-tool-llm-agent' or extra == 'extra-13-scrapper-tool-skyvern-backend'" },
+    { name = "pydantic", marker = "extra == 'extra-13-scrapper-tool-full' or extra == 'extra-13-scrapper-tool-llm-agent' or extra == 'extra-13-scrapper-tool-skyvern-backend'" },
+    { name = "sniffio", marker = "extra == 'extra-13-scrapper-tool-full' or extra == 'extra-13-scrapper-tool-llm-agent' or extra == 'extra-13-scrapper-tool-skyvern-backend'" },
+    { name = "tqdm", marker = "extra == 'extra-13-scrapper-tool-full' or extra == 'extra-13-scrapper-tool-llm-agent' or extra == 'extra-13-scrapper-tool-skyvern-backend'" },
+    { name = "typing-extensions", marker = "extra == 'extra-13-scrapper-tool-full' or extra == 'extra-13-scrapper-tool-llm-agent' or extra == 'extra-13-scrapper-tool-skyvern-backend'" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/f0/ee/d056c82f63c05f06baac0cffb4a90952d8274f90c49dfe244f20497b9bbd/openai-2.33.0.tar.gz", hash = "sha256:f850c435e2a4685bba3295bd54912dd26315d9c1b7733068186134d6e0599f9a", size = 693254, upload-time = "2026-04-28T14:04:42.428Z" }
 wheels = [
@@ -3919,8 +3962,8 @@ name = "playwright"
 version = "1.58.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
-    { name = "greenlet" },
-    { name = "pyee" },
+    { name = "greenlet", marker = "(python_full_version < '3.14' and extra == 'extra-13-scrapper-tool-skyvern-backend') or extra == 'extra-13-scrapper-tool-full' or extra == 'extra-13-scrapper-tool-hostile' or extra == 'extra-13-scrapper-tool-llm-agent'" },
+    { name = "pyee", marker = "(python_full_version < '3.14' and extra == 'extra-13-scrapper-tool-skyvern-backend') or extra == 'extra-13-scrapper-tool-full' or extra == 'extra-13-scrapper-tool-hostile' or extra == 'extra-13-scrapper-tool-llm-agent'" },
 ]
 wheels = [
     { url = "https://files.pythonhosted.org/packages/f8/c9/9c6061d5703267f1baae6a4647bfd1862e386fbfdb97d889f6f6ae9e3f64/playwright-1.58.0-py3-none-macosx_10_13_x86_64.whl", hash = "sha256:96e3204aac292ee639edbfdef6298b4be2ea0a55a16b7068df91adac077cc606", size = 42251098, upload-time = "2026-01-30T15:09:24.028Z" },
@@ -3959,7 +4002,7 @@ name = "portalocker"
 version = "2.10.1"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
-    { name = "pywin32", marker = "sys_platform == 'win32' or (extra == 'extra-13-scrapper-tool-hostile' and extra == 'extra-13-scrapper-tool-llm-agent')" },
+    { name = "pywin32", marker = "(sys_platform == 'win32' and extra == 'extra-13-scrapper-tool-full') or (sys_platform == 'win32' and extra == 'extra-13-scrapper-tool-llm-agent') or (extra == 'extra-13-scrapper-tool-full' and extra == 'extra-13-scrapper-tool-skyvern-backend') or (extra == 'extra-13-scrapper-tool-hostile' and extra == 'extra-13-scrapper-tool-llm-agent')" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/ed/d3/c6c64067759e87af98cc668c1cc75171347d0f1577fab7ca3749134e3cd4/portalocker-2.10.1.tar.gz", hash = "sha256:ef1bf844e878ab08aee7e40184156e1151f228f103aa5c6bd0724cc330960f8f", size = 40891, upload-time = "2024-07-13T23:15:34.86Z" }
 wheels = [
@@ -3971,12 +4014,12 @@ name = "posthog"
 version = "3.25.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
-    { name = "backoff" },
-    { name = "distro" },
-    { name = "monotonic" },
-    { name = "python-dateutil" },
-    { name = "requests" },
-    { name = "six" },
+    { name = "backoff", marker = "extra == 'extra-13-scrapper-tool-full' or extra == 'extra-13-scrapper-tool-llm-agent' or extra == 'extra-13-scrapper-tool-skyvern-backend'" },
+    { name = "distro", marker = "extra == 'extra-13-scrapper-tool-full' or extra == 'extra-13-scrapper-tool-llm-agent' or extra == 'extra-13-scrapper-tool-skyvern-backend'" },
+    { name = "monotonic", marker = "extra == 'extra-13-scrapper-tool-full' or extra == 'extra-13-scrapper-tool-llm-agent' or extra == 'extra-13-scrapper-tool-skyvern-backend'" },
+    { name = "python-dateutil", marker = "extra == 'extra-13-scrapper-tool-full' or extra == 'extra-13-scrapper-tool-llm-agent' or extra == 'extra-13-scrapper-tool-skyvern-backend'" },
+    { name = "requests", marker = "extra == 'extra-13-scrapper-tool-full' or extra == 'extra-13-scrapper-tool-llm-agent' or extra == 'extra-13-scrapper-tool-skyvern-backend'" },
+    { name = "six", marker = "extra == 'extra-13-scrapper-tool-full' or extra == 'extra-13-scrapper-tool-llm-agent' or extra == 'extra-13-scrapper-tool-skyvern-backend'" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/85/a9/ec3bbc23b6f3c23c52e0b5795b1357cca74aa5cfb254213f1e471fef9b4d/posthog-3.25.0.tar.gz", hash = "sha256:9168f3e7a0a5571b6b1065c41b3c171fbc68bfe72c3ac0bfd6e3d2fcdb7df2ca", size = 75968, upload-time = "2025-04-15T21:15:45.552Z" }
 wheels = [
@@ -4093,7 +4136,7 @@ name = "proto-plus"
 version = "1.27.2"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
-    { name = "protobuf" },
+    { name = "protobuf", marker = "extra == 'extra-13-scrapper-tool-full' or extra == 'extra-13-scrapper-tool-llm-agent' or extra == 'extra-13-scrapper-tool-skyvern-backend'" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/81/0d/94dfe80193e79d55258345901acd2917523d56e8381bc4dee7fd38e3868a/proto_plus-1.27.2.tar.gz", hash = "sha256:b2adde53adadf75737c44d3dcb0104fde65250dfc83ad59168b4aa3e574b6a24", size = 57204, upload-time = "2026-03-26T22:18:57.174Z" }
 wheels = [
@@ -4337,7 +4380,7 @@ name = "pyasn1-modules"
 version = "0.4.2"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
-    { name = "pyasn1" },
+    { name = "pyasn1", marker = "extra == 'extra-13-scrapper-tool-full' or extra == 'extra-13-scrapper-tool-llm-agent' or extra == 'extra-13-scrapper-tool-skyvern-backend'" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/e9/e6/78ebbb10a8c8e4b61a59249394a4a594c1a7af95593dc933a349c8d00964/pyasn1_modules-0.4.2.tar.gz", hash = "sha256:677091de870a80aae844b1ca6134f54652fa2c8c5a52aa396440ac3106e941e6", size = 307892, upload-time = "2025-03-28T02:41:22.17Z" }
 wheels = [
@@ -4352,10 +4395,10 @@ dependencies = [
     { name = "mouseinfo" },
     { name = "pygetwindow" },
     { name = "pymsgbox" },
-    { name = "pyobjc-core", marker = "sys_platform == 'darwin' or (extra == 'extra-13-scrapper-tool-hostile' and extra == 'extra-13-scrapper-tool-llm-agent')" },
-    { name = "pyobjc-framework-quartz", marker = "sys_platform == 'darwin' or (extra == 'extra-13-scrapper-tool-hostile' and extra == 'extra-13-scrapper-tool-llm-agent')" },
+    { name = "pyobjc-core", marker = "sys_platform == 'darwin' or (extra == 'extra-13-scrapper-tool-full' and extra == 'extra-13-scrapper-tool-skyvern-backend') or (extra == 'extra-13-scrapper-tool-hostile' and extra == 'extra-13-scrapper-tool-llm-agent')" },
+    { name = "pyobjc-framework-quartz", marker = "sys_platform == 'darwin' or (extra == 'extra-13-scrapper-tool-full' and extra == 'extra-13-scrapper-tool-skyvern-backend') or (extra == 'extra-13-scrapper-tool-hostile' and extra == 'extra-13-scrapper-tool-llm-agent')" },
     { name = "pyscreeze" },
-    { name = "python3-xlib", marker = "sys_platform == 'linux' or (extra == 'extra-13-scrapper-tool-hostile' and extra == 'extra-13-scrapper-tool-llm-agent')" },
+    { name = "python3-xlib", marker = "sys_platform == 'linux' or (extra == 'extra-13-scrapper-tool-full' and extra == 'extra-13-scrapper-tool-skyvern-backend') or (extra == 'extra-13-scrapper-tool-hostile' and extra == 'extra-13-scrapper-tool-llm-agent')" },
     { name = "pytweening" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/65/ff/cdae0a8c2118a0de74b6cf4cbcdcaf8fd25857e6c3f205ce4b1794b27814/PyAutoGUI-0.9.54.tar.gz", hash = "sha256:dd1d29e8fd118941cb193f74df57e5c6ff8e9253b99c7b04f39cfc69f3ae04b2", size = 61236, upload-time = "2023-05-24T20:11:32.972Z" }
@@ -4483,7 +4526,7 @@ name = "pyee"
 version = "13.0.1"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
-    { name = "typing-extensions" },
+    { name = "typing-extensions", marker = "(python_full_version < '3.14' and extra == 'extra-13-scrapper-tool-skyvern-backend') or extra == 'extra-13-scrapper-tool-full' or extra == 'extra-13-scrapper-tool-hostile' or extra == 'extra-13-scrapper-tool-llm-agent'" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/8b/04/e7c1fe4dc78a6fdbfd6c337b1c3732ff543b8a397683ab38378447baa331/pyee-13.0.1.tar.gz", hash = "sha256:0b931f7c14535667ed4c7e0d531716368715e860b988770fc7eb8578d1f67fc8", size = 31655, upload-time = "2026-02-14T21:12:28.044Z" }
 wheels = [
@@ -4552,165 +4595,165 @@ version = "12.1"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "pyobjc-core" },
-    { name = "pyobjc-framework-accessibility", marker = "platform_release >= '20.0' or (extra == 'extra-13-scrapper-tool-hostile' and extra == 'extra-13-scrapper-tool-llm-agent')" },
-    { name = "pyobjc-framework-accounts", marker = "platform_release >= '12.0' or (extra == 'extra-13-scrapper-tool-hostile' and extra == 'extra-13-scrapper-tool-llm-agent')" },
+    { name = "pyobjc-framework-accessibility", marker = "(platform_release >= '20.0' and extra == 'extra-13-scrapper-tool-full') or (platform_release >= '20.0' and extra == 'extra-13-scrapper-tool-llm-agent') or (extra == 'extra-13-scrapper-tool-full' and extra == 'extra-13-scrapper-tool-skyvern-backend') or (extra == 'extra-13-scrapper-tool-hostile' and extra == 'extra-13-scrapper-tool-llm-agent')" },
+    { name = "pyobjc-framework-accounts", marker = "(platform_release >= '12.0' and extra == 'extra-13-scrapper-tool-full') or (platform_release >= '12.0' and extra == 'extra-13-scrapper-tool-llm-agent') or (extra == 'extra-13-scrapper-tool-full' and extra == 'extra-13-scrapper-tool-skyvern-backend') or (extra == 'extra-13-scrapper-tool-hostile' and extra == 'extra-13-scrapper-tool-llm-agent')" },
     { name = "pyobjc-framework-addressbook" },
-    { name = "pyobjc-framework-adservices", marker = "platform_release >= '20.0' or (extra == 'extra-13-scrapper-tool-hostile' and extra == 'extra-13-scrapper-tool-llm-agent')" },
-    { name = "pyobjc-framework-adsupport", marker = "platform_release >= '18.0' or (extra == 'extra-13-scrapper-tool-hostile' and extra == 'extra-13-scrapper-tool-llm-agent')" },
+    { name = "pyobjc-framework-adservices", marker = "(platform_release >= '20.0' and extra == 'extra-13-scrapper-tool-full') or (platform_release >= '20.0' and extra == 'extra-13-scrapper-tool-llm-agent') or (extra == 'extra-13-scrapper-tool-full' and extra == 'extra-13-scrapper-tool-skyvern-backend') or (extra == 'extra-13-scrapper-tool-hostile' and extra == 'extra-13-scrapper-tool-llm-agent')" },
+    { name = "pyobjc-framework-adsupport", marker = "(platform_release >= '18.0' and extra == 'extra-13-scrapper-tool-full') or (platform_release >= '18.0' and extra == 'extra-13-scrapper-tool-llm-agent') or (extra == 'extra-13-scrapper-tool-full' and extra == 'extra-13-scrapper-tool-skyvern-backend') or (extra == 'extra-13-scrapper-tool-hostile' and extra == 'extra-13-scrapper-tool-llm-agent')" },
     { name = "pyobjc-framework-applescriptkit" },
-    { name = "pyobjc-framework-applescriptobjc", marker = "platform_release >= '10.0' or (extra == 'extra-13-scrapper-tool-hostile' and extra == 'extra-13-scrapper-tool-llm-agent')" },
+    { name = "pyobjc-framework-applescriptobjc", marker = "(platform_release >= '10.0' and extra == 'extra-13-scrapper-tool-full') or (platform_release >= '10.0' and extra == 'extra-13-scrapper-tool-llm-agent') or (extra == 'extra-13-scrapper-tool-full' and extra == 'extra-13-scrapper-tool-skyvern-backend') or (extra == 'extra-13-scrapper-tool-hostile' and extra == 'extra-13-scrapper-tool-llm-agent')" },
     { name = "pyobjc-framework-applicationservices" },
-    { name = "pyobjc-framework-apptrackingtransparency", marker = "platform_release >= '20.0' or (extra == 'extra-13-scrapper-tool-hostile' and extra == 'extra-13-scrapper-tool-llm-agent')" },
-    { name = "pyobjc-framework-arkit", marker = "platform_release >= '25.0' or (extra == 'extra-13-scrapper-tool-hostile' and extra == 'extra-13-scrapper-tool-llm-agent')" },
-    { name = "pyobjc-framework-audiovideobridging", marker = "platform_release >= '12.0' or (extra == 'extra-13-scrapper-tool-hostile' and extra == 'extra-13-scrapper-tool-llm-agent')" },
-    { name = "pyobjc-framework-authenticationservices", marker = "platform_release >= '19.0' or (extra == 'extra-13-scrapper-tool-hostile' and extra == 'extra-13-scrapper-tool-llm-agent')" },
-    { name = "pyobjc-framework-automaticassessmentconfiguration", marker = "platform_release >= '19.0' or (extra == 'extra-13-scrapper-tool-hostile' and extra == 'extra-13-scrapper-tool-llm-agent')" },
+    { name = "pyobjc-framework-apptrackingtransparency", marker = "(platform_release >= '20.0' and extra == 'extra-13-scrapper-tool-full') or (platform_release >= '20.0' and extra == 'extra-13-scrapper-tool-llm-agent') or (extra == 'extra-13-scrapper-tool-full' and extra == 'extra-13-scrapper-tool-skyvern-backend') or (extra == 'extra-13-scrapper-tool-hostile' and extra == 'extra-13-scrapper-tool-llm-agent')" },
+    { name = "pyobjc-framework-arkit", marker = "(platform_release >= '25.0' and extra == 'extra-13-scrapper-tool-full') or (platform_release >= '25.0' and extra == 'extra-13-scrapper-tool-llm-agent') or (extra == 'extra-13-scrapper-tool-full' and extra == 'extra-13-scrapper-tool-skyvern-backend') or (extra == 'extra-13-scrapper-tool-hostile' and extra == 'extra-13-scrapper-tool-llm-agent')" },
+    { name = "pyobjc-framework-audiovideobridging", marker = "(platform_release >= '12.0' and extra == 'extra-13-scrapper-tool-full') or (platform_release >= '12.0' and extra == 'extra-13-scrapper-tool-llm-agent') or (extra == 'extra-13-scrapper-tool-full' and extra == 'extra-13-scrapper-tool-skyvern-backend') or (extra == 'extra-13-scrapper-tool-hostile' and extra == 'extra-13-scrapper-tool-llm-agent')" },
+    { name = "pyobjc-framework-authenticationservices", marker = "(platform_release >= '19.0' and extra == 'extra-13-scrapper-tool-full') or (platform_release >= '19.0' and extra == 'extra-13-scrapper-tool-llm-agent') or (extra == 'extra-13-scrapper-tool-full' and extra == 'extra-13-scrapper-tool-skyvern-backend') or (extra == 'extra-13-scrapper-tool-hostile' and extra == 'extra-13-scrapper-tool-llm-agent')" },
+    { name = "pyobjc-framework-automaticassessmentconfiguration", marker = "(platform_release >= '19.0' and extra == 'extra-13-scrapper-tool-full') or (platform_release >= '19.0' and extra == 'extra-13-scrapper-tool-llm-agent') or (extra == 'extra-13-scrapper-tool-full' and extra == 'extra-13-scrapper-tool-skyvern-backend') or (extra == 'extra-13-scrapper-tool-hostile' and extra == 'extra-13-scrapper-tool-llm-agent')" },
     { name = "pyobjc-framework-automator" },
-    { name = "pyobjc-framework-avfoundation", marker = "platform_release >= '11.0' or (extra == 'extra-13-scrapper-tool-hostile' and extra == 'extra-13-scrapper-tool-llm-agent')" },
-    { name = "pyobjc-framework-avkit", marker = "platform_release >= '13.0' or (extra == 'extra-13-scrapper-tool-hostile' and extra == 'extra-13-scrapper-tool-llm-agent')" },
-    { name = "pyobjc-framework-avrouting", marker = "platform_release >= '22.0' or (extra == 'extra-13-scrapper-tool-hostile' and extra == 'extra-13-scrapper-tool-llm-agent')" },
-    { name = "pyobjc-framework-backgroundassets", marker = "platform_release >= '22.0' or (extra == 'extra-13-scrapper-tool-hostile' and extra == 'extra-13-scrapper-tool-llm-agent')" },
-    { name = "pyobjc-framework-browserenginekit", marker = "platform_release >= '23.4' or (extra == 'extra-13-scrapper-tool-hostile' and extra == 'extra-13-scrapper-tool-llm-agent')" },
-    { name = "pyobjc-framework-businesschat", marker = "platform_release >= '18.0' or (extra == 'extra-13-scrapper-tool-hostile' and extra == 'extra-13-scrapper-tool-llm-agent')" },
-    { name = "pyobjc-framework-calendarstore", marker = "platform_release >= '9.0' or (extra == 'extra-13-scrapper-tool-hostile' and extra == 'extra-13-scrapper-tool-llm-agent')" },
-    { name = "pyobjc-framework-callkit", marker = "platform_release >= '20.0' or (extra == 'extra-13-scrapper-tool-hostile' and extra == 'extra-13-scrapper-tool-llm-agent')" },
+    { name = "pyobjc-framework-avfoundation", marker = "(platform_release >= '11.0' and extra == 'extra-13-scrapper-tool-full') or (platform_release >= '11.0' and extra == 'extra-13-scrapper-tool-llm-agent') or (extra == 'extra-13-scrapper-tool-full' and extra == 'extra-13-scrapper-tool-skyvern-backend') or (extra == 'extra-13-scrapper-tool-hostile' and extra == 'extra-13-scrapper-tool-llm-agent')" },
+    { name = "pyobjc-framework-avkit", marker = "(platform_release >= '13.0' and extra == 'extra-13-scrapper-tool-full') or (platform_release >= '13.0' and extra == 'extra-13-scrapper-tool-llm-agent') or (extra == 'extra-13-scrapper-tool-full' and extra == 'extra-13-scrapper-tool-skyvern-backend') or (extra == 'extra-13-scrapper-tool-hostile' and extra == 'extra-13-scrapper-tool-llm-agent')" },
+    { name = "pyobjc-framework-avrouting", marker = "(platform_release >= '22.0' and extra == 'extra-13-scrapper-tool-full') or (platform_release >= '22.0' and extra == 'extra-13-scrapper-tool-llm-agent') or (extra == 'extra-13-scrapper-tool-full' and extra == 'extra-13-scrapper-tool-skyvern-backend') or (extra == 'extra-13-scrapper-tool-hostile' and extra == 'extra-13-scrapper-tool-llm-agent')" },
+    { name = "pyobjc-framework-backgroundassets", marker = "(platform_release >= '22.0' and extra == 'extra-13-scrapper-tool-full') or (platform_release >= '22.0' and extra == 'extra-13-scrapper-tool-llm-agent') or (extra == 'extra-13-scrapper-tool-full' and extra == 'extra-13-scrapper-tool-skyvern-backend') or (extra == 'extra-13-scrapper-tool-hostile' and extra == 'extra-13-scrapper-tool-llm-agent')" },
+    { name = "pyobjc-framework-browserenginekit", marker = "(platform_release >= '23.4' and extra == 'extra-13-scrapper-tool-full') or (platform_release >= '23.4' and extra == 'extra-13-scrapper-tool-llm-agent') or (extra == 'extra-13-scrapper-tool-full' and extra == 'extra-13-scrapper-tool-skyvern-backend') or (extra == 'extra-13-scrapper-tool-hostile' and extra == 'extra-13-scrapper-tool-llm-agent')" },
+    { name = "pyobjc-framework-businesschat", marker = "(platform_release >= '18.0' and extra == 'extra-13-scrapper-tool-full') or (platform_release >= '18.0' and extra == 'extra-13-scrapper-tool-llm-agent') or (extra == 'extra-13-scrapper-tool-full' and extra == 'extra-13-scrapper-tool-skyvern-backend') or (extra == 'extra-13-scrapper-tool-hostile' and extra == 'extra-13-scrapper-tool-llm-agent')" },
+    { name = "pyobjc-framework-calendarstore", marker = "(platform_release >= '9.0' and extra == 'extra-13-scrapper-tool-full') or (platform_release >= '9.0' and extra == 'extra-13-scrapper-tool-llm-agent') or (extra == 'extra-13-scrapper-tool-full' and extra == 'extra-13-scrapper-tool-skyvern-backend') or (extra == 'extra-13-scrapper-tool-hostile' and extra == 'extra-13-scrapper-tool-llm-agent')" },
+    { name = "pyobjc-framework-callkit", marker = "(platform_release >= '20.0' and extra == 'extra-13-scrapper-tool-full') or (platform_release >= '20.0' and extra == 'extra-13-scrapper-tool-llm-agent') or (extra == 'extra-13-scrapper-tool-full' and extra == 'extra-13-scrapper-tool-skyvern-backend') or (extra == 'extra-13-scrapper-tool-hostile' and extra == 'extra-13-scrapper-tool-llm-agent')" },
     { name = "pyobjc-framework-carbon" },
     { name = "pyobjc-framework-cfnetwork" },
-    { name = "pyobjc-framework-cinematic", marker = "platform_release >= '23.0' or (extra == 'extra-13-scrapper-tool-hostile' and extra == 'extra-13-scrapper-tool-llm-agent')" },
-    { name = "pyobjc-framework-classkit", marker = "platform_release >= '20.0' or (extra == 'extra-13-scrapper-tool-hostile' and extra == 'extra-13-scrapper-tool-llm-agent')" },
-    { name = "pyobjc-framework-cloudkit", marker = "platform_release >= '14.0' or (extra == 'extra-13-scrapper-tool-hostile' and extra == 'extra-13-scrapper-tool-llm-agent')" },
+    { name = "pyobjc-framework-cinematic", marker = "(platform_release >= '23.0' and extra == 'extra-13-scrapper-tool-full') or (platform_release >= '23.0' and extra == 'extra-13-scrapper-tool-llm-agent') or (extra == 'extra-13-scrapper-tool-full' and extra == 'extra-13-scrapper-tool-skyvern-backend') or (extra == 'extra-13-scrapper-tool-hostile' and extra == 'extra-13-scrapper-tool-llm-agent')" },
+    { name = "pyobjc-framework-classkit", marker = "(platform_release >= '20.0' and extra == 'extra-13-scrapper-tool-full') or (platform_release >= '20.0' and extra == 'extra-13-scrapper-tool-llm-agent') or (extra == 'extra-13-scrapper-tool-full' and extra == 'extra-13-scrapper-tool-skyvern-backend') or (extra == 'extra-13-scrapper-tool-hostile' and extra == 'extra-13-scrapper-tool-llm-agent')" },
+    { name = "pyobjc-framework-cloudkit", marker = "(platform_release >= '14.0' and extra == 'extra-13-scrapper-tool-full') or (platform_release >= '14.0' and extra == 'extra-13-scrapper-tool-llm-agent') or (extra == 'extra-13-scrapper-tool-full' and extra == 'extra-13-scrapper-tool-skyvern-backend') or (extra == 'extra-13-scrapper-tool-hostile' and extra == 'extra-13-scrapper-tool-llm-agent')" },
     { name = "pyobjc-framework-cocoa" },
-    { name = "pyobjc-framework-collaboration", marker = "platform_release >= '9.0' or (extra == 'extra-13-scrapper-tool-hostile' and extra == 'extra-13-scrapper-tool-llm-agent')" },
-    { name = "pyobjc-framework-colorsync", marker = "platform_release >= '17.0' or (extra == 'extra-13-scrapper-tool-hostile' and extra == 'extra-13-scrapper-tool-llm-agent')" },
-    { name = "pyobjc-framework-compositorservices", marker = "platform_release >= '25.0' or (extra == 'extra-13-scrapper-tool-hostile' and extra == 'extra-13-scrapper-tool-llm-agent')" },
-    { name = "pyobjc-framework-contacts", marker = "platform_release >= '15.0' or (extra == 'extra-13-scrapper-tool-hostile' and extra == 'extra-13-scrapper-tool-llm-agent')" },
-    { name = "pyobjc-framework-contactsui", marker = "platform_release >= '15.0' or (extra == 'extra-13-scrapper-tool-hostile' and extra == 'extra-13-scrapper-tool-llm-agent')" },
+    { name = "pyobjc-framework-collaboration", marker = "(platform_release >= '9.0' and extra == 'extra-13-scrapper-tool-full') or (platform_release >= '9.0' and extra == 'extra-13-scrapper-tool-llm-agent') or (extra == 'extra-13-scrapper-tool-full' and extra == 'extra-13-scrapper-tool-skyvern-backend') or (extra == 'extra-13-scrapper-tool-hostile' and extra == 'extra-13-scrapper-tool-llm-agent')" },
+    { name = "pyobjc-framework-colorsync", marker = "(platform_release >= '17.0' and extra == 'extra-13-scrapper-tool-full') or (platform_release >= '17.0' and extra == 'extra-13-scrapper-tool-llm-agent') or (extra == 'extra-13-scrapper-tool-full' and extra == 'extra-13-scrapper-tool-skyvern-backend') or (extra == 'extra-13-scrapper-tool-hostile' and extra == 'extra-13-scrapper-tool-llm-agent')" },
+    { name = "pyobjc-framework-compositorservices", marker = "(platform_release >= '25.0' and extra == 'extra-13-scrapper-tool-full') or (platform_release >= '25.0' and extra == 'extra-13-scrapper-tool-llm-agent') or (extra == 'extra-13-scrapper-tool-full' and extra == 'extra-13-scrapper-tool-skyvern-backend') or (extra == 'extra-13-scrapper-tool-hostile' and extra == 'extra-13-scrapper-tool-llm-agent')" },
+    { name = "pyobjc-framework-contacts", marker = "(platform_release >= '15.0' and extra == 'extra-13-scrapper-tool-full') or (platform_release >= '15.0' and extra == 'extra-13-scrapper-tool-llm-agent') or (extra == 'extra-13-scrapper-tool-full' and extra == 'extra-13-scrapper-tool-skyvern-backend') or (extra == 'extra-13-scrapper-tool-hostile' and extra == 'extra-13-scrapper-tool-llm-agent')" },
+    { name = "pyobjc-framework-contactsui", marker = "(platform_release >= '15.0' and extra == 'extra-13-scrapper-tool-full') or (platform_release >= '15.0' and extra == 'extra-13-scrapper-tool-llm-agent') or (extra == 'extra-13-scrapper-tool-full' and extra == 'extra-13-scrapper-tool-skyvern-backend') or (extra == 'extra-13-scrapper-tool-hostile' and extra == 'extra-13-scrapper-tool-llm-agent')" },
     { name = "pyobjc-framework-coreaudio" },
     { name = "pyobjc-framework-coreaudiokit" },
-    { name = "pyobjc-framework-corebluetooth", marker = "platform_release >= '14.0' or (extra == 'extra-13-scrapper-tool-hostile' and extra == 'extra-13-scrapper-tool-llm-agent')" },
+    { name = "pyobjc-framework-corebluetooth", marker = "(platform_release >= '14.0' and extra == 'extra-13-scrapper-tool-full') or (platform_release >= '14.0' and extra == 'extra-13-scrapper-tool-llm-agent') or (extra == 'extra-13-scrapper-tool-full' and extra == 'extra-13-scrapper-tool-skyvern-backend') or (extra == 'extra-13-scrapper-tool-hostile' and extra == 'extra-13-scrapper-tool-llm-agent')" },
     { name = "pyobjc-framework-coredata" },
-    { name = "pyobjc-framework-corehaptics", marker = "platform_release >= '19.0' or (extra == 'extra-13-scrapper-tool-hostile' and extra == 'extra-13-scrapper-tool-llm-agent')" },
-    { name = "pyobjc-framework-corelocation", marker = "platform_release >= '10.0' or (extra == 'extra-13-scrapper-tool-hostile' and extra == 'extra-13-scrapper-tool-llm-agent')" },
-    { name = "pyobjc-framework-coremedia", marker = "platform_release >= '11.0' or (extra == 'extra-13-scrapper-tool-hostile' and extra == 'extra-13-scrapper-tool-llm-agent')" },
-    { name = "pyobjc-framework-coremediaio", marker = "platform_release >= '11.0' or (extra == 'extra-13-scrapper-tool-hostile' and extra == 'extra-13-scrapper-tool-llm-agent')" },
+    { name = "pyobjc-framework-corehaptics", marker = "(platform_release >= '19.0' and extra == 'extra-13-scrapper-tool-full') or (platform_release >= '19.0' and extra == 'extra-13-scrapper-tool-llm-agent') or (extra == 'extra-13-scrapper-tool-full' and extra == 'extra-13-scrapper-tool-skyvern-backend') or (extra == 'extra-13-scrapper-tool-hostile' and extra == 'extra-13-scrapper-tool-llm-agent')" },
+    { name = "pyobjc-framework-corelocation", marker = "(platform_release >= '10.0' and extra == 'extra-13-scrapper-tool-full') or (platform_release >= '10.0' and extra == 'extra-13-scrapper-tool-llm-agent') or (extra == 'extra-13-scrapper-tool-full' and extra == 'extra-13-scrapper-tool-skyvern-backend') or (extra == 'extra-13-scrapper-tool-hostile' and extra == 'extra-13-scrapper-tool-llm-agent')" },
+    { name = "pyobjc-framework-coremedia", marker = "(platform_release >= '11.0' and extra == 'extra-13-scrapper-tool-full') or (platform_release >= '11.0' and extra == 'extra-13-scrapper-tool-llm-agent') or (extra == 'extra-13-scrapper-tool-full' and extra == 'extra-13-scrapper-tool-skyvern-backend') or (extra == 'extra-13-scrapper-tool-hostile' and extra == 'extra-13-scrapper-tool-llm-agent')" },
+    { name = "pyobjc-framework-coremediaio", marker = "(platform_release >= '11.0' and extra == 'extra-13-scrapper-tool-full') or (platform_release >= '11.0' and extra == 'extra-13-scrapper-tool-llm-agent') or (extra == 'extra-13-scrapper-tool-full' and extra == 'extra-13-scrapper-tool-skyvern-backend') or (extra == 'extra-13-scrapper-tool-hostile' and extra == 'extra-13-scrapper-tool-llm-agent')" },
     { name = "pyobjc-framework-coremidi" },
-    { name = "pyobjc-framework-coreml", marker = "platform_release >= '17.0' or (extra == 'extra-13-scrapper-tool-hostile' and extra == 'extra-13-scrapper-tool-llm-agent')" },
-    { name = "pyobjc-framework-coremotion", marker = "platform_release >= '19.0' or (extra == 'extra-13-scrapper-tool-hostile' and extra == 'extra-13-scrapper-tool-llm-agent')" },
+    { name = "pyobjc-framework-coreml", marker = "(platform_release >= '17.0' and extra == 'extra-13-scrapper-tool-full') or (platform_release >= '17.0' and extra == 'extra-13-scrapper-tool-llm-agent') or (extra == 'extra-13-scrapper-tool-full' and extra == 'extra-13-scrapper-tool-skyvern-backend') or (extra == 'extra-13-scrapper-tool-hostile' and extra == 'extra-13-scrapper-tool-llm-agent')" },
+    { name = "pyobjc-framework-coremotion", marker = "(platform_release >= '19.0' and extra == 'extra-13-scrapper-tool-full') or (platform_release >= '19.0' and extra == 'extra-13-scrapper-tool-llm-agent') or (extra == 'extra-13-scrapper-tool-full' and extra == 'extra-13-scrapper-tool-skyvern-backend') or (extra == 'extra-13-scrapper-tool-hostile' and extra == 'extra-13-scrapper-tool-llm-agent')" },
     { name = "pyobjc-framework-coreservices" },
-    { name = "pyobjc-framework-corespotlight", marker = "platform_release >= '17.0' or (extra == 'extra-13-scrapper-tool-hostile' and extra == 'extra-13-scrapper-tool-llm-agent')" },
+    { name = "pyobjc-framework-corespotlight", marker = "(platform_release >= '17.0' and extra == 'extra-13-scrapper-tool-full') or (platform_release >= '17.0' and extra == 'extra-13-scrapper-tool-llm-agent') or (extra == 'extra-13-scrapper-tool-full' and extra == 'extra-13-scrapper-tool-skyvern-backend') or (extra == 'extra-13-scrapper-tool-hostile' and extra == 'extra-13-scrapper-tool-llm-agent')" },
     { name = "pyobjc-framework-coretext" },
-    { name = "pyobjc-framework-corewlan", marker = "platform_release >= '10.0' or (extra == 'extra-13-scrapper-tool-hostile' and extra == 'extra-13-scrapper-tool-llm-agent')" },
-    { name = "pyobjc-framework-cryptotokenkit", marker = "platform_release >= '14.0' or (extra == 'extra-13-scrapper-tool-hostile' and extra == 'extra-13-scrapper-tool-llm-agent')" },
-    { name = "pyobjc-framework-datadetection", marker = "platform_release >= '21.0' or (extra == 'extra-13-scrapper-tool-hostile' and extra == 'extra-13-scrapper-tool-llm-agent')" },
-    { name = "pyobjc-framework-devicecheck", marker = "platform_release >= '19.0' or (extra == 'extra-13-scrapper-tool-hostile' and extra == 'extra-13-scrapper-tool-llm-agent')" },
-    { name = "pyobjc-framework-devicediscoveryextension", marker = "platform_release >= '24.0' or (extra == 'extra-13-scrapper-tool-hostile' and extra == 'extra-13-scrapper-tool-llm-agent')" },
-    { name = "pyobjc-framework-dictionaryservices", marker = "platform_release >= '9.0' or (extra == 'extra-13-scrapper-tool-hostile' and extra == 'extra-13-scrapper-tool-llm-agent')" },
+    { name = "pyobjc-framework-corewlan", marker = "(platform_release >= '10.0' and extra == 'extra-13-scrapper-tool-full') or (platform_release >= '10.0' and extra == 'extra-13-scrapper-tool-llm-agent') or (extra == 'extra-13-scrapper-tool-full' and extra == 'extra-13-scrapper-tool-skyvern-backend') or (extra == 'extra-13-scrapper-tool-hostile' and extra == 'extra-13-scrapper-tool-llm-agent')" },
+    { name = "pyobjc-framework-cryptotokenkit", marker = "(platform_release >= '14.0' and extra == 'extra-13-scrapper-tool-full') or (platform_release >= '14.0' and extra == 'extra-13-scrapper-tool-llm-agent') or (extra == 'extra-13-scrapper-tool-full' and extra == 'extra-13-scrapper-tool-skyvern-backend') or (extra == 'extra-13-scrapper-tool-hostile' and extra == 'extra-13-scrapper-tool-llm-agent')" },
+    { name = "pyobjc-framework-datadetection", marker = "(platform_release >= '21.0' and extra == 'extra-13-scrapper-tool-full') or (platform_release >= '21.0' and extra == 'extra-13-scrapper-tool-llm-agent') or (extra == 'extra-13-scrapper-tool-full' and extra == 'extra-13-scrapper-tool-skyvern-backend') or (extra == 'extra-13-scrapper-tool-hostile' and extra == 'extra-13-scrapper-tool-llm-agent')" },
+    { name = "pyobjc-framework-devicecheck", marker = "(platform_release >= '19.0' and extra == 'extra-13-scrapper-tool-full') or (platform_release >= '19.0' and extra == 'extra-13-scrapper-tool-llm-agent') or (extra == 'extra-13-scrapper-tool-full' and extra == 'extra-13-scrapper-tool-skyvern-backend') or (extra == 'extra-13-scrapper-tool-hostile' and extra == 'extra-13-scrapper-tool-llm-agent')" },
+    { name = "pyobjc-framework-devicediscoveryextension", marker = "(platform_release >= '24.0' and extra == 'extra-13-scrapper-tool-full') or (platform_release >= '24.0' and extra == 'extra-13-scrapper-tool-llm-agent') or (extra == 'extra-13-scrapper-tool-full' and extra == 'extra-13-scrapper-tool-skyvern-backend') or (extra == 'extra-13-scrapper-tool-hostile' and extra == 'extra-13-scrapper-tool-llm-agent')" },
+    { name = "pyobjc-framework-dictionaryservices", marker = "(platform_release >= '9.0' and extra == 'extra-13-scrapper-tool-full') or (platform_release >= '9.0' and extra == 'extra-13-scrapper-tool-llm-agent') or (extra == 'extra-13-scrapper-tool-full' and extra == 'extra-13-scrapper-tool-skyvern-backend') or (extra == 'extra-13-scrapper-tool-hostile' and extra == 'extra-13-scrapper-tool-llm-agent')" },
     { name = "pyobjc-framework-discrecording" },
     { name = "pyobjc-framework-discrecordingui" },
     { name = "pyobjc-framework-diskarbitration" },
     { name = "pyobjc-framework-dvdplayback" },
-    { name = "pyobjc-framework-eventkit", marker = "platform_release >= '12.0' or (extra == 'extra-13-scrapper-tool-hostile' and extra == 'extra-13-scrapper-tool-llm-agent')" },
+    { name = "pyobjc-framework-eventkit", marker = "(platform_release >= '12.0' and extra == 'extra-13-scrapper-tool-full') or (platform_release >= '12.0' and extra == 'extra-13-scrapper-tool-llm-agent') or (extra == 'extra-13-scrapper-tool-full' and extra == 'extra-13-scrapper-tool-skyvern-backend') or (extra == 'extra-13-scrapper-tool-hostile' and extra == 'extra-13-scrapper-tool-llm-agent')" },
     { name = "pyobjc-framework-exceptionhandling" },
-    { name = "pyobjc-framework-executionpolicy", marker = "platform_release >= '19.0' or (extra == 'extra-13-scrapper-tool-hostile' and extra == 'extra-13-scrapper-tool-llm-agent')" },
-    { name = "pyobjc-framework-extensionkit", marker = "platform_release >= '22.0' or (extra == 'extra-13-scrapper-tool-hostile' and extra == 'extra-13-scrapper-tool-llm-agent')" },
-    { name = "pyobjc-framework-externalaccessory", marker = "platform_release >= '17.0' or (extra == 'extra-13-scrapper-tool-hostile' and extra == 'extra-13-scrapper-tool-llm-agent')" },
-    { name = "pyobjc-framework-fileprovider", marker = "platform_release >= '19.0' or (extra == 'extra-13-scrapper-tool-hostile' and extra == 'extra-13-scrapper-tool-llm-agent')" },
-    { name = "pyobjc-framework-fileproviderui", marker = "platform_release >= '19.0' or (extra == 'extra-13-scrapper-tool-hostile' and extra == 'extra-13-scrapper-tool-llm-agent')" },
-    { name = "pyobjc-framework-findersync", marker = "platform_release >= '14.0' or (extra == 'extra-13-scrapper-tool-hostile' and extra == 'extra-13-scrapper-tool-llm-agent')" },
-    { name = "pyobjc-framework-fsevents", marker = "platform_release >= '9.0' or (extra == 'extra-13-scrapper-tool-hostile' and extra == 'extra-13-scrapper-tool-llm-agent')" },
-    { name = "pyobjc-framework-fskit", marker = "platform_release >= '24.4' or (extra == 'extra-13-scrapper-tool-hostile' and extra == 'extra-13-scrapper-tool-llm-agent')" },
-    { name = "pyobjc-framework-gamecenter", marker = "platform_release >= '12.0' or (extra == 'extra-13-scrapper-tool-hostile' and extra == 'extra-13-scrapper-tool-llm-agent')" },
-    { name = "pyobjc-framework-gamecontroller", marker = "platform_release >= '13.0' or (extra == 'extra-13-scrapper-tool-hostile' and extra == 'extra-13-scrapper-tool-llm-agent')" },
-    { name = "pyobjc-framework-gamekit", marker = "platform_release >= '12.0' or (extra == 'extra-13-scrapper-tool-hostile' and extra == 'extra-13-scrapper-tool-llm-agent')" },
-    { name = "pyobjc-framework-gameplaykit", marker = "platform_release >= '15.0' or (extra == 'extra-13-scrapper-tool-hostile' and extra == 'extra-13-scrapper-tool-llm-agent')" },
-    { name = "pyobjc-framework-gamesave", marker = "platform_release >= '25.0' or (extra == 'extra-13-scrapper-tool-hostile' and extra == 'extra-13-scrapper-tool-llm-agent')" },
-    { name = "pyobjc-framework-healthkit", marker = "platform_release >= '22.0' or (extra == 'extra-13-scrapper-tool-hostile' and extra == 'extra-13-scrapper-tool-llm-agent')" },
-    { name = "pyobjc-framework-imagecapturecore", marker = "platform_release >= '10.0' or (extra == 'extra-13-scrapper-tool-hostile' and extra == 'extra-13-scrapper-tool-llm-agent')" },
-    { name = "pyobjc-framework-inputmethodkit", marker = "platform_release >= '9.0' or (extra == 'extra-13-scrapper-tool-hostile' and extra == 'extra-13-scrapper-tool-llm-agent')" },
+    { name = "pyobjc-framework-executionpolicy", marker = "(platform_release >= '19.0' and extra == 'extra-13-scrapper-tool-full') or (platform_release >= '19.0' and extra == 'extra-13-scrapper-tool-llm-agent') or (extra == 'extra-13-scrapper-tool-full' and extra == 'extra-13-scrapper-tool-skyvern-backend') or (extra == 'extra-13-scrapper-tool-hostile' and extra == 'extra-13-scrapper-tool-llm-agent')" },
+    { name = "pyobjc-framework-extensionkit", marker = "(platform_release >= '22.0' and extra == 'extra-13-scrapper-tool-full') or (platform_release >= '22.0' and extra == 'extra-13-scrapper-tool-llm-agent') or (extra == 'extra-13-scrapper-tool-full' and extra == 'extra-13-scrapper-tool-skyvern-backend') or (extra == 'extra-13-scrapper-tool-hostile' and extra == 'extra-13-scrapper-tool-llm-agent')" },
+    { name = "pyobjc-framework-externalaccessory", marker = "(platform_release >= '17.0' and extra == 'extra-13-scrapper-tool-full') or (platform_release >= '17.0' and extra == 'extra-13-scrapper-tool-llm-agent') or (extra == 'extra-13-scrapper-tool-full' and extra == 'extra-13-scrapper-tool-skyvern-backend') or (extra == 'extra-13-scrapper-tool-hostile' and extra == 'extra-13-scrapper-tool-llm-agent')" },
+    { name = "pyobjc-framework-fileprovider", marker = "(platform_release >= '19.0' and extra == 'extra-13-scrapper-tool-full') or (platform_release >= '19.0' and extra == 'extra-13-scrapper-tool-llm-agent') or (extra == 'extra-13-scrapper-tool-full' and extra == 'extra-13-scrapper-tool-skyvern-backend') or (extra == 'extra-13-scrapper-tool-hostile' and extra == 'extra-13-scrapper-tool-llm-agent')" },
+    { name = "pyobjc-framework-fileproviderui", marker = "(platform_release >= '19.0' and extra == 'extra-13-scrapper-tool-full') or (platform_release >= '19.0' and extra == 'extra-13-scrapper-tool-llm-agent') or (extra == 'extra-13-scrapper-tool-full' and extra == 'extra-13-scrapper-tool-skyvern-backend') or (extra == 'extra-13-scrapper-tool-hostile' and extra == 'extra-13-scrapper-tool-llm-agent')" },
+    { name = "pyobjc-framework-findersync", marker = "(platform_release >= '14.0' and extra == 'extra-13-scrapper-tool-full') or (platform_release >= '14.0' and extra == 'extra-13-scrapper-tool-llm-agent') or (extra == 'extra-13-scrapper-tool-full' and extra == 'extra-13-scrapper-tool-skyvern-backend') or (extra == 'extra-13-scrapper-tool-hostile' and extra == 'extra-13-scrapper-tool-llm-agent')" },
+    { name = "pyobjc-framework-fsevents", marker = "(platform_release >= '9.0' and extra == 'extra-13-scrapper-tool-full') or (platform_release >= '9.0' and extra == 'extra-13-scrapper-tool-llm-agent') or (extra == 'extra-13-scrapper-tool-full' and extra == 'extra-13-scrapper-tool-skyvern-backend') or (extra == 'extra-13-scrapper-tool-hostile' and extra == 'extra-13-scrapper-tool-llm-agent')" },
+    { name = "pyobjc-framework-fskit", marker = "(platform_release >= '24.4' and extra == 'extra-13-scrapper-tool-full') or (platform_release >= '24.4' and extra == 'extra-13-scrapper-tool-llm-agent') or (extra == 'extra-13-scrapper-tool-full' and extra == 'extra-13-scrapper-tool-skyvern-backend') or (extra == 'extra-13-scrapper-tool-hostile' and extra == 'extra-13-scrapper-tool-llm-agent')" },
+    { name = "pyobjc-framework-gamecenter", marker = "(platform_release >= '12.0' and extra == 'extra-13-scrapper-tool-full') or (platform_release >= '12.0' and extra == 'extra-13-scrapper-tool-llm-agent') or (extra == 'extra-13-scrapper-tool-full' and extra == 'extra-13-scrapper-tool-skyvern-backend') or (extra == 'extra-13-scrapper-tool-hostile' and extra == 'extra-13-scrapper-tool-llm-agent')" },
+    { name = "pyobjc-framework-gamecontroller", marker = "(platform_release >= '13.0' and extra == 'extra-13-scrapper-tool-full') or (platform_release >= '13.0' and extra == 'extra-13-scrapper-tool-llm-agent') or (extra == 'extra-13-scrapper-tool-full' and extra == 'extra-13-scrapper-tool-skyvern-backend') or (extra == 'extra-13-scrapper-tool-hostile' and extra == 'extra-13-scrapper-tool-llm-agent')" },
+    { name = "pyobjc-framework-gamekit", marker = "(platform_release >= '12.0' and extra == 'extra-13-scrapper-tool-full') or (platform_release >= '12.0' and extra == 'extra-13-scrapper-tool-llm-agent') or (extra == 'extra-13-scrapper-tool-full' and extra == 'extra-13-scrapper-tool-skyvern-backend') or (extra == 'extra-13-scrapper-tool-hostile' and extra == 'extra-13-scrapper-tool-llm-agent')" },
+    { name = "pyobjc-framework-gameplaykit", marker = "(platform_release >= '15.0' and extra == 'extra-13-scrapper-tool-full') or (platform_release >= '15.0' and extra == 'extra-13-scrapper-tool-llm-agent') or (extra == 'extra-13-scrapper-tool-full' and extra == 'extra-13-scrapper-tool-skyvern-backend') or (extra == 'extra-13-scrapper-tool-hostile' and extra == 'extra-13-scrapper-tool-llm-agent')" },
+    { name = "pyobjc-framework-gamesave", marker = "(platform_release >= '25.0' and extra == 'extra-13-scrapper-tool-full') or (platform_release >= '25.0' and extra == 'extra-13-scrapper-tool-llm-agent') or (extra == 'extra-13-scrapper-tool-full' and extra == 'extra-13-scrapper-tool-skyvern-backend') or (extra == 'extra-13-scrapper-tool-hostile' and extra == 'extra-13-scrapper-tool-llm-agent')" },
+    { name = "pyobjc-framework-healthkit", marker = "(platform_release >= '22.0' and extra == 'extra-13-scrapper-tool-full') or (platform_release >= '22.0' and extra == 'extra-13-scrapper-tool-llm-agent') or (extra == 'extra-13-scrapper-tool-full' and extra == 'extra-13-scrapper-tool-skyvern-backend') or (extra == 'extra-13-scrapper-tool-hostile' and extra == 'extra-13-scrapper-tool-llm-agent')" },
+    { name = "pyobjc-framework-imagecapturecore", marker = "(platform_release >= '10.0' and extra == 'extra-13-scrapper-tool-full') or (platform_release >= '10.0' and extra == 'extra-13-scrapper-tool-llm-agent') or (extra == 'extra-13-scrapper-tool-full' and extra == 'extra-13-scrapper-tool-skyvern-backend') or (extra == 'extra-13-scrapper-tool-hostile' and extra == 'extra-13-scrapper-tool-llm-agent')" },
+    { name = "pyobjc-framework-inputmethodkit", marker = "(platform_release >= '9.0' and extra == 'extra-13-scrapper-tool-full') or (platform_release >= '9.0' and extra == 'extra-13-scrapper-tool-llm-agent') or (extra == 'extra-13-scrapper-tool-full' and extra == 'extra-13-scrapper-tool-skyvern-backend') or (extra == 'extra-13-scrapper-tool-hostile' and extra == 'extra-13-scrapper-tool-llm-agent')" },
     { name = "pyobjc-framework-installerplugins" },
-    { name = "pyobjc-framework-instantmessage", marker = "platform_release >= '9.0' or (extra == 'extra-13-scrapper-tool-hostile' and extra == 'extra-13-scrapper-tool-llm-agent')" },
-    { name = "pyobjc-framework-intents", marker = "platform_release >= '16.0' or (extra == 'extra-13-scrapper-tool-hostile' and extra == 'extra-13-scrapper-tool-llm-agent')" },
-    { name = "pyobjc-framework-intentsui", marker = "platform_release >= '21.0' or (extra == 'extra-13-scrapper-tool-hostile' and extra == 'extra-13-scrapper-tool-llm-agent')" },
+    { name = "pyobjc-framework-instantmessage", marker = "(platform_release >= '9.0' and extra == 'extra-13-scrapper-tool-full') or (platform_release >= '9.0' and extra == 'extra-13-scrapper-tool-llm-agent') or (extra == 'extra-13-scrapper-tool-full' and extra == 'extra-13-scrapper-tool-skyvern-backend') or (extra == 'extra-13-scrapper-tool-hostile' and extra == 'extra-13-scrapper-tool-llm-agent')" },
+    { name = "pyobjc-framework-intents", marker = "(platform_release >= '16.0' and extra == 'extra-13-scrapper-tool-full') or (platform_release >= '16.0' and extra == 'extra-13-scrapper-tool-llm-agent') or (extra == 'extra-13-scrapper-tool-full' and extra == 'extra-13-scrapper-tool-skyvern-backend') or (extra == 'extra-13-scrapper-tool-hostile' and extra == 'extra-13-scrapper-tool-llm-agent')" },
+    { name = "pyobjc-framework-intentsui", marker = "(platform_release >= '21.0' and extra == 'extra-13-scrapper-tool-full') or (platform_release >= '21.0' and extra == 'extra-13-scrapper-tool-llm-agent') or (extra == 'extra-13-scrapper-tool-full' and extra == 'extra-13-scrapper-tool-skyvern-backend') or (extra == 'extra-13-scrapper-tool-hostile' and extra == 'extra-13-scrapper-tool-llm-agent')" },
     { name = "pyobjc-framework-iobluetooth" },
     { name = "pyobjc-framework-iobluetoothui" },
-    { name = "pyobjc-framework-iosurface", marker = "platform_release >= '10.0' or (extra == 'extra-13-scrapper-tool-hostile' and extra == 'extra-13-scrapper-tool-llm-agent')" },
-    { name = "pyobjc-framework-ituneslibrary", marker = "platform_release >= '10.0' or (extra == 'extra-13-scrapper-tool-hostile' and extra == 'extra-13-scrapper-tool-llm-agent')" },
-    { name = "pyobjc-framework-kernelmanagement", marker = "platform_release >= '20.0' or (extra == 'extra-13-scrapper-tool-hostile' and extra == 'extra-13-scrapper-tool-llm-agent')" },
+    { name = "pyobjc-framework-iosurface", marker = "(platform_release >= '10.0' and extra == 'extra-13-scrapper-tool-full') or (platform_release >= '10.0' and extra == 'extra-13-scrapper-tool-llm-agent') or (extra == 'extra-13-scrapper-tool-full' and extra == 'extra-13-scrapper-tool-skyvern-backend') or (extra == 'extra-13-scrapper-tool-hostile' and extra == 'extra-13-scrapper-tool-llm-agent')" },
+    { name = "pyobjc-framework-ituneslibrary", marker = "(platform_release >= '10.0' and extra == 'extra-13-scrapper-tool-full') or (platform_release >= '10.0' and extra == 'extra-13-scrapper-tool-llm-agent') or (extra == 'extra-13-scrapper-tool-full' and extra == 'extra-13-scrapper-tool-skyvern-backend') or (extra == 'extra-13-scrapper-tool-hostile' and extra == 'extra-13-scrapper-tool-llm-agent')" },
+    { name = "pyobjc-framework-kernelmanagement", marker = "(platform_release >= '20.0' and extra == 'extra-13-scrapper-tool-full') or (platform_release >= '20.0' and extra == 'extra-13-scrapper-tool-llm-agent') or (extra == 'extra-13-scrapper-tool-full' and extra == 'extra-13-scrapper-tool-skyvern-backend') or (extra == 'extra-13-scrapper-tool-hostile' and extra == 'extra-13-scrapper-tool-llm-agent')" },
     { name = "pyobjc-framework-latentsemanticmapping" },
     { name = "pyobjc-framework-launchservices" },
-    { name = "pyobjc-framework-libdispatch", marker = "platform_release >= '12.0' or (extra == 'extra-13-scrapper-tool-hostile' and extra == 'extra-13-scrapper-tool-llm-agent')" },
-    { name = "pyobjc-framework-libxpc", marker = "platform_release >= '12.0' or (extra == 'extra-13-scrapper-tool-hostile' and extra == 'extra-13-scrapper-tool-llm-agent')" },
-    { name = "pyobjc-framework-linkpresentation", marker = "platform_release >= '19.0' or (extra == 'extra-13-scrapper-tool-hostile' and extra == 'extra-13-scrapper-tool-llm-agent')" },
-    { name = "pyobjc-framework-localauthentication", marker = "platform_release >= '14.0' or (extra == 'extra-13-scrapper-tool-hostile' and extra == 'extra-13-scrapper-tool-llm-agent')" },
-    { name = "pyobjc-framework-localauthenticationembeddedui", marker = "platform_release >= '21.0' or (extra == 'extra-13-scrapper-tool-hostile' and extra == 'extra-13-scrapper-tool-llm-agent')" },
-    { name = "pyobjc-framework-mailkit", marker = "platform_release >= '21.0' or (extra == 'extra-13-scrapper-tool-hostile' and extra == 'extra-13-scrapper-tool-llm-agent')" },
-    { name = "pyobjc-framework-mapkit", marker = "platform_release >= '13.0' or (extra == 'extra-13-scrapper-tool-hostile' and extra == 'extra-13-scrapper-tool-llm-agent')" },
-    { name = "pyobjc-framework-mediaaccessibility", marker = "platform_release >= '13.0' or (extra == 'extra-13-scrapper-tool-hostile' and extra == 'extra-13-scrapper-tool-llm-agent')" },
-    { name = "pyobjc-framework-mediaextension", marker = "platform_release >= '24.0' or (extra == 'extra-13-scrapper-tool-hostile' and extra == 'extra-13-scrapper-tool-llm-agent')" },
-    { name = "pyobjc-framework-medialibrary", marker = "platform_release >= '13.0' or (extra == 'extra-13-scrapper-tool-hostile' and extra == 'extra-13-scrapper-tool-llm-agent')" },
-    { name = "pyobjc-framework-mediaplayer", marker = "platform_release >= '16.0' or (extra == 'extra-13-scrapper-tool-hostile' and extra == 'extra-13-scrapper-tool-llm-agent')" },
-    { name = "pyobjc-framework-mediatoolbox", marker = "platform_release >= '13.0' or (extra == 'extra-13-scrapper-tool-hostile' and extra == 'extra-13-scrapper-tool-llm-agent')" },
-    { name = "pyobjc-framework-metal", marker = "platform_release >= '15.0' or (extra == 'extra-13-scrapper-tool-hostile' and extra == 'extra-13-scrapper-tool-llm-agent')" },
-    { name = "pyobjc-framework-metalfx", marker = "platform_release >= '22.0' or (extra == 'extra-13-scrapper-tool-hostile' and extra == 'extra-13-scrapper-tool-llm-agent')" },
-    { name = "pyobjc-framework-metalkit", marker = "platform_release >= '15.0' or (extra == 'extra-13-scrapper-tool-hostile' and extra == 'extra-13-scrapper-tool-llm-agent')" },
-    { name = "pyobjc-framework-metalperformanceshaders", marker = "platform_release >= '17.0' or (extra == 'extra-13-scrapper-tool-hostile' and extra == 'extra-13-scrapper-tool-llm-agent')" },
-    { name = "pyobjc-framework-metalperformanceshadersgraph", marker = "platform_release >= '20.0' or (extra == 'extra-13-scrapper-tool-hostile' and extra == 'extra-13-scrapper-tool-llm-agent')" },
-    { name = "pyobjc-framework-metrickit", marker = "platform_release >= '21.0' or (extra == 'extra-13-scrapper-tool-hostile' and extra == 'extra-13-scrapper-tool-llm-agent')" },
-    { name = "pyobjc-framework-mlcompute", marker = "platform_release >= '20.0' or (extra == 'extra-13-scrapper-tool-hostile' and extra == 'extra-13-scrapper-tool-llm-agent')" },
-    { name = "pyobjc-framework-modelio", marker = "platform_release >= '15.0' or (extra == 'extra-13-scrapper-tool-hostile' and extra == 'extra-13-scrapper-tool-llm-agent')" },
-    { name = "pyobjc-framework-multipeerconnectivity", marker = "platform_release >= '14.0' or (extra == 'extra-13-scrapper-tool-hostile' and extra == 'extra-13-scrapper-tool-llm-agent')" },
-    { name = "pyobjc-framework-naturallanguage", marker = "platform_release >= '18.0' or (extra == 'extra-13-scrapper-tool-hostile' and extra == 'extra-13-scrapper-tool-llm-agent')" },
-    { name = "pyobjc-framework-netfs", marker = "platform_release >= '10.0' or (extra == 'extra-13-scrapper-tool-hostile' and extra == 'extra-13-scrapper-tool-llm-agent')" },
-    { name = "pyobjc-framework-network", marker = "platform_release >= '18.0' or (extra == 'extra-13-scrapper-tool-hostile' and extra == 'extra-13-scrapper-tool-llm-agent')" },
-    { name = "pyobjc-framework-networkextension", marker = "platform_release >= '15.0' or (extra == 'extra-13-scrapper-tool-hostile' and extra == 'extra-13-scrapper-tool-llm-agent')" },
-    { name = "pyobjc-framework-notificationcenter", marker = "platform_release >= '14.0' or (extra == 'extra-13-scrapper-tool-hostile' and extra == 'extra-13-scrapper-tool-llm-agent')" },
-    { name = "pyobjc-framework-opendirectory", marker = "platform_release >= '10.0' or (extra == 'extra-13-scrapper-tool-hostile' and extra == 'extra-13-scrapper-tool-llm-agent')" },
+    { name = "pyobjc-framework-libdispatch", marker = "(platform_release >= '12.0' and extra == 'extra-13-scrapper-tool-full') or (platform_release >= '12.0' and extra == 'extra-13-scrapper-tool-llm-agent') or (extra == 'extra-13-scrapper-tool-full' and extra == 'extra-13-scrapper-tool-skyvern-backend') or (extra == 'extra-13-scrapper-tool-hostile' and extra == 'extra-13-scrapper-tool-llm-agent')" },
+    { name = "pyobjc-framework-libxpc", marker = "(platform_release >= '12.0' and extra == 'extra-13-scrapper-tool-full') or (platform_release >= '12.0' and extra == 'extra-13-scrapper-tool-llm-agent') or (extra == 'extra-13-scrapper-tool-full' and extra == 'extra-13-scrapper-tool-skyvern-backend') or (extra == 'extra-13-scrapper-tool-hostile' and extra == 'extra-13-scrapper-tool-llm-agent')" },
+    { name = "pyobjc-framework-linkpresentation", marker = "(platform_release >= '19.0' and extra == 'extra-13-scrapper-tool-full') or (platform_release >= '19.0' and extra == 'extra-13-scrapper-tool-llm-agent') or (extra == 'extra-13-scrapper-tool-full' and extra == 'extra-13-scrapper-tool-skyvern-backend') or (extra == 'extra-13-scrapper-tool-hostile' and extra == 'extra-13-scrapper-tool-llm-agent')" },
+    { name = "pyobjc-framework-localauthentication", marker = "(platform_release >= '14.0' and extra == 'extra-13-scrapper-tool-full') or (platform_release >= '14.0' and extra == 'extra-13-scrapper-tool-llm-agent') or (extra == 'extra-13-scrapper-tool-full' and extra == 'extra-13-scrapper-tool-skyvern-backend') or (extra == 'extra-13-scrapper-tool-hostile' and extra == 'extra-13-scrapper-tool-llm-agent')" },
+    { name = "pyobjc-framework-localauthenticationembeddedui", marker = "(platform_release >= '21.0' and extra == 'extra-13-scrapper-tool-full') or (platform_release >= '21.0' and extra == 'extra-13-scrapper-tool-llm-agent') or (extra == 'extra-13-scrapper-tool-full' and extra == 'extra-13-scrapper-tool-skyvern-backend') or (extra == 'extra-13-scrapper-tool-hostile' and extra == 'extra-13-scrapper-tool-llm-agent')" },
+    { name = "pyobjc-framework-mailkit", marker = "(platform_release >= '21.0' and extra == 'extra-13-scrapper-tool-full') or (platform_release >= '21.0' and extra == 'extra-13-scrapper-tool-llm-agent') or (extra == 'extra-13-scrapper-tool-full' and extra == 'extra-13-scrapper-tool-skyvern-backend') or (extra == 'extra-13-scrapper-tool-hostile' and extra == 'extra-13-scrapper-tool-llm-agent')" },
+    { name = "pyobjc-framework-mapkit", marker = "(platform_release >= '13.0' and extra == 'extra-13-scrapper-tool-full') or (platform_release >= '13.0' and extra == 'extra-13-scrapper-tool-llm-agent') or (extra == 'extra-13-scrapper-tool-full' and extra == 'extra-13-scrapper-tool-skyvern-backend') or (extra == 'extra-13-scrapper-tool-hostile' and extra == 'extra-13-scrapper-tool-llm-agent')" },
+    { name = "pyobjc-framework-mediaaccessibility", marker = "(platform_release >= '13.0' and extra == 'extra-13-scrapper-tool-full') or (platform_release >= '13.0' and extra == 'extra-13-scrapper-tool-llm-agent') or (extra == 'extra-13-scrapper-tool-full' and extra == 'extra-13-scrapper-tool-skyvern-backend') or (extra == 'extra-13-scrapper-tool-hostile' and extra == 'extra-13-scrapper-tool-llm-agent')" },
+    { name = "pyobjc-framework-mediaextension", marker = "(platform_release >= '24.0' and extra == 'extra-13-scrapper-tool-full') or (platform_release >= '24.0' and extra == 'extra-13-scrapper-tool-llm-agent') or (extra == 'extra-13-scrapper-tool-full' and extra == 'extra-13-scrapper-tool-skyvern-backend') or (extra == 'extra-13-scrapper-tool-hostile' and extra == 'extra-13-scrapper-tool-llm-agent')" },
+    { name = "pyobjc-framework-medialibrary", marker = "(platform_release >= '13.0' and extra == 'extra-13-scrapper-tool-full') or (platform_release >= '13.0' and extra == 'extra-13-scrapper-tool-llm-agent') or (extra == 'extra-13-scrapper-tool-full' and extra == 'extra-13-scrapper-tool-skyvern-backend') or (extra == 'extra-13-scrapper-tool-hostile' and extra == 'extra-13-scrapper-tool-llm-agent')" },
+    { name = "pyobjc-framework-mediaplayer", marker = "(platform_release >= '16.0' and extra == 'extra-13-scrapper-tool-full') or (platform_release >= '16.0' and extra == 'extra-13-scrapper-tool-llm-agent') or (extra == 'extra-13-scrapper-tool-full' and extra == 'extra-13-scrapper-tool-skyvern-backend') or (extra == 'extra-13-scrapper-tool-hostile' and extra == 'extra-13-scrapper-tool-llm-agent')" },
+    { name = "pyobjc-framework-mediatoolbox", marker = "(platform_release >= '13.0' and extra == 'extra-13-scrapper-tool-full') or (platform_release >= '13.0' and extra == 'extra-13-scrapper-tool-llm-agent') or (extra == 'extra-13-scrapper-tool-full' and extra == 'extra-13-scrapper-tool-skyvern-backend') or (extra == 'extra-13-scrapper-tool-hostile' and extra == 'extra-13-scrapper-tool-llm-agent')" },
+    { name = "pyobjc-framework-metal", marker = "(platform_release >= '15.0' and extra == 'extra-13-scrapper-tool-full') or (platform_release >= '15.0' and extra == 'extra-13-scrapper-tool-llm-agent') or (extra == 'extra-13-scrapper-tool-full' and extra == 'extra-13-scrapper-tool-skyvern-backend') or (extra == 'extra-13-scrapper-tool-hostile' and extra == 'extra-13-scrapper-tool-llm-agent')" },
+    { name = "pyobjc-framework-metalfx", marker = "(platform_release >= '22.0' and extra == 'extra-13-scrapper-tool-full') or (platform_release >= '22.0' and extra == 'extra-13-scrapper-tool-llm-agent') or (extra == 'extra-13-scrapper-tool-full' and extra == 'extra-13-scrapper-tool-skyvern-backend') or (extra == 'extra-13-scrapper-tool-hostile' and extra == 'extra-13-scrapper-tool-llm-agent')" },
+    { name = "pyobjc-framework-metalkit", marker = "(platform_release >= '15.0' and extra == 'extra-13-scrapper-tool-full') or (platform_release >= '15.0' and extra == 'extra-13-scrapper-tool-llm-agent') or (extra == 'extra-13-scrapper-tool-full' and extra == 'extra-13-scrapper-tool-skyvern-backend') or (extra == 'extra-13-scrapper-tool-hostile' and extra == 'extra-13-scrapper-tool-llm-agent')" },
+    { name = "pyobjc-framework-metalperformanceshaders", marker = "(platform_release >= '17.0' and extra == 'extra-13-scrapper-tool-full') or (platform_release >= '17.0' and extra == 'extra-13-scrapper-tool-llm-agent') or (extra == 'extra-13-scrapper-tool-full' and extra == 'extra-13-scrapper-tool-skyvern-backend') or (extra == 'extra-13-scrapper-tool-hostile' and extra == 'extra-13-scrapper-tool-llm-agent')" },
+    { name = "pyobjc-framework-metalperformanceshadersgraph", marker = "(platform_release >= '20.0' and extra == 'extra-13-scrapper-tool-full') or (platform_release >= '20.0' and extra == 'extra-13-scrapper-tool-llm-agent') or (extra == 'extra-13-scrapper-tool-full' and extra == 'extra-13-scrapper-tool-skyvern-backend') or (extra == 'extra-13-scrapper-tool-hostile' and extra == 'extra-13-scrapper-tool-llm-agent')" },
+    { name = "pyobjc-framework-metrickit", marker = "(platform_release >= '21.0' and extra == 'extra-13-scrapper-tool-full') or (platform_release >= '21.0' and extra == 'extra-13-scrapper-tool-llm-agent') or (extra == 'extra-13-scrapper-tool-full' and extra == 'extra-13-scrapper-tool-skyvern-backend') or (extra == 'extra-13-scrapper-tool-hostile' and extra == 'extra-13-scrapper-tool-llm-agent')" },
+    { name = "pyobjc-framework-mlcompute", marker = "(platform_release >= '20.0' and extra == 'extra-13-scrapper-tool-full') or (platform_release >= '20.0' and extra == 'extra-13-scrapper-tool-llm-agent') or (extra == 'extra-13-scrapper-tool-full' and extra == 'extra-13-scrapper-tool-skyvern-backend') or (extra == 'extra-13-scrapper-tool-hostile' and extra == 'extra-13-scrapper-tool-llm-agent')" },
+    { name = "pyobjc-framework-modelio", marker = "(platform_release >= '15.0' and extra == 'extra-13-scrapper-tool-full') or (platform_release >= '15.0' and extra == 'extra-13-scrapper-tool-llm-agent') or (extra == 'extra-13-scrapper-tool-full' and extra == 'extra-13-scrapper-tool-skyvern-backend') or (extra == 'extra-13-scrapper-tool-hostile' and extra == 'extra-13-scrapper-tool-llm-agent')" },
+    { name = "pyobjc-framework-multipeerconnectivity", marker = "(platform_release >= '14.0' and extra == 'extra-13-scrapper-tool-full') or (platform_release >= '14.0' and extra == 'extra-13-scrapper-tool-llm-agent') or (extra == 'extra-13-scrapper-tool-full' and extra == 'extra-13-scrapper-tool-skyvern-backend') or (extra == 'extra-13-scrapper-tool-hostile' and extra == 'extra-13-scrapper-tool-llm-agent')" },
+    { name = "pyobjc-framework-naturallanguage", marker = "(platform_release >= '18.0' and extra == 'extra-13-scrapper-tool-full') or (platform_release >= '18.0' and extra == 'extra-13-scrapper-tool-llm-agent') or (extra == 'extra-13-scrapper-tool-full' and extra == 'extra-13-scrapper-tool-skyvern-backend') or (extra == 'extra-13-scrapper-tool-hostile' and extra == 'extra-13-scrapper-tool-llm-agent')" },
+    { name = "pyobjc-framework-netfs", marker = "(platform_release >= '10.0' and extra == 'extra-13-scrapper-tool-full') or (platform_release >= '10.0' and extra == 'extra-13-scrapper-tool-llm-agent') or (extra == 'extra-13-scrapper-tool-full' and extra == 'extra-13-scrapper-tool-skyvern-backend') or (extra == 'extra-13-scrapper-tool-hostile' and extra == 'extra-13-scrapper-tool-llm-agent')" },
+    { name = "pyobjc-framework-network", marker = "(platform_release >= '18.0' and extra == 'extra-13-scrapper-tool-full') or (platform_release >= '18.0' and extra == 'extra-13-scrapper-tool-llm-agent') or (extra == 'extra-13-scrapper-tool-full' and extra == 'extra-13-scrapper-tool-skyvern-backend') or (extra == 'extra-13-scrapper-tool-hostile' and extra == 'extra-13-scrapper-tool-llm-agent')" },
+    { name = "pyobjc-framework-networkextension", marker = "(platform_release >= '15.0' and extra == 'extra-13-scrapper-tool-full') or (platform_release >= '15.0' and extra == 'extra-13-scrapper-tool-llm-agent') or (extra == 'extra-13-scrapper-tool-full' and extra == 'extra-13-scrapper-tool-skyvern-backend') or (extra == 'extra-13-scrapper-tool-hostile' and extra == 'extra-13-scrapper-tool-llm-agent')" },
+    { name = "pyobjc-framework-notificationcenter", marker = "(platform_release >= '14.0' and extra == 'extra-13-scrapper-tool-full') or (platform_release >= '14.0' and extra == 'extra-13-scrapper-tool-llm-agent') or (extra == 'extra-13-scrapper-tool-full' and extra == 'extra-13-scrapper-tool-skyvern-backend') or (extra == 'extra-13-scrapper-tool-hostile' and extra == 'extra-13-scrapper-tool-llm-agent')" },
+    { name = "pyobjc-framework-opendirectory", marker = "(platform_release >= '10.0' and extra == 'extra-13-scrapper-tool-full') or (platform_release >= '10.0' and extra == 'extra-13-scrapper-tool-llm-agent') or (extra == 'extra-13-scrapper-tool-full' and extra == 'extra-13-scrapper-tool-skyvern-backend') or (extra == 'extra-13-scrapper-tool-hostile' and extra == 'extra-13-scrapper-tool-llm-agent')" },
     { name = "pyobjc-framework-osakit" },
-    { name = "pyobjc-framework-oslog", marker = "platform_release >= '19.0' or (extra == 'extra-13-scrapper-tool-hostile' and extra == 'extra-13-scrapper-tool-llm-agent')" },
-    { name = "pyobjc-framework-passkit", marker = "platform_release >= '20.0' or (extra == 'extra-13-scrapper-tool-hostile' and extra == 'extra-13-scrapper-tool-llm-agent')" },
-    { name = "pyobjc-framework-pencilkit", marker = "platform_release >= '19.0' or (extra == 'extra-13-scrapper-tool-hostile' and extra == 'extra-13-scrapper-tool-llm-agent')" },
-    { name = "pyobjc-framework-phase", marker = "platform_release >= '21.0' or (extra == 'extra-13-scrapper-tool-hostile' and extra == 'extra-13-scrapper-tool-llm-agent')" },
-    { name = "pyobjc-framework-photos", marker = "platform_release >= '15.0' or (extra == 'extra-13-scrapper-tool-hostile' and extra == 'extra-13-scrapper-tool-llm-agent')" },
-    { name = "pyobjc-framework-photosui", marker = "platform_release >= '15.0' or (extra == 'extra-13-scrapper-tool-hostile' and extra == 'extra-13-scrapper-tool-llm-agent')" },
+    { name = "pyobjc-framework-oslog", marker = "(platform_release >= '19.0' and extra == 'extra-13-scrapper-tool-full') or (platform_release >= '19.0' and extra == 'extra-13-scrapper-tool-llm-agent') or (extra == 'extra-13-scrapper-tool-full' and extra == 'extra-13-scrapper-tool-skyvern-backend') or (extra == 'extra-13-scrapper-tool-hostile' and extra == 'extra-13-scrapper-tool-llm-agent')" },
+    { name = "pyobjc-framework-passkit", marker = "(platform_release >= '20.0' and extra == 'extra-13-scrapper-tool-full') or (platform_release >= '20.0' and extra == 'extra-13-scrapper-tool-llm-agent') or (extra == 'extra-13-scrapper-tool-full' and extra == 'extra-13-scrapper-tool-skyvern-backend') or (extra == 'extra-13-scrapper-tool-hostile' and extra == 'extra-13-scrapper-tool-llm-agent')" },
+    { name = "pyobjc-framework-pencilkit", marker = "(platform_release >= '19.0' and extra == 'extra-13-scrapper-tool-full') or (platform_release >= '19.0' and extra == 'extra-13-scrapper-tool-llm-agent') or (extra == 'extra-13-scrapper-tool-full' and extra == 'extra-13-scrapper-tool-skyvern-backend') or (extra == 'extra-13-scrapper-tool-hostile' and extra == 'extra-13-scrapper-tool-llm-agent')" },
+    { name = "pyobjc-framework-phase", marker = "(platform_release >= '21.0' and extra == 'extra-13-scrapper-tool-full') or (platform_release >= '21.0' and extra == 'extra-13-scrapper-tool-llm-agent') or (extra == 'extra-13-scrapper-tool-full' and extra == 'extra-13-scrapper-tool-skyvern-backend') or (extra == 'extra-13-scrapper-tool-hostile' and extra == 'extra-13-scrapper-tool-llm-agent')" },
+    { name = "pyobjc-framework-photos", marker = "(platform_release >= '15.0' and extra == 'extra-13-scrapper-tool-full') or (platform_release >= '15.0' and extra == 'extra-13-scrapper-tool-llm-agent') or (extra == 'extra-13-scrapper-tool-full' and extra == 'extra-13-scrapper-tool-skyvern-backend') or (extra == 'extra-13-scrapper-tool-hostile' and extra == 'extra-13-scrapper-tool-llm-agent')" },
+    { name = "pyobjc-framework-photosui", marker = "(platform_release >= '15.0' and extra == 'extra-13-scrapper-tool-full') or (platform_release >= '15.0' and extra == 'extra-13-scrapper-tool-llm-agent') or (extra == 'extra-13-scrapper-tool-full' and extra == 'extra-13-scrapper-tool-skyvern-backend') or (extra == 'extra-13-scrapper-tool-hostile' and extra == 'extra-13-scrapper-tool-llm-agent')" },
     { name = "pyobjc-framework-preferencepanes" },
-    { name = "pyobjc-framework-pushkit", marker = "platform_release >= '19.0' or (extra == 'extra-13-scrapper-tool-hostile' and extra == 'extra-13-scrapper-tool-llm-agent')" },
+    { name = "pyobjc-framework-pushkit", marker = "(platform_release >= '19.0' and extra == 'extra-13-scrapper-tool-full') or (platform_release >= '19.0' and extra == 'extra-13-scrapper-tool-llm-agent') or (extra == 'extra-13-scrapper-tool-full' and extra == 'extra-13-scrapper-tool-skyvern-backend') or (extra == 'extra-13-scrapper-tool-hostile' and extra == 'extra-13-scrapper-tool-llm-agent')" },
     { name = "pyobjc-framework-quartz" },
-    { name = "pyobjc-framework-quicklookthumbnailing", marker = "platform_release >= '19.0' or (extra == 'extra-13-scrapper-tool-hostile' and extra == 'extra-13-scrapper-tool-llm-agent')" },
-    { name = "pyobjc-framework-replaykit", marker = "platform_release >= '20.0' or (extra == 'extra-13-scrapper-tool-hostile' and extra == 'extra-13-scrapper-tool-llm-agent')" },
-    { name = "pyobjc-framework-safariservices", marker = "platform_release >= '16.0' or (extra == 'extra-13-scrapper-tool-hostile' and extra == 'extra-13-scrapper-tool-llm-agent')" },
-    { name = "pyobjc-framework-safetykit", marker = "platform_release >= '22.0' or (extra == 'extra-13-scrapper-tool-hostile' and extra == 'extra-13-scrapper-tool-llm-agent')" },
-    { name = "pyobjc-framework-scenekit", marker = "platform_release >= '11.0' or (extra == 'extra-13-scrapper-tool-hostile' and extra == 'extra-13-scrapper-tool-llm-agent')" },
-    { name = "pyobjc-framework-screencapturekit", marker = "platform_release >= '21.4' or (extra == 'extra-13-scrapper-tool-hostile' and extra == 'extra-13-scrapper-tool-llm-agent')" },
+    { name = "pyobjc-framework-quicklookthumbnailing", marker = "(platform_release >= '19.0' and extra == 'extra-13-scrapper-tool-full') or (platform_release >= '19.0' and extra == 'extra-13-scrapper-tool-llm-agent') or (extra == 'extra-13-scrapper-tool-full' and extra == 'extra-13-scrapper-tool-skyvern-backend') or (extra == 'extra-13-scrapper-tool-hostile' and extra == 'extra-13-scrapper-tool-llm-agent')" },
+    { name = "pyobjc-framework-replaykit", marker = "(platform_release >= '20.0' and extra == 'extra-13-scrapper-tool-full') or (platform_release >= '20.0' and extra == 'extra-13-scrapper-tool-llm-agent') or (extra == 'extra-13-scrapper-tool-full' and extra == 'extra-13-scrapper-tool-skyvern-backend') or (extra == 'extra-13-scrapper-tool-hostile' and extra == 'extra-13-scrapper-tool-llm-agent')" },
+    { name = "pyobjc-framework-safariservices", marker = "(platform_release >= '16.0' and extra == 'extra-13-scrapper-tool-full') or (platform_release >= '16.0' and extra == 'extra-13-scrapper-tool-llm-agent') or (extra == 'extra-13-scrapper-tool-full' and extra == 'extra-13-scrapper-tool-skyvern-backend') or (extra == 'extra-13-scrapper-tool-hostile' and extra == 'extra-13-scrapper-tool-llm-agent')" },
+    { name = "pyobjc-framework-safetykit", marker = "(platform_release >= '22.0' and extra == 'extra-13-scrapper-tool-full') or (platform_release >= '22.0' and extra == 'extra-13-scrapper-tool-llm-agent') or (extra == 'extra-13-scrapper-tool-full' and extra == 'extra-13-scrapper-tool-skyvern-backend') or (extra == 'extra-13-scrapper-tool-hostile' and extra == 'extra-13-scrapper-tool-llm-agent')" },
+    { name = "pyobjc-framework-scenekit", marker = "(platform_release >= '11.0' and extra == 'extra-13-scrapper-tool-full') or (platform_release >= '11.0' and extra == 'extra-13-scrapper-tool-llm-agent') or (extra == 'extra-13-scrapper-tool-full' and extra == 'extra-13-scrapper-tool-skyvern-backend') or (extra == 'extra-13-scrapper-tool-hostile' and extra == 'extra-13-scrapper-tool-llm-agent')" },
+    { name = "pyobjc-framework-screencapturekit", marker = "(platform_release >= '21.4' and extra == 'extra-13-scrapper-tool-full') or (platform_release >= '21.4' and extra == 'extra-13-scrapper-tool-llm-agent') or (extra == 'extra-13-scrapper-tool-full' and extra == 'extra-13-scrapper-tool-skyvern-backend') or (extra == 'extra-13-scrapper-tool-hostile' and extra == 'extra-13-scrapper-tool-llm-agent')" },
     { name = "pyobjc-framework-screensaver" },
-    { name = "pyobjc-framework-screentime", marker = "platform_release >= '20.0' or (extra == 'extra-13-scrapper-tool-hostile' and extra == 'extra-13-scrapper-tool-llm-agent')" },
-    { name = "pyobjc-framework-scriptingbridge", marker = "platform_release >= '9.0' or (extra == 'extra-13-scrapper-tool-hostile' and extra == 'extra-13-scrapper-tool-llm-agent')" },
+    { name = "pyobjc-framework-screentime", marker = "(platform_release >= '20.0' and extra == 'extra-13-scrapper-tool-full') or (platform_release >= '20.0' and extra == 'extra-13-scrapper-tool-llm-agent') or (extra == 'extra-13-scrapper-tool-full' and extra == 'extra-13-scrapper-tool-skyvern-backend') or (extra == 'extra-13-scrapper-tool-hostile' and extra == 'extra-13-scrapper-tool-llm-agent')" },
+    { name = "pyobjc-framework-scriptingbridge", marker = "(platform_release >= '9.0' and extra == 'extra-13-scrapper-tool-full') or (platform_release >= '9.0' and extra == 'extra-13-scrapper-tool-llm-agent') or (extra == 'extra-13-scrapper-tool-full' and extra == 'extra-13-scrapper-tool-skyvern-backend') or (extra == 'extra-13-scrapper-tool-hostile' and extra == 'extra-13-scrapper-tool-llm-agent')" },
     { name = "pyobjc-framework-searchkit" },
     { name = "pyobjc-framework-security" },
     { name = "pyobjc-framework-securityfoundation" },
     { name = "pyobjc-framework-securityinterface" },
-    { name = "pyobjc-framework-securityui", marker = "platform_release >= '24.4' or (extra == 'extra-13-scrapper-tool-hostile' and extra == 'extra-13-scrapper-tool-llm-agent')" },
-    { name = "pyobjc-framework-sensitivecontentanalysis", marker = "platform_release >= '23.0' or (extra == 'extra-13-scrapper-tool-hostile' and extra == 'extra-13-scrapper-tool-llm-agent')" },
-    { name = "pyobjc-framework-servicemanagement", marker = "platform_release >= '10.0' or (extra == 'extra-13-scrapper-tool-hostile' and extra == 'extra-13-scrapper-tool-llm-agent')" },
-    { name = "pyobjc-framework-sharedwithyou", marker = "platform_release >= '22.0' or (extra == 'extra-13-scrapper-tool-hostile' and extra == 'extra-13-scrapper-tool-llm-agent')" },
-    { name = "pyobjc-framework-sharedwithyoucore", marker = "platform_release >= '22.0' or (extra == 'extra-13-scrapper-tool-hostile' and extra == 'extra-13-scrapper-tool-llm-agent')" },
-    { name = "pyobjc-framework-shazamkit", marker = "platform_release >= '21.0' or (extra == 'extra-13-scrapper-tool-hostile' and extra == 'extra-13-scrapper-tool-llm-agent')" },
-    { name = "pyobjc-framework-social", marker = "platform_release >= '12.0' or (extra == 'extra-13-scrapper-tool-hostile' and extra == 'extra-13-scrapper-tool-llm-agent')" },
-    { name = "pyobjc-framework-soundanalysis", marker = "platform_release >= '19.0' or (extra == 'extra-13-scrapper-tool-hostile' and extra == 'extra-13-scrapper-tool-llm-agent')" },
-    { name = "pyobjc-framework-speech", marker = "platform_release >= '19.0' or (extra == 'extra-13-scrapper-tool-hostile' and extra == 'extra-13-scrapper-tool-llm-agent')" },
-    { name = "pyobjc-framework-spritekit", marker = "platform_release >= '13.0' or (extra == 'extra-13-scrapper-tool-hostile' and extra == 'extra-13-scrapper-tool-llm-agent')" },
-    { name = "pyobjc-framework-storekit", marker = "platform_release >= '11.0' or (extra == 'extra-13-scrapper-tool-hostile' and extra == 'extra-13-scrapper-tool-llm-agent')" },
-    { name = "pyobjc-framework-symbols", marker = "platform_release >= '23.0' or (extra == 'extra-13-scrapper-tool-hostile' and extra == 'extra-13-scrapper-tool-llm-agent')" },
+    { name = "pyobjc-framework-securityui", marker = "(platform_release >= '24.4' and extra == 'extra-13-scrapper-tool-full') or (platform_release >= '24.4' and extra == 'extra-13-scrapper-tool-llm-agent') or (extra == 'extra-13-scrapper-tool-full' and extra == 'extra-13-scrapper-tool-skyvern-backend') or (extra == 'extra-13-scrapper-tool-hostile' and extra == 'extra-13-scrapper-tool-llm-agent')" },
+    { name = "pyobjc-framework-sensitivecontentanalysis", marker = "(platform_release >= '23.0' and extra == 'extra-13-scrapper-tool-full') or (platform_release >= '23.0' and extra == 'extra-13-scrapper-tool-llm-agent') or (extra == 'extra-13-scrapper-tool-full' and extra == 'extra-13-scrapper-tool-skyvern-backend') or (extra == 'extra-13-scrapper-tool-hostile' and extra == 'extra-13-scrapper-tool-llm-agent')" },
+    { name = "pyobjc-framework-servicemanagement", marker = "(platform_release >= '10.0' and extra == 'extra-13-scrapper-tool-full') or (platform_release >= '10.0' and extra == 'extra-13-scrapper-tool-llm-agent') or (extra == 'extra-13-scrapper-tool-full' and extra == 'extra-13-scrapper-tool-skyvern-backend') or (extra == 'extra-13-scrapper-tool-hostile' and extra == 'extra-13-scrapper-tool-llm-agent')" },
+    { name = "pyobjc-framework-sharedwithyou", marker = "(platform_release >= '22.0' and extra == 'extra-13-scrapper-tool-full') or (platform_release >= '22.0' and extra == 'extra-13-scrapper-tool-llm-agent') or (extra == 'extra-13-scrapper-tool-full' and extra == 'extra-13-scrapper-tool-skyvern-backend') or (extra == 'extra-13-scrapper-tool-hostile' and extra == 'extra-13-scrapper-tool-llm-agent')" },
+    { name = "pyobjc-framework-sharedwithyoucore", marker = "(platform_release >= '22.0' and extra == 'extra-13-scrapper-tool-full') or (platform_release >= '22.0' and extra == 'extra-13-scrapper-tool-llm-agent') or (extra == 'extra-13-scrapper-tool-full' and extra == 'extra-13-scrapper-tool-skyvern-backend') or (extra == 'extra-13-scrapper-tool-hostile' and extra == 'extra-13-scrapper-tool-llm-agent')" },
+    { name = "pyobjc-framework-shazamkit", marker = "(platform_release >= '21.0' and extra == 'extra-13-scrapper-tool-full') or (platform_release >= '21.0' and extra == 'extra-13-scrapper-tool-llm-agent') or (extra == 'extra-13-scrapper-tool-full' and extra == 'extra-13-scrapper-tool-skyvern-backend') or (extra == 'extra-13-scrapper-tool-hostile' and extra == 'extra-13-scrapper-tool-llm-agent')" },
+    { name = "pyobjc-framework-social", marker = "(platform_release >= '12.0' and extra == 'extra-13-scrapper-tool-full') or (platform_release >= '12.0' and extra == 'extra-13-scrapper-tool-llm-agent') or (extra == 'extra-13-scrapper-tool-full' and extra == 'extra-13-scrapper-tool-skyvern-backend') or (extra == 'extra-13-scrapper-tool-hostile' and extra == 'extra-13-scrapper-tool-llm-agent')" },
+    { name = "pyobjc-framework-soundanalysis", marker = "(platform_release >= '19.0' and extra == 'extra-13-scrapper-tool-full') or (platform_release >= '19.0' and extra == 'extra-13-scrapper-tool-llm-agent') or (extra == 'extra-13-scrapper-tool-full' and extra == 'extra-13-scrapper-tool-skyvern-backend') or (extra == 'extra-13-scrapper-tool-hostile' and extra == 'extra-13-scrapper-tool-llm-agent')" },
+    { name = "pyobjc-framework-speech", marker = "(platform_release >= '19.0' and extra == 'extra-13-scrapper-tool-full') or (platform_release >= '19.0' and extra == 'extra-13-scrapper-tool-llm-agent') or (extra == 'extra-13-scrapper-tool-full' and extra == 'extra-13-scrapper-tool-skyvern-backend') or (extra == 'extra-13-scrapper-tool-hostile' and extra == 'extra-13-scrapper-tool-llm-agent')" },
+    { name = "pyobjc-framework-spritekit", marker = "(platform_release >= '13.0' and extra == 'extra-13-scrapper-tool-full') or (platform_release >= '13.0' and extra == 'extra-13-scrapper-tool-llm-agent') or (extra == 'extra-13-scrapper-tool-full' and extra == 'extra-13-scrapper-tool-skyvern-backend') or (extra == 'extra-13-scrapper-tool-hostile' and extra == 'extra-13-scrapper-tool-llm-agent')" },
+    { name = "pyobjc-framework-storekit", marker = "(platform_release >= '11.0' and extra == 'extra-13-scrapper-tool-full') or (platform_release >= '11.0' and extra == 'extra-13-scrapper-tool-llm-agent') or (extra == 'extra-13-scrapper-tool-full' and extra == 'extra-13-scrapper-tool-skyvern-backend') or (extra == 'extra-13-scrapper-tool-hostile' and extra == 'extra-13-scrapper-tool-llm-agent')" },
+    { name = "pyobjc-framework-symbols", marker = "(platform_release >= '23.0' and extra == 'extra-13-scrapper-tool-full') or (platform_release >= '23.0' and extra == 'extra-13-scrapper-tool-llm-agent') or (extra == 'extra-13-scrapper-tool-full' and extra == 'extra-13-scrapper-tool-skyvern-backend') or (extra == 'extra-13-scrapper-tool-hostile' and extra == 'extra-13-scrapper-tool-llm-agent')" },
     { name = "pyobjc-framework-syncservices" },
     { name = "pyobjc-framework-systemconfiguration" },
-    { name = "pyobjc-framework-systemextensions", marker = "platform_release >= '19.0' or (extra == 'extra-13-scrapper-tool-hostile' and extra == 'extra-13-scrapper-tool-llm-agent')" },
-    { name = "pyobjc-framework-threadnetwork", marker = "platform_release >= '22.0' or (extra == 'extra-13-scrapper-tool-hostile' and extra == 'extra-13-scrapper-tool-llm-agent')" },
-    { name = "pyobjc-framework-uniformtypeidentifiers", marker = "platform_release >= '20.0' or (extra == 'extra-13-scrapper-tool-hostile' and extra == 'extra-13-scrapper-tool-llm-agent')" },
-    { name = "pyobjc-framework-usernotifications", marker = "platform_release >= '18.0' or (extra == 'extra-13-scrapper-tool-hostile' and extra == 'extra-13-scrapper-tool-llm-agent')" },
-    { name = "pyobjc-framework-usernotificationsui", marker = "platform_release >= '20.0' or (extra == 'extra-13-scrapper-tool-hostile' and extra == 'extra-13-scrapper-tool-llm-agent')" },
-    { name = "pyobjc-framework-videosubscriberaccount", marker = "platform_release >= '18.0' or (extra == 'extra-13-scrapper-tool-hostile' and extra == 'extra-13-scrapper-tool-llm-agent')" },
-    { name = "pyobjc-framework-videotoolbox", marker = "platform_release >= '12.0' or (extra == 'extra-13-scrapper-tool-hostile' and extra == 'extra-13-scrapper-tool-llm-agent')" },
-    { name = "pyobjc-framework-virtualization", marker = "platform_release >= '20.0' or (extra == 'extra-13-scrapper-tool-hostile' and extra == 'extra-13-scrapper-tool-llm-agent')" },
-    { name = "pyobjc-framework-vision", marker = "platform_release >= '17.0' or (extra == 'extra-13-scrapper-tool-hostile' and extra == 'extra-13-scrapper-tool-llm-agent')" },
+    { name = "pyobjc-framework-systemextensions", marker = "(platform_release >= '19.0' and extra == 'extra-13-scrapper-tool-full') or (platform_release >= '19.0' and extra == 'extra-13-scrapper-tool-llm-agent') or (extra == 'extra-13-scrapper-tool-full' and extra == 'extra-13-scrapper-tool-skyvern-backend') or (extra == 'extra-13-scrapper-tool-hostile' and extra == 'extra-13-scrapper-tool-llm-agent')" },
+    { name = "pyobjc-framework-threadnetwork", marker = "(platform_release >= '22.0' and extra == 'extra-13-scrapper-tool-full') or (platform_release >= '22.0' and extra == 'extra-13-scrapper-tool-llm-agent') or (extra == 'extra-13-scrapper-tool-full' and extra == 'extra-13-scrapper-tool-skyvern-backend') or (extra == 'extra-13-scrapper-tool-hostile' and extra == 'extra-13-scrapper-tool-llm-agent')" },
+    { name = "pyobjc-framework-uniformtypeidentifiers", marker = "(platform_release >= '20.0' and extra == 'extra-13-scrapper-tool-full') or (platform_release >= '20.0' and extra == 'extra-13-scrapper-tool-llm-agent') or (extra == 'extra-13-scrapper-tool-full' and extra == 'extra-13-scrapper-tool-skyvern-backend') or (extra == 'extra-13-scrapper-tool-hostile' and extra == 'extra-13-scrapper-tool-llm-agent')" },
+    { name = "pyobjc-framework-usernotifications", marker = "(platform_release >= '18.0' and extra == 'extra-13-scrapper-tool-full') or (platform_release >= '18.0' and extra == 'extra-13-scrapper-tool-llm-agent') or (extra == 'extra-13-scrapper-tool-full' and extra == 'extra-13-scrapper-tool-skyvern-backend') or (extra == 'extra-13-scrapper-tool-hostile' and extra == 'extra-13-scrapper-tool-llm-agent')" },
+    { name = "pyobjc-framework-usernotificationsui", marker = "(platform_release >= '20.0' and extra == 'extra-13-scrapper-tool-full') or (platform_release >= '20.0' and extra == 'extra-13-scrapper-tool-llm-agent') or (extra == 'extra-13-scrapper-tool-full' and extra == 'extra-13-scrapper-tool-skyvern-backend') or (extra == 'extra-13-scrapper-tool-hostile' and extra == 'extra-13-scrapper-tool-llm-agent')" },
+    { name = "pyobjc-framework-videosubscriberaccount", marker = "(platform_release >= '18.0' and extra == 'extra-13-scrapper-tool-full') or (platform_release >= '18.0' and extra == 'extra-13-scrapper-tool-llm-agent') or (extra == 'extra-13-scrapper-tool-full' and extra == 'extra-13-scrapper-tool-skyvern-backend') or (extra == 'extra-13-scrapper-tool-hostile' and extra == 'extra-13-scrapper-tool-llm-agent')" },
+    { name = "pyobjc-framework-videotoolbox", marker = "(platform_release >= '12.0' and extra == 'extra-13-scrapper-tool-full') or (platform_release >= '12.0' and extra == 'extra-13-scrapper-tool-llm-agent') or (extra == 'extra-13-scrapper-tool-full' and extra == 'extra-13-scrapper-tool-skyvern-backend') or (extra == 'extra-13-scrapper-tool-hostile' and extra == 'extra-13-scrapper-tool-llm-agent')" },
+    { name = "pyobjc-framework-virtualization", marker = "(platform_release >= '20.0' and extra == 'extra-13-scrapper-tool-full') or (platform_release >= '20.0' and extra == 'extra-13-scrapper-tool-llm-agent') or (extra == 'extra-13-scrapper-tool-full' and extra == 'extra-13-scrapper-tool-skyvern-backend') or (extra == 'extra-13-scrapper-tool-hostile' and extra == 'extra-13-scrapper-tool-llm-agent')" },
+    { name = "pyobjc-framework-vision", marker = "(platform_release >= '17.0' and extra == 'extra-13-scrapper-tool-full') or (platform_release >= '17.0' and extra == 'extra-13-scrapper-tool-llm-agent') or (extra == 'extra-13-scrapper-tool-full' and extra == 'extra-13-scrapper-tool-skyvern-backend') or (extra == 'extra-13-scrapper-tool-hostile' and extra == 'extra-13-scrapper-tool-llm-agent')" },
     { name = "pyobjc-framework-webkit" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/17/06/d77639ba166cc09aed2d32ae204811b47bc5d40e035cdc9bff7fff72ec5f/pyobjc-12.1.tar.gz", hash = "sha256:686d6db3eb3182fac9846b8ce3eedf4c7d2680b21b8b8d6e6df054a17e92a12d", size = 11345, upload-time = "2025-11-14T10:07:28.155Z" }
@@ -7244,7 +7287,7 @@ version = "26.1.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "cryptography" },
-    { name = "typing-extensions", marker = "python_full_version < '3.13' or (extra == 'extra-13-scrapper-tool-hostile' and extra == 'extra-13-scrapper-tool-llm-agent')" },
+    { name = "typing-extensions", marker = "(python_full_version < '3.13' and extra == 'extra-13-scrapper-tool-full') or (python_full_version < '3.13' and extra == 'extra-13-scrapper-tool-llm-agent') or (extra == 'extra-13-scrapper-tool-full' and extra == 'extra-13-scrapper-tool-skyvern-backend') or (extra == 'extra-13-scrapper-tool-hostile' and extra == 'extra-13-scrapper-tool-llm-agent')" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/8c/a8/26d36401e3ab8eed9030ad33f381da7856fcfad5691780fccd1b019718fc/pyopenssl-26.1.0.tar.gz", hash = "sha256:737f0a2275c5bc54f3b02137687e1a765931fb3949b9a92a825e4d33b9eec08b", size = 186181, upload-time = "2026-04-24T20:23:48.115Z" }
 wheels = [
@@ -7356,7 +7399,7 @@ name = "pytest"
 version = "9.0.3"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
-    { name = "colorama", marker = "sys_platform == 'win32' or (extra == 'extra-13-scrapper-tool-hostile' and extra == 'extra-13-scrapper-tool-llm-agent')" },
+    { name = "colorama", marker = "sys_platform == 'win32' or (extra == 'extra-13-scrapper-tool-full' and extra == 'extra-13-scrapper-tool-skyvern-backend') or (extra == 'extra-13-scrapper-tool-hostile' and extra == 'extra-13-scrapper-tool-llm-agent')" },
     { name = "iniconfig" },
     { name = "packaging" },
     { name = "pluggy" },
@@ -7373,7 +7416,7 @@ version = "1.3.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "pytest" },
-    { name = "typing-extensions", marker = "python_full_version < '3.13' or (extra == 'extra-13-scrapper-tool-hostile' and extra == 'extra-13-scrapper-tool-llm-agent')" },
+    { name = "typing-extensions", marker = "python_full_version < '3.13' or (extra == 'extra-13-scrapper-tool-full' and extra == 'extra-13-scrapper-tool-skyvern-backend') or (extra == 'extra-13-scrapper-tool-hostile' and extra == 'extra-13-scrapper-tool-llm-agent')" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/90/2c/8af215c0f776415f3590cac4f9086ccefd6fd463befeae41cd4d3f193e5a/pytest_asyncio-1.3.0.tar.gz", hash = "sha256:d7f52f36d231b80ee124cd216ffb19369aa168fc10095013c6b014a34d3ee9e5", size = 50087, upload-time = "2025-11-10T16:07:47.256Z" }
 wheels = [
@@ -7475,7 +7518,7 @@ name = "python-dateutil"
 version = "2.9.0.post0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
-    { name = "six" },
+    { name = "six", marker = "extra == 'extra-13-scrapper-tool-full' or extra == 'extra-13-scrapper-tool-llm-agent' or extra == 'extra-13-scrapper-tool-skyvern-backend'" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/66/c0/0c8b6ad9f17a802ee498c46e004a0eb49bc148f2fd230864601a86dcf6db/python-dateutil-2.9.0.post0.tar.gz", hash = "sha256:37dd54208da7e1cd875388217d5e00ebd4179249f90fb72437e91a35459a0ad3", size = 342432, upload-time = "2024-03-01T18:36:20.211Z" }
 wheels = [
@@ -7669,7 +7712,7 @@ source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "attrs" },
     { name = "rpds-py" },
-    { name = "typing-extensions", marker = "python_full_version < '3.13' or (extra == 'extra-13-scrapper-tool-hostile' and extra == 'extra-13-scrapper-tool-llm-agent')" },
+    { name = "typing-extensions", marker = "python_full_version < '3.13' or (extra == 'extra-13-scrapper-tool-full' and extra == 'extra-13-scrapper-tool-skyvern-backend') or (extra == 'extra-13-scrapper-tool-hostile' and extra == 'extra-13-scrapper-tool-llm-agent')" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/22/f5/df4e9027acead3ecc63e50fe1e36aca1523e1719559c499951bb4b53188f/referencing-0.37.0.tar.gz", hash = "sha256:44aefc3142c5b842538163acb373e24cce6632bd54bdb01b21ad5863489f50d8", size = 78036, upload-time = "2025-10-13T15:30:48.871Z" }
 wheels = [
@@ -8115,11 +8158,11 @@ full = [
     { name = "crawl4ai" },
     { name = "patchright" },
     { name = "pillow" },
-    { name = "scrapling", extra = ["fetchers"] },
+    { name = "scrapling", extra = ["fetchers"], marker = "extra == 'extra-13-scrapper-tool-full' or (extra == 'extra-13-scrapper-tool-hostile' and extra == 'extra-13-scrapper-tool-llm-agent')" },
     { name = "turnstile-solver" },
 ]
 hostile = [
-    { name = "scrapling", extra = ["fetchers"], marker = "extra == 'extra-13-scrapper-tool-hostile'" },
+    { name = "scrapling", extra = ["fetchers"], marker = "extra == 'extra-13-scrapper-tool-hostile' or (extra == 'extra-13-scrapper-tool-full' and extra == 'extra-13-scrapper-tool-skyvern-backend')" },
 ]
 llm-agent = [
     { name = "browser-use" },
@@ -8176,8 +8219,8 @@ name = "screeninfo"
 version = "0.8.1"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
-    { name = "cython", marker = "sys_platform == 'darwin' or (extra == 'extra-13-scrapper-tool-hostile' and extra == 'extra-13-scrapper-tool-llm-agent')" },
-    { name = "pyobjc-framework-cocoa", marker = "sys_platform == 'darwin' or (extra == 'extra-13-scrapper-tool-hostile' and extra == 'extra-13-scrapper-tool-llm-agent')" },
+    { name = "cython", marker = "(sys_platform == 'darwin' and extra == 'extra-13-scrapper-tool-full') or (sys_platform == 'darwin' and extra == 'extra-13-scrapper-tool-llm-agent') or (extra == 'extra-13-scrapper-tool-full' and extra == 'extra-13-scrapper-tool-skyvern-backend') or (extra == 'extra-13-scrapper-tool-hostile' and extra == 'extra-13-scrapper-tool-llm-agent')" },
+    { name = "pyobjc-framework-cocoa", marker = "(sys_platform == 'darwin' and extra == 'extra-13-scrapper-tool-full') or (sys_platform == 'darwin' and extra == 'extra-13-scrapper-tool-llm-agent') or (extra == 'extra-13-scrapper-tool-full' and extra == 'extra-13-scrapper-tool-skyvern-backend') or (extra == 'extra-13-scrapper-tool-hostile' and extra == 'extra-13-scrapper-tool-llm-agent')" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/ec/bb/e69e5e628d43f118e0af4fc063c20058faa8635c95a1296764acc8167e27/screeninfo-0.8.1.tar.gz", hash = "sha256:9983076bcc7e34402a1a9e4d7dabf3729411fd2abb3f3b4be7eba73519cd2ed1", size = 10666, upload-time = "2022-09-09T11:35:23.419Z" }
 wheels = [
@@ -8354,7 +8397,7 @@ dependencies = [
     { name = "filetype" },
     { name = "google-cloud-aiplatform" },
     { name = "greenlet", marker = "python_full_version < '3.14' or (extra == 'extra-13-scrapper-tool-hostile' and extra == 'extra-13-scrapper-tool-llm-agent')" },
-    { name = "httpx", extra = ["socks"] },
+    { name = "httpx", extra = ["socks"], marker = "(extra == 'extra-13-scrapper-tool-hostile' and extra == 'extra-13-scrapper-tool-llm-agent') or (extra != 'extra-13-scrapper-tool-llm-agent' and extra == 'extra-13-scrapper-tool-skyvern-backend') or (extra != 'extra-13-scrapper-tool-hostile' and extra == 'extra-13-scrapper-tool-skyvern-backend')" },
     { name = "jinja2" },
     { name = "json-repair" },
     { name = "jsonschema" },
@@ -8371,12 +8414,12 @@ dependencies = [
     { name = "playwright", marker = "python_full_version < '3.14' or (extra == 'extra-13-scrapper-tool-hostile' and extra == 'extra-13-scrapper-tool-llm-agent')" },
     { name = "posthog" },
     { name = "psutil" },
-    { name = "psycopg", version = "3.1.18", source = { registry = "https://pypi.org/simple" }, extra = ["binary", "pool"], marker = "python_full_version < '3.13' or (extra == 'extra-13-scrapper-tool-hostile' and extra == 'extra-13-scrapper-tool-llm-agent')" },
-    { name = "psycopg", version = "3.2.13", source = { registry = "https://pypi.org/simple" }, extra = ["binary", "pool"], marker = "python_full_version == '3.13.*' or (extra == 'extra-13-scrapper-tool-hostile' and extra == 'extra-13-scrapper-tool-llm-agent')" },
+    { name = "psycopg", version = "3.1.18", source = { registry = "https://pypi.org/simple" }, extra = ["binary", "pool"], marker = "(python_full_version < '3.13' and extra != 'extra-13-scrapper-tool-llm-agent' and extra == 'extra-13-scrapper-tool-skyvern-backend') or (python_full_version < '3.13' and extra != 'extra-13-scrapper-tool-hostile' and extra == 'extra-13-scrapper-tool-skyvern-backend') or (extra == 'extra-13-scrapper-tool-full' and extra == 'extra-13-scrapper-tool-skyvern-backend') or (extra == 'extra-13-scrapper-tool-hostile' and extra == 'extra-13-scrapper-tool-llm-agent')" },
+    { name = "psycopg", version = "3.2.13", source = { registry = "https://pypi.org/simple" }, extra = ["binary", "pool"], marker = "(python_full_version == '3.13.*' and extra != 'extra-13-scrapper-tool-llm-agent' and extra == 'extra-13-scrapper-tool-skyvern-backend') or (python_full_version == '3.13.*' and extra != 'extra-13-scrapper-tool-hostile' and extra == 'extra-13-scrapper-tool-skyvern-backend') or (extra == 'extra-13-scrapper-tool-full' and extra == 'extra-13-scrapper-tool-skyvern-backend') or (extra == 'extra-13-scrapper-tool-hostile' and extra == 'extra-13-scrapper-tool-llm-agent')" },
     { name = "pyasn1" },
     { name = "pydantic" },
     { name = "pydantic-settings" },
-    { name = "pyjwt", extra = ["crypto"] },
+    { name = "pyjwt", extra = ["crypto"], marker = "(extra == 'extra-13-scrapper-tool-hostile' and extra == 'extra-13-scrapper-tool-llm-agent') or (extra != 'extra-13-scrapper-tool-llm-agent' and extra == 'extra-13-scrapper-tool-skyvern-backend') or (extra != 'extra-13-scrapper-tool-hostile' and extra == 'extra-13-scrapper-tool-skyvern-backend')" },
     { name = "pyotp" },
     { name = "pypdf" },
     { name = "python-calamine" },
@@ -8384,8 +8427,8 @@ dependencies = [
     { name = "python-dotenv" },
     { name = "python-multipart" },
     { name = "requests-toolbelt" },
-    { name = "rich", extra = ["jupyter"] },
-    { name = "sqlalchemy", extra = ["mypy"] },
+    { name = "rich", extra = ["jupyter"], marker = "(extra == 'extra-13-scrapper-tool-hostile' and extra == 'extra-13-scrapper-tool-llm-agent') or (extra != 'extra-13-scrapper-tool-llm-agent' and extra == 'extra-13-scrapper-tool-skyvern-backend') or (extra != 'extra-13-scrapper-tool-hostile' and extra == 'extra-13-scrapper-tool-skyvern-backend')" },
+    { name = "sqlalchemy", extra = ["mypy"], marker = "(extra == 'extra-13-scrapper-tool-hostile' and extra == 'extra-13-scrapper-tool-llm-agent') or (extra != 'extra-13-scrapper-tool-llm-agent' and extra == 'extra-13-scrapper-tool-skyvern-backend') or (extra != 'extra-13-scrapper-tool-hostile' and extra == 'extra-13-scrapper-tool-skyvern-backend')" },
     { name = "sse-starlette" },
     { name = "starlette-context" },
     { name = "structlog" },
@@ -8394,10 +8437,10 @@ dependencies = [
     { name = "toml" },
     { name = "tornado" },
     { name = "typer" },
-    { name = "types-boto3", extra = ["full"] },
+    { name = "types-boto3", extra = ["full"], marker = "(extra == 'extra-13-scrapper-tool-hostile' and extra == 'extra-13-scrapper-tool-llm-agent') or (extra != 'extra-13-scrapper-tool-llm-agent' and extra == 'extra-13-scrapper-tool-skyvern-backend') or (extra != 'extra-13-scrapper-tool-hostile' and extra == 'extra-13-scrapper-tool-skyvern-backend')" },
     { name = "types-toml" },
     { name = "urllib3" },
-    { name = "uvicorn", extra = ["standard"] },
+    { name = "uvicorn", extra = ["standard"], marker = "(extra == 'extra-13-scrapper-tool-hostile' and extra == 'extra-13-scrapper-tool-llm-agent') or (extra != 'extra-13-scrapper-tool-llm-agent' and extra == 'extra-13-scrapper-tool-skyvern-backend') or (extra != 'extra-13-scrapper-tool-hostile' and extra == 'extra-13-scrapper-tool-skyvern-backend')" },
     { name = "websockets" },
     { name = "zstandard" },
 ]
@@ -8550,7 +8593,7 @@ version = "1.0.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "anyio" },
-    { name = "typing-extensions", marker = "python_full_version < '3.13' or (extra == 'extra-13-scrapper-tool-hostile' and extra == 'extra-13-scrapper-tool-llm-agent')" },
+    { name = "typing-extensions", marker = "python_full_version < '3.13' or (extra == 'extra-13-scrapper-tool-full' and extra == 'extra-13-scrapper-tool-skyvern-backend') or (extra == 'extra-13-scrapper-tool-hostile' and extra == 'extra-13-scrapper-tool-llm-agent')" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/81/69/17425771797c36cded50b7fe44e850315d039f28b15901ab44839e70b593/starlette-1.0.0.tar.gz", hash = "sha256:6a4beaf1f81bb472fd19ea9b918b50dc3a77a6f2e190a12954b25e6ed5eea149", size = 2655289, upload-time = "2026-03-22T18:29:46.779Z" }
 wheels = [
@@ -8592,8 +8635,8 @@ name = "tiktoken"
 version = "0.12.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
-    { name = "regex" },
-    { name = "requests" },
+    { name = "regex", marker = "extra == 'extra-13-scrapper-tool-full' or extra == 'extra-13-scrapper-tool-llm-agent' or extra == 'extra-13-scrapper-tool-skyvern-backend'" },
+    { name = "requests", marker = "extra == 'extra-13-scrapper-tool-full' or extra == 'extra-13-scrapper-tool-llm-agent' or extra == 'extra-13-scrapper-tool-skyvern-backend'" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/7d/ab/4d017d0f76ec3171d469d80fc03dfbb4e48a4bcaddaa831b31d526f05edc/tiktoken-0.12.0.tar.gz", hash = "sha256:b18ba7ee2b093863978fcb14f74b3707cdc8d4d4d3836853ce7ec60772139931", size = 37806, upload-time = "2025-10-06T20:22:45.419Z" }
 wheels = [
@@ -8663,7 +8706,7 @@ name = "tokenizers"
 version = "0.23.1"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
-    { name = "huggingface-hub" },
+    { name = "huggingface-hub", marker = "extra == 'extra-13-scrapper-tool-full' or extra == 'extra-13-scrapper-tool-llm-agent' or extra == 'extra-13-scrapper-tool-skyvern-backend'" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/c1/60/21f715d9faba5f5407ff759472ade058ec4a507ad62bcea47cb847239a73/tokenizers-0.23.1.tar.gz", hash = "sha256:1feeeadf865a7915adc25445dea30e9933e593c31bb96c277cee36de227c8bfa", size = 365748, upload-time = "2026-04-27T14:43:25.606Z" }
 wheels = [
@@ -8770,7 +8813,7 @@ name = "tqdm"
 version = "4.67.3"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
-    { name = "colorama", marker = "sys_platform == 'win32' or (extra == 'extra-13-scrapper-tool-hostile' and extra == 'extra-13-scrapper-tool-llm-agent')" },
+    { name = "colorama", marker = "(sys_platform == 'win32' and extra == 'extra-13-scrapper-tool-full') or (sys_platform == 'win32' and extra == 'extra-13-scrapper-tool-llm-agent') or (sys_platform == 'win32' and extra == 'extra-13-scrapper-tool-skyvern-backend') or (extra == 'extra-13-scrapper-tool-full' and extra == 'extra-13-scrapper-tool-skyvern-backend') or (extra == 'extra-13-scrapper-tool-hostile' and extra == 'extra-13-scrapper-tool-llm-agent')" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/09/a9/6ba95a270c6f1fbcd8dac228323f2777d886cb206987444e4bce66338dd4/tqdm-4.67.3.tar.gz", hash = "sha256:7d825f03f89244ef73f1d4ce193cb1774a8179fd96f31d7e1dcde62092b960bb", size = 169598, upload-time = "2026-02-03T17:35:53.048Z" }
 wheels = [
@@ -8804,7 +8847,7 @@ version = "0.33.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "attrs" },
-    { name = "cffi", marker = "(implementation_name != 'pypy' and os_name == 'nt') or (implementation_name == 'pypy' and extra == 'extra-13-scrapper-tool-hostile' and extra == 'extra-13-scrapper-tool-llm-agent') or (os_name != 'nt' and extra == 'extra-13-scrapper-tool-hostile' and extra == 'extra-13-scrapper-tool-llm-agent')" },
+    { name = "cffi", marker = "(implementation_name != 'pypy' and os_name == 'nt') or (implementation_name == 'pypy' and extra == 'extra-13-scrapper-tool-full' and extra == 'extra-13-scrapper-tool-skyvern-backend') or (implementation_name == 'pypy' and extra == 'extra-13-scrapper-tool-hostile' and extra == 'extra-13-scrapper-tool-llm-agent') or (os_name != 'nt' and extra == 'extra-13-scrapper-tool-hostile' and extra == 'extra-13-scrapper-tool-llm-agent') or (os_name != 'nt' and extra == 'extra-13-scrapper-tool-full' and extra != 'extra-13-scrapper-tool-llm-agent' and extra == 'extra-13-scrapper-tool-skyvern-backend') or (os_name != 'nt' and extra == 'extra-13-scrapper-tool-full' and extra != 'extra-13-scrapper-tool-hostile' and extra == 'extra-13-scrapper-tool-skyvern-backend')" },
     { name = "idna" },
     { name = "outcome" },
     { name = "sniffio" },
@@ -8849,10 +8892,10 @@ name = "typer"
 version = "0.25.1"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
-    { name = "annotated-doc" },
-    { name = "click" },
-    { name = "rich" },
-    { name = "shellingham" },
+    { name = "annotated-doc", marker = "extra == 'extra-13-scrapper-tool-full' or extra == 'extra-13-scrapper-tool-llm-agent' or extra == 'extra-13-scrapper-tool-skyvern-backend'" },
+    { name = "click", marker = "extra == 'extra-13-scrapper-tool-full' or extra == 'extra-13-scrapper-tool-llm-agent' or extra == 'extra-13-scrapper-tool-skyvern-backend'" },
+    { name = "rich", marker = "extra == 'extra-13-scrapper-tool-full' or extra == 'extra-13-scrapper-tool-llm-agent' or extra == 'extra-13-scrapper-tool-skyvern-backend'" },
+    { name = "shellingham", marker = "extra == 'extra-13-scrapper-tool-full' or extra == 'extra-13-scrapper-tool-llm-agent' or extra == 'extra-13-scrapper-tool-skyvern-backend'" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/e4/51/9aed62104cea109b820bbd6c14245af756112017d309da813ef107d42e7e/typer-0.25.1.tar.gz", hash = "sha256:9616eb8853a09ffeabab1698952f33c6f29ffdbceb4eaeecf571880e8d7664cc", size = 122276, upload-time = "2026-04-30T19:32:16.964Z" }
 wheels = [
@@ -9432,9 +9475,9 @@ name = "yarl"
 version = "1.23.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
-    { name = "idna" },
-    { name = "multidict" },
-    { name = "propcache" },
+    { name = "idna", marker = "extra == 'extra-13-scrapper-tool-full' or extra == 'extra-13-scrapper-tool-llm-agent' or extra == 'extra-13-scrapper-tool-skyvern-backend'" },
+    { name = "multidict", marker = "extra == 'extra-13-scrapper-tool-full' or extra == 'extra-13-scrapper-tool-llm-agent' or extra == 'extra-13-scrapper-tool-skyvern-backend'" },
+    { name = "propcache", marker = "extra == 'extra-13-scrapper-tool-full' or extra == 'extra-13-scrapper-tool-llm-agent' or extra == 'extra-13-scrapper-tool-skyvern-backend'" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/23/6e/beb1beec874a72f23815c1434518bfc4ed2175065173fb138c3705f658d4/yarl-1.23.0.tar.gz", hash = "sha256:53b1ea6ca88ebd4420379c330aea57e258408dd0df9af0992e5de2078dc9f5d5", size = 194676, upload-time = "2026-03-01T22:07:53.373Z" }
 wheels = [

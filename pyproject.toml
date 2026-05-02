@@ -133,6 +133,15 @@ conflicts = [
         { extra = "hostile" },
         { extra = "llm-agent" },
     ],
+    # skyvern pins ``litellm==1.83.7`` (which itself pins ``click==8.1.8``),
+    # but Scrapling 0.3+ pins ``click>=8.2.1``. The two cannot coexist in a
+    # single resolved env. Mark ``[skyvern-backend]`` as conflicting with
+    # ``[full]`` (which always pulls Scrapling) so uv locks them separately
+    # and dependabot security updates can resolve.
+    [
+        { extra = "full" },
+        { extra = "skyvern-backend" },
+    ],
 ]
 
 [tool.hatch.build.targets.wheel]
