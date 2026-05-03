@@ -69,18 +69,23 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
         libatk1.0-0 \
         libatspi2.0-0 \
         libcairo2 \
+        libcairo-gobject2 \
         libcups2 \
         libdbus-1-3 \
         libdrm2 \
         libexpat1 \
         libgbm1 \
+        libgdk-pixbuf-2.0-0 \
         libglib2.0-0 \
+        libgtk-3-0 \
         libnspr4 \
         libnss3 \
         libpango-1.0-0 \
+        libpangocairo-1.0-0 \
         libx11-6 \
         libxcb1 \
         libxcomposite1 \
+        libxcursor1 \
         libxdamage1 \
         libxext6 \
         libxfixes3 \
@@ -116,14 +121,26 @@ USER scrapper
 
 # Install browser BINARIES as the runtime user so they land in
 # /home/scrapper/.cache/ms-playwright (where Patchright/Playwright look at
-# launch time). Both are needed:
+# launch time). Three are needed:
 #   - Patchright Chromium → Pattern E "fast mode" backend
 #   - Playwright Chromium → Crawl4AI default + Scrapling (Pattern D)
+#   - Playwright Firefox  → browser-use (E2) + Camoufox stealth profile
+#                           (Camoufox is a Firefox fork; browser-use's
+#                           default backend is Firefox).
+# Without Firefox, /scrape mode=auto fails on E1/E2 escalation with
+# "BrowserType.launch: Executable doesn't exist at firefox-*/firefox" —
+# while /ready still reports agent_installed=true (false-positive).
 RUN /app/.venv/bin/patchright install chromium && \
-    /app/.venv/bin/playwright install chromium
+    /app/.venv/bin/playwright install chromium firefox
 
-# Camoufox download is OPTIONAL (heavy ~300 MB).
-ARG INSTALL_CAMOUFOX=0
+# Camoufox stealth-profile download. Defaults to ON in v1.1.2 because
+# the published image's `SCRAPPER_TOOL_AGENT_BROWSER` default is
+# `patchright`, but the unified-image promise covers Camoufox too — and
+# without `camoufox fetch` the stealth Firefox profile is missing,
+# leaving Pattern E2 broken when callers flip to camoufox. Override at
+# build time with `--build-arg INSTALL_CAMOUFOX=0` for the lighter
+# image variant.
+ARG INSTALL_CAMOUFOX=1
 RUN if [ "$INSTALL_CAMOUFOX" = "1" ]; then /app/.venv/bin/camoufox fetch || true ; fi
 
 # 8000 — default HTTP/SSE / streamable-HTTP MCP port (when transport != stdio).
@@ -131,10 +148,15 @@ RUN if [ "$INSTALL_CAMOUFOX" = "1" ]; then /app/.venv/bin/camoufox fetch || true
 # 8080 — reserved for HTTP-based MCP behind a reverse proxy.
 EXPOSE 8000 5792 8080
 
-HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
-    CMD python -c "from scrapper_tool import agent; from scrapper_tool.patterns import d; from scrapper_tool.agent.types import AgentConfig; AgentConfig.from_env()" || exit 1
+HEALTHCHECK --interval=30s --timeout=5s --start-period=30s --retries=3 \
+    CMD curl -fsS http://localhost:5792/health || exit 1
 
-# Default entrypoint: stdio MCP server. All six tools are wired
-# (fetch_with_ladder, extract_product, extract_microdata_price, canary,
-# agent_extract, agent_browse).
-ENTRYPOINT ["scrapper-tool-mcp"]
+# Default entrypoint: REST sidecar (`scrapper-tool-serve`) on port 5792.
+# Exposes /scrape /fetch /extract /browse /ready /health /version /docs.
+# This matches what the README + docs/http-sidecar.md treat as the
+# primary surface for non-MCP callers.
+#
+# **Breaking change in v1.1.2** — previous images defaulted to
+# `scrapper-tool-mcp` (stdio MCP). MCP-mode users override with
+# `entrypoint: ["scrapper-tool-mcp"]` in compose; see docs/mcp.md.
+ENTRYPOINT ["scrapper-tool-serve"]

@@ -4,6 +4,39 @@ All notable changes to `scrapper-tool` are recorded here. Format follows [Keep a
 
 ## [Unreleased]
 
+## [1.1.2] - 2026-05-03
+
+Image hardening + behaviour-correctness release. Six gaps surfaced by a downstream consumer ([PartsPilot affiliate-service](https://github.com/ValeroK/affiliate-service) 2026-05-02 manual smoke against the published `1.1.0` image) — four packaging gaps that made Pattern E silently broken, and two behaviour gaps that wasted LLM budget. All fixed upstream so consumers no longer carry runtime-install workarounds in their compose stacks.
+
+### Breaking changes
+
+- **Default image `ENTRYPOINT`** flipped from `scrapper-tool-mcp` (stdio MCP) to `scrapper-tool-serve` (REST sidecar on port 5792). The README + `docs/http-sidecar.md` already treat the REST sidecar as the primary surface for non-MCP callers; the entrypoint now matches. **MCP-mode users override** with `entrypoint: ["scrapper-tool-mcp"]` in compose — see `docs/mcp.md`. The MCP entrypoint is unchanged; only the *default* moved.
+- The image's `HEALTHCHECK` now probes `GET /health` over the REST sidecar (port 5792) instead of importing Python modules. This matches the new entrypoint; MCP-mode users either ignore the healthcheck or override with `--health-cmd`.
+
+### Fixed (image — were silent breakage in v1.1.0/1.1.1)
+
+- **Bundle Playwright Firefox by default**. The runtime stage now runs `playwright install firefox` alongside Chromium. Pattern E1 (`agent_extract` via Crawl4AI) and Pattern E2 (`agent_browse` via browser-use) need Firefox; previously the pip extras were installed but the binary was missing, so any Pattern E call against a real site 500'd with `BrowserType.launch: Executable doesn't exist at firefox-*/firefox`. `/ready` lied about this — see the `agent_runnable` fix below.
+- **Add the GTK / Cairo / GDK / X11 libs Firefox needs to launch**. The runtime stage adds `libgtk-3-0`, `libpangocairo-1.0-0`, `libgdk-pixbuf-2.0-0`, `libcairo-gobject2`, and `libxcursor1`. Without these, Firefox crashes at launch with `Host system is missing dependencies to run browsers`.
+- **Pin `camoufox[geoip]>=0.4`** in the `[llm-agent]` extra (was bare `camoufox>=0.4`). Camoufox v0.4+ raises `NotInstalledGeoIPExtra` on every browser launch unless `geoip2` is installed; the extra was effectively non-functional out of the box.
+- **`INSTALL_CAMOUFOX` build arg now defaults to `1`** in the bundled Dockerfile. `camoufox fetch` runs at build time so the stealth Firefox profile is on disk for callers that flip `SCRAPPER_TOOL_AGENT_BROWSER=camoufox`. Override with `--build-arg INSTALL_CAMOUFOX=0` for a smaller image.
+
+### Fixed (behaviour)
+
+- **`/ready` reports `agent_runnable` separately from `agent_installed`** (was: only the latter). `agent_installed=true` only proves the Python `[llm-agent]` extra is importable; `agent_runnable=true` additionally proves the on-disk browser binary for the configured `SCRAPPER_TOOL_AGENT_BROWSER` is present. **Operators should gate Pattern E calls on `agent_runnable`, not `agent_installed`.** Status resolution: `ready` requires `agent_runnable && llm_reachable && llm_model_available`; otherwise `degraded` (sidecar can still serve A/B/C cheaply via `/fetch` and `/scrape mode=fetch`); `not_ready` only when the extra itself is missing.
+- **`/scrape mode=auto` no longer always escalates to E1 when `schema_json` is set.** The pre-1.1.2 success heuristic conflated "page blocked" with "page readable but no JSON-LD" — both forced an LLM call. From 1.1.2, a `mode=auto` request with `schema_json` accepts A/B/C as success when the page returned 2xx and any structured signal (`json_ld`, `microdata_price`, or auto-detected `product`) was extracted. Callers that prefer the old always-escalate behaviour set `force_llm_extract: true` on the request body.
+
+### Added
+
+- `force_llm_extract: bool = False` field on `ScrapeRequest`. Reverts the v1.1.2 escalation behaviour change for callers that genuinely need the LLM to apply their custom schema even when A/B/C returned readable content.
+- `tests/integration/test_image_smoke.sh` — Docker image smoke that boots the freshly-built image and asserts `/health`, `/version`, `/ready` (with `agent_runnable=true`), and a `POST /scrape mode=fetch` against `https://example.com`. Wired into `docker-release.yml` between the local build step and the publish step — the release tag is **never pushed if the smoke is red**. Catches the entire class of "image declared a capability that doesn't actually work" gaps that drove this release.
+
+### Migration notes
+
+- **Most consumers**: `docker compose pull scrapper-tool && docker compose up -d --force-recreate scrapper-tool` is enough. The default REST entrypoint is what the README documented all along.
+- **MCP-mode users**: add `entrypoint: ["scrapper-tool-mcp"]` to your compose service, OR run with `--entrypoint scrapper-tool-mcp` on `docker run`. The `scrapper-tool-mcp` console script is unchanged.
+- **Callers relying on `agent_installed` for capability checks**: switch to `checks.agent_runnable` in the `/ready` response. The old field is still emitted for backward compat but no longer governs the `status` field.
+- **Callers that depended on `mode=auto` always reaching E1**: set `force_llm_extract: true` on the request body. Most callers don't and will see lower latency + lower LLM cost as a free upgrade.
+
 ## [1.1.1] - 2026-05-02
 
 Security-only patch release. Resolves three Dependabot alerts on the `litellm` transitive dependency: SQL injection in proxy API key verification (critical, GHSA), SSTI in `/prompts/test`, and authenticated RCE via MCP stdio test endpoints. All three were fixed upstream in `litellm 1.83.7`.

@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "scrapper-tool"
-version = "1.1.1"
+version = "1.1.2"
 description = "Reusable web-scraping toolkit — Pattern A/B/C/D ladder, TLS-impersonation fallback chain, deterministic fixture-replay testing, and an optional MCP server for LLM agents."
 readme = "README.md"
 requires-python = ">=3.12"
@@ -54,7 +54,12 @@ agent = ["mcp>=1.2"]
 llm-agent = [
     "crawl4ai>=0.5",
     "browser-use>=0.5",
-    "camoufox>=0.4",
+    # Camoufox v0.4+ refuses to launch without ``geoip2`` because its
+    # locale-matching layer queries a MaxMind GeoLite2 db at start.
+    # The ``[geoip]`` extra pulls ``geoip2`` + ``maxminddb``. Bare
+    # ``camoufox`` lets ``camoufox fetch`` succeed but every browser
+    # launch then 500s with ``NotInstalledGeoIPExtra``.
+    "camoufox[geoip]>=0.4",
     "patchright>=1.49",
     "browserforge>=1.2",
     "pillow>=10",

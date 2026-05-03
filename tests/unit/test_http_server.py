@@ -915,3 +915,243 @@ class TestBrowserModuleCheck:
         # Scrapling is in [hostile]/[full]; missing in lighter matrix entries.
         result = http_server._check_browser_module("scrapling")
         assert result in {"ok", "missing"}
+
+
+# --- v1.1.2: agent_runnable / on-disk binary probe -------------------------
+
+
+class TestAgentRunnable:
+    """``/ready`` reports ``agent_runnable`` separately from ``agent_installed``.
+
+    Pre-1.1.2 the published image declared ``agent_installed=true`` (Python
+    extra importable) while the Firefox binary was not on disk, leaving
+    ``/scrape mode=auto`` 500-ing on every E1/E2 escalation. ``agent_runnable``
+    closes that gap by probing the on-disk binary.
+    """
+
+    def test_browser_binary_present_returns_false_for_empty_cache(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Any
+    ) -> None:
+        # Empty cache dir → no firefox/chromium binary on disk → False.
+        monkeypatch.setattr(http_server, "_playwright_browsers_root", lambda: tmp_path)
+        assert http_server._browser_binary_present("patchright") is False
+        assert http_server._browser_binary_present("camoufox") is False
+        assert http_server._browser_binary_present("scrapling") is False
+
+    def test_browser_binary_present_finds_chromium_for_patchright(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Any
+    ) -> None:
+        # Synthesize the canonical Patchright Chromium layout — Playwright
+        # writes ``chrome-linux64/`` on Linux x64 since revision ~1100.
+        chrome_path = tmp_path / "chromium-1208" / "chrome-linux64" / "chrome"
+        chrome_path.parent.mkdir(parents=True)
+        chrome_path.write_text("#!/bin/sh\n# fake chromium\n")
+        monkeypatch.setattr(http_server, "_playwright_browsers_root", lambda: tmp_path)
+        assert http_server._browser_binary_present("patchright") is True
+
+    def test_browser_binary_present_finds_chromium_legacy_layout(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Any
+    ) -> None:
+        # Older Playwright images used ``chrome-linux/`` (no ``64``);
+        # the probe accepts both so old caches still register.
+        chrome_path = tmp_path / "chromium-1100" / "chrome-linux" / "chrome"
+        chrome_path.parent.mkdir(parents=True)
+        chrome_path.write_text("#!/bin/sh\n# fake chromium (legacy layout)\n")
+        monkeypatch.setattr(http_server, "_playwright_browsers_root", lambda: tmp_path)
+        assert http_server._browser_binary_present("patchright") is True
+
+    def test_browser_binary_present_finds_firefox_for_camoufox_fallback(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Any
+    ) -> None:
+        # Camoufox can run with Playwright Firefox under ms-playwright/firefox-*.
+        ff_path = tmp_path / "firefox-1509" / "firefox" / "firefox"
+        ff_path.parent.mkdir(parents=True)
+        ff_path.write_text("#!/bin/sh\n# fake firefox\n")
+        monkeypatch.setattr(http_server, "_playwright_browsers_root", lambda: tmp_path)
+        assert http_server._browser_binary_present("camoufox") is True
+
+    def test_browser_binary_present_unknown_browser_returns_false(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Any
+    ) -> None:
+        monkeypatch.setattr(http_server, "_playwright_browsers_root", lambda: tmp_path)
+        # Unknown browser → conservative False (forces /ready degraded so
+        # the misconfiguration surfaces, doesn't silently pass).
+        assert http_server._browser_binary_present("not-a-real-browser") is False
+
+    @pytest.mark.asyncio
+    async def test_ready_includes_agent_runnable(
+        self, app_no_auth: Any, monkeypatch: pytest.MonkeyPatch, tmp_path: Any
+    ) -> None:
+        # Empty cache → agent_runnable=false → /ready status=degraded
+        # (when LLM is unreachable, which it will be in CI).
+        monkeypatch.setattr(http_server, "_playwright_browsers_root", lambda: tmp_path)
+        async with _client(app_no_auth) as client:
+            resp = await client.get("/ready")
+        assert resp.status_code == 200
+        body = resp.json()
+        assert "agent_runnable" in body["checks"], (
+            "v1.1.2: /ready must report agent_runnable separately from agent_installed"
+        )
+        # When the Python extra IS installed but no binary on disk,
+        # agent_installed should be True and agent_runnable should be False.
+        if body["checks"]["agent_installed"] is True:
+            assert body["checks"]["agent_runnable"] is False
+
+    @pytest.mark.asyncio
+    async def test_ready_status_degraded_when_agent_not_runnable(
+        self, app_no_auth: Any, monkeypatch: pytest.MonkeyPatch, tmp_path: Any
+    ) -> None:
+        # The whole point of the v1.1.2 change: empty browser cache must
+        # NOT yield status=ready, no matter how healthy the rest looks.
+        monkeypatch.setattr(http_server, "_playwright_browsers_root", lambda: tmp_path)
+        async with _client(app_no_auth) as client:
+            resp = await client.get("/ready")
+        body = resp.json()
+        if body["checks"]["agent_installed"] is True:
+            assert body["status"] != "ready", (
+                "agent_runnable=false must downgrade status to 'degraded' (or 'not_ready')"
+            )
+
+
+# --- v1.1.2: /scrape mode=auto over-escalation fix --------------------------
+
+
+class TestScrapeAutoNoOverescalation:
+    """v1.1.2 — schema_json + readable A/B/C output is success, not escalation.
+
+    Pre-1.1.2 ``mode=auto`` always escalated to E1 when ``schema_json`` was
+    set, regardless of whether A/B/C had returned a readable page with
+    structured signal. That conflated "blocked" with "schema didn't match"
+    and burned LLM budget on pages the caller could parse locally.
+    """
+
+    @pytest.mark.asyncio
+    async def test_auto_with_schema_does_not_escalate_when_page_readable(
+        self, app_no_auth: Any, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # A/B/C returns a 200 page with JSON-LD. Pre-1.1.2: escalates to E1.
+        # v1.1.2: stays on a_b_c (schema_json + page_readable + has_any_signal).
+        async def fake_ladder(method: str, url: str, **kwargs: Any) -> tuple[Any, str]:
+            return _make_response(text=_PRODUCT_HTML, url=url), "chrome133a"
+
+        monkeypatch.setattr("scrapper_tool.ladder.request_with_ladder", fake_ladder)
+
+        async with _client(app_no_auth) as client:
+            resp = await client.post(
+                "/scrape",
+                json={
+                    "url": "https://example.com/p",
+                    "schema_json": {"name": "str", "price": "float"},
+                },
+            )
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["pattern_used"] == "a_b_c", (
+            "v1.1.2: schema_json + readable A/B/C output is success, not escalation. "
+            "Set force_llm_extract=true for the old always-escalate behaviour."
+        )
+        assert body["pattern_attempts"] == ["a_b_c"]
+        # The structured signal that justified the success classification.
+        assert body["json_ld"] is not None or body["product"] is not None
+
+    @pytest.mark.asyncio
+    async def test_auto_with_schema_and_force_llm_extract_does_escalate(
+        self, app_no_auth: Any, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # Opt-in to legacy behaviour: force_llm_extract=true → E1 even when
+        # A/B/C had a readable page.
+        async def fake_ladder(method: str, url: str, **kwargs: Any) -> tuple[Any, str]:
+            return _make_response(text=_PRODUCT_HTML, url=url), "chrome133a"
+
+        monkeypatch.setattr("scrapper_tool.ladder.request_with_ladder", fake_ladder)
+
+        # Mock the agent layer so we can observe the escalation.
+        fake_result = MagicMock()
+        fake_result.mode = "extract"
+        fake_result.data = {"name": "Widget", "price": 19.99}
+        fake_result.final_url = "https://example.com/p"
+        fake_result.rendered_markdown = "# Widget"
+        fake_result.screenshots = None
+        fake_result.tokens_used = 50
+        fake_result.steps_used = 1
+        fake_result.blocked = False
+        fake_result.error = None
+        fake_result.duration_s = 0.5
+
+        agent_extract_mock = AsyncMock(return_value=fake_result)
+        agent_module = MagicMock()
+        agent_module.AgentConfig = MagicMock()
+        agent_module.AgentConfig.from_env = MagicMock(
+            return_value=MagicMock(merged=lambda **_: MagicMock())
+        )
+        agent_module.agent_extract = agent_extract_mock
+
+        import sys
+
+        monkeypatch.setitem(sys.modules, "scrapper_tool.agent", agent_module)
+
+        async with _client(app_no_auth) as client:
+            resp = await client.post(
+                "/scrape",
+                json={
+                    "url": "https://example.com/p",
+                    "schema_json": {"name": "str"},
+                    "force_llm_extract": True,
+                },
+            )
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["pattern_used"] == "e1", (
+            "force_llm_extract=true must restore pre-1.1.2 escalation behaviour"
+        )
+        assert body["pattern_attempts"] == ["a_b_c", "e1"]
+
+    @pytest.mark.asyncio
+    async def test_auto_with_schema_escalates_when_a_b_c_returns_blank_page(
+        self, app_no_auth: Any, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # A/B/C returns a 200 page with NO structured signal (blank HTML).
+        # The page is readable but has nothing the caller can post-process,
+        # so escalation to E1 IS warranted.
+        async def fake_ladder(method: str, url: str, **kwargs: Any) -> tuple[Any, str]:
+            return (
+                _make_response(text="<html><body>nothing here</body></html>", url=url),
+                "chrome133a",
+            )
+
+        monkeypatch.setattr("scrapper_tool.ladder.request_with_ladder", fake_ladder)
+
+        fake_result = MagicMock()
+        fake_result.mode = "extract"
+        fake_result.data = {"x": 1}
+        fake_result.final_url = "https://example.com/empty"
+        fake_result.rendered_markdown = "empty"
+        fake_result.screenshots = None
+        fake_result.tokens_used = 10
+        fake_result.steps_used = 1
+        fake_result.blocked = False
+        fake_result.error = None
+        fake_result.duration_s = 0.3
+
+        agent_extract_mock = AsyncMock(return_value=fake_result)
+        agent_module = MagicMock()
+        agent_module.AgentConfig = MagicMock()
+        agent_module.AgentConfig.from_env = MagicMock(
+            return_value=MagicMock(merged=lambda **_: MagicMock())
+        )
+        agent_module.agent_extract = agent_extract_mock
+
+        import sys
+
+        monkeypatch.setitem(sys.modules, "scrapper_tool.agent", agent_module)
+
+        async with _client(app_no_auth) as client:
+            resp = await client.post(
+                "/scrape",
+                json={"url": "https://example.com/empty", "schema_json": {"x": "int"}},
+            )
+        assert resp.status_code == 200
+        body = resp.json()
+        # No JSON-LD, no microdata, no auto-detected product, no force flag →
+        # escalation IS the right call.
+        assert body["pattern_used"] == "e1"
