@@ -3,7 +3,7 @@
   "info": {
     "title": "scrapper-tool REST sidecar",
     "description": "REST sidecar for scrapper-tool. Exposes the full A-E capability stack over plain JSON/HTTP. The /scrape endpoint runs the full A/B/C \u2192 E1 \u2192 E2 auto-escalation ladder server-side so callers don't need per-pattern logic.",
-    "version": "1.1.1"
+    "version": "1.1.2"
   },
   "paths": {
     "/health": {
@@ -624,6 +624,12 @@
             "type": "boolean",
             "title": "Headful",
             "description": "Run browser headful (debugging)",
+            "default": false
+          },
+          "force_llm_extract": {
+            "type": "boolean",
+            "title": "Force Llm Extract",
+            "description": "Pre-v1.1.2 behaviour: with ``mode=auto`` and ``schema_json`` set, always escalate to E1 even when A/B/C returned a readable page. From v1.1.2 the default is to accept A/B/C as success when the page returned 200 + any structured signal, letting the caller post-process from the raw fetch instead of paying for an LLM call. Set ``force_llm_extract=true`` to opt back in to the old always-escalate behaviour.",
             "default": false
           }
         },

@@ -73,11 +73,23 @@ The one you'll call 95% of the time. Give it a URL and (optionally) a schema, ge
   "model": "qwen3-vl:8b",
   "timeout_s": 60.0,
   "max_steps": 30,
-  "headful": false
+  "headful": false,
+  "force_llm_extract": false
 }
 ```
 
 All fields except `url` are optional. With no `schema_json`, you get an auto-detected `ProductOffer` from JSON-LD/microdata when A/B/C succeeds.
+
+### When does `mode=auto` escalate to E1? (1.1.2 behaviour)
+
+A/B/C is treated as **success** (no escalation) when:
+
+- The page returned 2xx **and**
+- One of: a JSON-LD blob was found, microdata price was extracted, an auto-detected `product` was extracted, OR `mode="fetch"` was forced.
+
+If you supply `schema_json` and A/B/C returned a readable page (2xx + any structured signal), the response carries `pattern_used="a_b_c"` and the raw `text` / `json_ld` / `microdata_price` so your code can post-process locally — no LLM call needed.
+
+**Pre-1.1.2 behaviour:** any `schema_json` request always escalated to E1, even on trivial Pattern-B HTML. That wasted ~0.5–60s per request (LLM cost + latency). Set `force_llm_extract: true` if you genuinely need the LLM to apply your custom schema even when A/B/C had structured output. Most callers see lower latency + lower LLM cost as a free upgrade.
 
 ### Response — fast path (Pattern A/B/C succeeded)
 
@@ -234,9 +246,10 @@ Useful for orchestrators (Kubernetes, ECS) and for the affiliate service to veri
 ```json
 {
   "status": "ready",
-  "version": "1.1.0",
+  "version": "1.1.2",
   "checks": {
     "agent_installed": true,
+    "agent_runnable": true,
     "hostile_installed": true,
     "browser": "patchright",
     "browser_binary": "ok",
@@ -251,8 +264,14 @@ Useful for orchestrators (Kubernetes, ECS) and for the affiliate service to veri
 
 `status` values:
 - `ready` — everything works, safe to send traffic
-- `degraded` — agent installed but something is off (model not pulled, browser missing). Calls may fail
+- `degraded` — sidecar can serve A/B/C cheaply (`/fetch`, `/scrape mode=fetch`) but Pattern E is not available (browser missing, LLM unreachable, model not loaded, etc.)
 - `not_ready` — `[llm-agent]` extra not installed (fetch-only mode). E1/E2 endpoints will return 503
+
+`checks.agent_installed` vs `checks.agent_runnable` (since v1.1.2):
+- `agent_installed` — the `[llm-agent]` Python extra is importable. Necessary but not sufficient.
+- `agent_runnable` — `agent_installed` AND the on-disk binary for the configured `SCRAPPER_TOOL_AGENT_BROWSER` is present (Camoufox / Patchright Chromium / Playwright Firefox). **Operators should gate Pattern E calls on this.** Pre-1.1.2 there was only `agent_installed`, which silently returned true even when the binary was missing.
+
+The endpoint always returns HTTP 200 — the body distinguishes "sidecar crashed" (no response) from "sidecar up but degraded" (degraded).
 
 The endpoint always returns HTTP 200 — the body distinguishes "sidecar crashed" (no response) from "sidecar up but LLM unavailable" (degraded).
 

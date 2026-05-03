@@ -36,6 +36,7 @@ import argparse
 import os
 import time
 import warnings
+from pathlib import Path
 from typing import TYPE_CHECKING, Any, Literal
 
 # Pydantic v2 emits a UserWarning when a field name shadows a BaseModel
@@ -117,6 +118,18 @@ class ScrapeRequest(BaseModel):
     timeout_s: float | None = Field(None, description="Override AgentConfig.timeout_s")
     max_steps: int | None = Field(None, description="Override AgentConfig.max_steps (E2 only)")
     headful: bool = Field(False, description="Run browser headful (debugging)")
+    force_llm_extract: bool = Field(
+        False,
+        description=(
+            "Pre-v1.1.2 behaviour: with ``mode=auto`` and ``schema_json`` set, "
+            "always escalate to E1 even when A/B/C returned a readable page. "
+            "From v1.1.2 the default is to accept A/B/C as success when the "
+            "page returned 200 + any structured signal, letting the caller "
+            "post-process from the raw fetch instead of paying for an LLM "
+            "call. Set ``force_llm_extract=true`` to opt back in to the old "
+            "always-escalate behaviour."
+        ),
+    )
 
 
 class ExtractRequest(BaseModel):
@@ -151,6 +164,14 @@ class BrowseRequest(BaseModel):
 _logger = get_logger(__name__)
 
 _HTTP_OK = 200
+_HTTP_2XX_FLOOR = 200
+_HTTP_3XX_FLOOR = 300
+
+
+def _is_http_ok(status_code: int) -> bool:
+    """True when ``status_code`` is in the 2xx success range."""
+    return _HTTP_2XX_FLOOR <= status_code < _HTTP_3XX_FLOOR
+
 
 _NOT_INSTALLED = (
     "scrapper-tool REST server requires the [http] extra:\n"
@@ -172,13 +193,105 @@ def _require_fastapi() -> None:
 
 
 def _agent_available() -> bool:
-    """Return True if the ``[llm-agent]`` extra is installed."""
+    """Return True if the ``[llm-agent]`` extra is installed.
+
+    This is a *Python-package* check only — the ``camoufox`` /
+    ``patchright`` / ``crawl4ai`` modules import cleanly. It does NOT
+    guarantee the on-disk browser binary is present (Camoufox's
+    Firefox blob, Playwright Chromium / Firefox, ...). For runtime
+    capability use :func:`_agent_runnable`.
+    """
     try:
         import scrapper_tool.agent  # noqa: F401, PLC0415
 
         return True
     except ImportError:
         return False
+
+
+def _playwright_browsers_root() -> Path:
+    """Return ``$PLAYWRIGHT_BROWSERS_PATH`` (or its default).
+
+    Playwright stores binaries here as ``<browser>-<rev>/...``. Both
+    ``playwright install firefox`` and ``patchright install chromium``
+    write into this directory. ``$PLAYWRIGHT_BROWSERS_PATH`` overrides
+    the default; we honour it.
+    """
+    override = os.environ.get("PLAYWRIGHT_BROWSERS_PATH")
+    if override:
+        return Path(override)
+    return Path.home() / ".cache" / "ms-playwright"
+
+
+def _browser_binary_present(browser: str) -> bool:  # noqa: PLR0911
+    """Probe the on-disk binary for the configured agent browser.
+
+    True when a launchable binary is found for ``browser``; False when
+    the Python module is installed but the binary isn't (the case
+    that bit us on the published 1.1.0 image — ``agent_installed``
+    was true, ``patchright install chromium`` had run, but Firefox
+    wasn't downloaded so any Pattern E1/E2 attempt failed at runtime).
+
+    Returns False rather than raising — ``/ready`` should report
+    ``degraded``, not crash.
+    """
+    root = _playwright_browsers_root()
+
+    if browser == "patchright":
+        # Patchright ships a patched Chromium under chromium-<rev>/. The
+        # subdirectory is ``chrome-linux64/`` on Linux x64 (default
+        # Playwright layout); older images used ``chrome-linux/``. Try
+        # both so the probe works against any reasonable Playwright
+        # version, and against Patchright's headless-shell variant.
+        candidates = (
+            "chromium-*/chrome-linux64/chrome",
+            "chromium-*/chrome-linux/chrome",
+            "chromium_headless_shell-*/chrome-linux64/headless_shell",
+            "chromium_headless_shell-*/chrome-linux/headless_shell",
+        )
+        return any(p.is_file() for pat in candidates for p in root.glob(pat))
+
+    if browser == "camoufox":
+        # Camoufox stores its Firefox fork under its own path; the
+        # python wrapper exposes ``camoufox.path``. browser-use (E2)
+        # also pulls Playwright Firefox, so we treat either as runnable.
+        try:
+            import camoufox  # noqa: PLC0415
+
+            cf_path = getattr(camoufox, "path", None)
+            if cf_path and Path(cf_path).is_file():
+                return True
+        except ImportError:
+            pass
+        # Fallback: Camoufox installs into ms-playwright/firefox-* on
+        # some distributions. browser-use definitely uses Playwright
+        # Firefox.
+        return any(p.is_file() for p in root.glob("firefox-*/firefox/firefox"))
+
+    if browser == "scrapling":
+        # Scrapling ships its own Camoufox; if either binary is present
+        # we call it runnable.
+        if any(p.is_file() for p in root.glob("firefox-*/firefox/firefox")):
+            return True
+        try:
+            import scrapling  # noqa: F401, PLC0415
+        except ImportError:
+            return False
+        return False
+
+    # Unknown browser — be conservative and report False so /ready
+    # surfaces the configuration mistake rather than silently passing.
+    return False
+
+
+def _agent_runnable(browser: str) -> bool:
+    """True when both the Python extra AND the binary are present.
+
+    ``agent_installed`` ∧ ``browser_binary on disk``. This is the
+    field callers should gate Pattern E1/E2 on; ``agent_installed``
+    alone is necessary but not sufficient.
+    """
+    return _agent_available() and _browser_binary_present(browser)
 
 
 def _hostile_available() -> bool:
@@ -550,12 +663,31 @@ async def _do_scrape(req: Any) -> dict[str, Any]:  # noqa: PLR0912, PLR0915
             text = response.text or ""
             product, json_ld, microdata_price = _extract_b_c(text, str(response.url))
 
-            # mode="fetch" → always success.
-            # mode="auto" + no schema_json → success when Pattern B or C found data.
-            # mode="auto" + schema_json → escalate to E1 (LLM applies the schema).
-            success = req.mode == "fetch" or (
-                req.schema_json is None and (product is not None or microdata_price is not None)
-            )
+            # Success classification (v1.1.2 — see CHANGELOG):
+            #
+            # * mode="fetch" → always success. Forced cheap path; never escalate.
+            # * mode="auto" + force_llm_extract=true → behave like pre-v1.1.2:
+            #   when schema_json is set, escalate so the LLM applies it.
+            # * mode="auto" + no schema_json → success when B or C extracted
+            #   the auto-detected ProductOffer.
+            # * mode="auto" + schema_json (default) → success when the page
+            #   was actually readable (HTTP 200 + any structured signal the
+            #   caller can post-process from the returned text/json_ld).
+            #   This is the v1.1.2 fix for "trivial Pattern-B HTML jumps
+            #   straight to E2." Callers can opt back in to always-escalate
+            #   via force_llm_extract=true.
+            page_readable = _is_http_ok(response.status_code) and bool(text)
+            has_any_signal = product is not None or microdata_price is not None or bool(json_ld)
+
+            if req.mode == "fetch":
+                success = True
+            elif getattr(req, "force_llm_extract", False) and req.schema_json is not None:
+                success = False  # legacy path: schema_json forces LLM
+            elif req.schema_json is None:
+                success = product is not None or microdata_price is not None
+            else:
+                success = page_readable and has_any_signal
+
             if success:
                 _ = profile  # currently unused in response shape; kept for logging
                 return {
@@ -672,9 +804,35 @@ def _scrape_response_from_agent(
 
 
 async def _readiness_payload() -> dict[str, Any]:
-    """Build the /ready response body."""
+    """Build the /ready response body.
+
+    ``checks`` keys (v1.1.2):
+
+    * ``agent_installed`` — ``[llm-agent]`` Python extra importable.
+    * ``agent_runnable`` (NEW) — ``agent_installed`` AND the on-disk
+      binary for the configured browser is present. **This is the
+      field operators should gate Pattern E on.** ``agent_installed``
+      true + ``agent_runnable`` false = lib is there but Firefox /
+      Camoufox / Chromium isn't downloaded; cheap A/B/C still works,
+      E1/E2 will fail at runtime.
+    * ``browser`` — configured ``SCRAPPER_TOOL_AGENT_BROWSER``.
+    * ``browser_binary`` — Python module probe for the configured
+      backend (kept for backward compat; ``agent_runnable`` is the
+      authoritative readiness signal now).
+    * ``hostile_installed`` — ``[hostile]`` extra (Scrapling).
+    * ``llm_*`` — LM Studio / Ollama / vLLM probe.
+
+    ``status`` resolution:
+
+    * ``ready``    — ``agent_runnable`` ∧ LLM reachable + model loaded.
+    * ``degraded`` — sidecar can serve A/B/C (``/fetch`` and
+      ``/scrape mode=fetch``) but Pattern E or LLM is not available.
+    * ``not_ready`` — ``[llm-agent]`` extra not even installed.
+    """
+    agent_installed = _agent_available()
     checks: dict[str, Any] = {
-        "agent_installed": _agent_available(),
+        "agent_installed": agent_installed,
+        "agent_runnable": False,  # filled in below once we know the browser
         "hostile_installed": _hostile_available(),
         "browser": None,
         "browser_binary": None,
@@ -684,7 +842,7 @@ async def _readiness_payload() -> dict[str, Any]:
         "llm_model": None,
         "llm_model_available": None,
     }
-    if not checks["agent_installed"]:
+    if not agent_installed:
         return {"status": "not_ready", "version": __version__, "checks": checks}
 
     try:
@@ -701,13 +859,13 @@ async def _readiness_payload() -> dict[str, Any]:
     checks["llm_model"] = cfg.model
 
     checks["browser_binary"] = _check_browser_module(cfg.browser)
+    checks["agent_runnable"] = _agent_runnable(cfg.browser)
     reachable, model_available = await _probe_llm(cfg)
     checks["llm_reachable"] = reachable
     checks["llm_model_available"] = model_available
 
     all_pass = (
-        checks["agent_installed"]
-        and checks["browser_binary"] == "ok"
+        checks["agent_runnable"] is True
         and checks["llm_reachable"] is True
         and checks["llm_model_available"] is True
     )

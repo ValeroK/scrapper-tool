@@ -55,7 +55,33 @@ jobs:
             org.opencontainers.image.description=All five patterns (A/B/C/D/E) + MCP server in one image. Bring your own LLM.
             org.opencontainers.image.licenses=MIT
 
-      - name: Build and push
+      # Build the image locally first (load=true makes it available to
+      # `docker run`). The smoke gate below MUST pass before we push the
+      # tag — pre-v1.1.2 the image silently shipped without Firefox; this
+      # gate catches that class of regression at release time.
+      - name: Build (load locally for smoke)
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          file: Dockerfile
+          platforms: linux/amd64
+          push: false
+          load: true
+          tags: scrapper-tool:smoke
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Image smoke (gate before publish)
+        env:
+          IMAGE: scrapper-tool:smoke
+          # `version` from docker/metadata-action is already stripped of
+          # the leading ``v`` (v1.1.2 -> 1.1.2), matching ``__version__``.
+          EXPECT_VERSION: ${{ steps.meta.outputs.version }}
+        run: |
+          chmod +x tests/integration/test_image_smoke.sh
+          bash tests/integration/test_image_smoke.sh
+
+      - name: Build and push (cache hit from previous step)
         uses: docker/build-push-action@v7
         with:
           context: .
