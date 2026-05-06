@@ -128,9 +128,15 @@ async def _run_with_handle(  # noqa: PLR0912 — orchestrates the agent loop
     use_vision = is_vision_model(config.model)
 
     # Construct browser-use Browser around the running stealth browser.
-    bu_browser = Browser(
-        config=BrowserConfig(headless=not config.headful, disable_security=False),
-    )
+    # v1.3.0: thread the cascade-shared user_data_dir so cookies (cf_clearance)
+    # set by D / E1 carry forward to E2's browser-use session.
+    bu_config_kwargs: dict[str, Any] = {
+        "headless": not config.headful,
+        "disable_security": False,
+    }
+    if config.user_data_dir:
+        bu_config_kwargs["user_data_dir"] = config.user_data_dir
+    bu_browser = Browser(config=BrowserConfig(**bu_config_kwargs))
     # browser-use exposes a `playwright_browser` injection point on newer
     # versions; on older it accepts a callable. Try the modern API and
     # fall back gracefully.

@@ -34,6 +34,8 @@ from __future__ import annotations
 
 import argparse
 import os
+import shutil
+import tempfile
 import time
 import warnings
 from pathlib import Path
@@ -156,6 +158,24 @@ class ScrapeRequest(BaseModel):
             "lazy-load via client-side JS after CF clearance. Adds ~5-15s of "
             "fetch latency. Default False keeps cold-call latency low for the "
             "common Cloudflare-but-not-SPA case (Amayama, Subaru-JP)."
+        ),
+    )
+    persist_browser_profile_dir: str | None = Field(
+        None,
+        description=(
+            "Optional absolute path to a persistent browser profile dir (NEW v1.3.0). "
+            "When set, Pattern D and any E1/E2 escalation step share this dir, "
+            "so Cloudflare clearance cookies (cf_clearance) persist across requests. "
+            "Caller is responsible for: (1) per-vendor isolation (use a different "
+            "dir per host so clearance state doesn't leak between targets), "
+            "(2) periodic cleanup to avoid Cloudflare's stale-profile detection "
+            "(~30 min TTL is a safe default — rotate via cron or the consumer's "
+            "own scheduler). When unset (default), the cascade creates an "
+            "ephemeral per-request dir, shares it across D + E1 + E2, and "
+            "deletes it on every exit path. Use this field only when you want "
+            "cross-request reuse — the per-cascade default already eliminates "
+            "the redundant CF challenges that caused E-tier escalations to "
+            "fresh-fight already-bypassed sites."
         ),
     )
 
@@ -329,6 +349,42 @@ def _hostile_available() -> bool:
 
         return True
     except ImportError:
+        return False
+
+
+def _user_data_dir_supported() -> bool:
+    """v1.3.0: Probe whether installed Crawl4AI / browser-use accept user_data_dir.
+
+    Inspects the ``BrowserConfig`` signatures (no browser launch) — much
+    cheaper than the plan's "spin up a probe browser" approach and
+    sufficient because the failure mode we care about is "library version
+    silently dropped the kwarg." If either lib is uninstalled, returns
+    False with no error (the cascade still works without persistence — D
+    just doesn't share its CF clearance).
+
+    Returns False on any probe error so /ready can surface a warning
+    rather than crashing.
+    """
+    if not _agent_available():
+        return False
+    try:
+        import inspect  # noqa: PLC0415
+
+        from crawl4ai import BrowserConfig as Crawl4AIBrowserConfig  # noqa: PLC0415
+
+        crawl4ai_params = inspect.signature(Crawl4AIBrowserConfig).parameters
+        if "user_data_dir" not in crawl4ai_params:
+            return False
+    except Exception:
+        return False
+    try:
+        import inspect  # noqa: PLC0415
+
+        from browser_use import BrowserConfig as BUBrowserConfig  # noqa: PLC0415
+
+        browseruse_params = inspect.signature(BUBrowserConfig).parameters
+        return "user_data_dir" in browseruse_params
+    except Exception:
         return False
 
 
@@ -563,6 +619,12 @@ def _build_overrides(req: Any) -> dict[str, Any]:
 
     Filters out ``None`` and the default ``headful=False`` so callers don't
     accidentally override env-set defaults.
+
+    The ``user_data_dir`` override is read from a transient attribute that
+    ``_do_scrape`` stashes on the request after resolving (ephemeral temp
+    dir vs caller-provided ``persist_browser_profile_dir``). When not set
+    by the cascade orchestrator, this is None and the agent layer uses
+    whatever the env var ``SCRAPPER_TOOL_AGENT_USER_DATA_DIR`` configured.
     """
     candidates = {
         "browser": getattr(req, "browser", None),
@@ -570,6 +632,11 @@ def _build_overrides(req: Any) -> dict[str, Any]:
         "timeout_s": getattr(req, "timeout_s", None),
         "max_steps": getattr(req, "max_steps", None),
         "headful": getattr(req, "headful", None) or None,  # False -> None
+        # v1.3.0: read the cascade-resolved profile dir off the request.
+        # _do_scrape sets this in __dict__ after deciding ephemeral vs
+        # persistent. None when no cascade ran (mode=extract / mode=browse
+        # direct) — agent layer falls back to env var or its own default.
+        "user_data_dir": req.__dict__.get("_resolved_profile_dir"),
     }
     return {k: v for k, v in candidates.items() if v is not None}
 
@@ -748,12 +815,18 @@ async def _do_d_step(
         # outer req.timeout_s still wins if it's larger.
         network_idle = bool(getattr(req, "pattern_d_network_idle", False))
         effective_timeout = max(timeout_s, 30.0) if network_idle else timeout_s
+        # v1.3.0: thread the cascade-resolved profile dir to Scrapling so
+        # cookies (cf_clearance) persist on disk and E1/E2 can inherit
+        # them via the same dir.
+        profile_dir = req.__dict__.get("_resolved_profile_dir")
+        fetch_kwargs: dict[str, Any] = {
+            "solve_cloudflare": True,
+            "network_idle": network_idle,
+        }
+        if profile_dir:
+            fetch_kwargs["user_data_dir"] = profile_dir
         async with hostile_client(timeout=effective_timeout) as fetcher:
-            response = await fetcher.async_fetch(
-                req.url,
-                solve_cloudflare=True,
-                network_idle=network_idle,
-            )
+            response = await fetcher.async_fetch(req.url, **fetch_kwargs)
 
         # Scrapling's response object exposes html_content + status. Some
         # versions name them differently — fall back gracefully.
@@ -907,6 +980,51 @@ async def _do_hostile_only(req: Any, attempts: list[str], start: float) -> dict[
     return await _do_scrape_e_tier(req, attempts, start, hostile_skipped, last_error=d_error)
 
 
+def _resolve_profile_dir(req: Any) -> tuple[str | None, str | None]:
+    """Resolve the cascade's browser profile dir.
+
+    Returns ``(profile_dir, cleanup_dir)``:
+
+    * ``profile_dir`` — the dir to pass to Scrapling/Crawl4AI/browser-use,
+      or None when the cascade doesn't need one (mode=fetch, or mode=auto
+      without [hostile] installed and no caller-provided dir).
+    * ``cleanup_dir`` — the dir the cascade owns and must rmtree on exit,
+      or None when the caller owns the lifecycle (provided their own dir
+      via ``persist_browser_profile_dir``).
+
+    Decision matrix:
+
+    +-----------------------+------------+--------------------------------+
+    | req.mode              | extra      | result                         |
+    +-----------------------+------------+--------------------------------+
+    | fetch                 | -          | (None, None) — no browser      |
+    | extract / browse      | -          | honor caller dir if any        |
+    | auto / hostile        | hostile-no | honor caller dir if any        |
+    | auto / hostile        | hostile-ok | ephemeral if no caller dir     |
+    +-----------------------+------------+--------------------------------+
+    """
+    explicit = getattr(req, "persist_browser_profile_dir", None)
+    if explicit:
+        # Caller owns the dir; we never clean it up.
+        return explicit, None
+
+    # mode=fetch never spins up a browser → no point allocating a dir.
+    if req.mode == "fetch":
+        return None, None
+
+    # Only allocate ephemeral dirs when D might run AND can actually run.
+    # mode=auto with [hostile] missing falls straight through to E1; the
+    # E-tier still benefits from a shared dir (E2 inherits E1 cookies),
+    # but the marginal value is small enough that we keep allocations
+    # tied to D's availability for now. Direct E-tier modes (extract /
+    # browse) honor only the caller-provided dir.
+    if req.mode in ("auto", "hostile") and _hostile_available():
+        ephemeral = tempfile.mkdtemp(prefix="scrapper-cascade-")
+        return ephemeral, ephemeral
+
+    return None, None
+
+
 async def _do_scrape(req: Any) -> dict[str, Any]:
     """POST /scrape — auto-escalating ladder A/B/C → D → E1 → E2.
 
@@ -922,9 +1040,31 @@ async def _do_scrape(req: Any) -> dict[str, Any]:
     Every response carries ``hostile_skipped: bool`` (D was skipped because the
     extra is missing) and ``is_structured: bool`` (the sidecar's verdict on
     whether the page yielded a real payload).
+
+    v1.3.0: when D might run, the cascade allocates a per-request
+    ``user_data_dir`` and threads it to D + E1 + E2 so Cloudflare clearance
+    cookies persist across cascade steps. The dir is ephemeral by default
+    (cleaned up in ``finally``); callers wanting cross-request persistence
+    set ``persist_browser_profile_dir``.
     """
     start = time.perf_counter()
     attempts: list[str] = []
+
+    # v1.3.0: resolve and stash the profile dir BEFORE any cascade step
+    # so _do_d_step + _build_overrides can read it via req.__dict__.
+    profile_dir, cleanup_dir = _resolve_profile_dir(req)
+    req.__dict__["_resolved_profile_dir"] = profile_dir
+
+    try:
+        return await _do_scrape_inner(req, attempts, start)
+    finally:
+        if cleanup_dir is not None:
+            shutil.rmtree(cleanup_dir, ignore_errors=True)
+
+
+async def _do_scrape_inner(req: Any, attempts: list[str], start: float) -> dict[str, Any]:
+    """The actual cascade body — extracted so _do_scrape's try/finally
+    can wrap it cleanly without indenting the whole thing one level."""
     last_error: BaseException | None = None
     hostile_skipped = False
 
@@ -1069,16 +1209,25 @@ async def _readiness_payload() -> dict[str, Any]:
     """
     agent_installed = _agent_available()
     hostile_installed = _hostile_available()
+    user_data_dir_ok = _user_data_dir_supported()
     warnings_list: list[str] = []
     if not hostile_installed:
         warnings_list.append(
             "hostile_not_installed: cascade will skip Pattern D and pay LLM costs "
             "on hostile vendors. Install with: pip install scrapper-tool[hostile]"
         )
+    if agent_installed and not user_data_dir_ok:
+        warnings_list.append(
+            "user_data_dir_unsupported: Pattern D's CF clearance will NOT carry "
+            "forward to E1/E2 (your installed Crawl4AI / browser-use versions "
+            "appear to ignore user_data_dir). Upgrade Crawl4AI >= 0.6 + "
+            "browser-use >= 0.5 to get the v1.3.0 shared-clearance benefit."
+        )
     checks: dict[str, Any] = {
         "agent_installed": agent_installed,
         "agent_runnable": False,  # filled in below once we know the browser
         "hostile_installed": hostile_installed,
+        "user_data_dir_supported": user_data_dir_ok,
         "browser": None,
         "browser_binary": None,
         "llm_backend": None,

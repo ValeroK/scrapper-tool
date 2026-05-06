@@ -1858,3 +1858,264 @@ class TestPatternDNetworkIdle:
                 },
             )
         assert captor.captured_kwargs.get("network_idle") is True
+
+
+# --- v1.3.0: shared CF clearance via per-cascade user_data_dir -------------
+
+
+class TestSharedProfileDir:
+    """v1.3.0 - cascade allocates per-request user_data_dir for shared CF clearance.
+
+    Default: ephemeral mkdtemp + rmtree on every exit path.
+    Opt-in: persist_browser_profile_dir lets the caller own the lifecycle.
+    """
+
+    @pytest.mark.asyncio
+    async def test_ephemeral_dir_created_and_cleaned_on_success(
+        self, app_no_auth: Any, monkeypatch: pytest.MonkeyPatch, tmp_path: Any
+    ) -> None:
+        created: list[str] = []
+        cleaned: list[str] = []
+
+        def fake_mkdtemp(prefix: str = "") -> str:
+            d = tmp_path / (prefix + "fake-" + str(len(created)))
+            d.mkdir()
+            path = str(d)
+            created.append(path)
+            return path
+
+        def fake_rmtree(path: Any, ignore_errors: bool = False) -> None:
+            cleaned.append(str(path))
+
+        monkeypatch.setattr(http_server.tempfile, "mkdtemp", fake_mkdtemp)
+        monkeypatch.setattr(http_server.shutil, "rmtree", fake_rmtree)
+        monkeypatch.setattr(http_server, "_hostile_available", lambda: True)
+
+        async def fake_ladder(method: str, url: str, **kwargs: Any) -> tuple[Any, str]:
+            return _make_response(text=_PRODUCT_HTML, url=url), "chrome133a"
+
+        monkeypatch.setattr("scrapper_tool.ladder.request_with_ladder", fake_ladder)
+
+        async with _client(app_no_auth) as client:
+            await client.post("/scrape", json={"url": "https://example.com/p"})
+
+        assert len(created) == 1, "exactly one ephemeral dir created"
+        assert cleaned == created, "every created dir was cleaned"
+
+    @pytest.mark.asyncio
+    async def test_ephemeral_dir_cleaned_on_exception_path(
+        self, app_no_auth: Any, monkeypatch: pytest.MonkeyPatch, tmp_path: Any
+    ) -> None:
+        from scrapper_tool.errors import AgentBlockedError, BlockedError
+
+        created: list[str] = []
+        cleaned: list[str] = []
+
+        def fake_mkdtemp(prefix: str = "") -> str:
+            d = tmp_path / (prefix + "fake")
+            d.mkdir()
+            path = str(d)
+            created.append(path)
+            return path
+
+        def fake_rmtree(path: Any, ignore_errors: bool = False) -> None:
+            cleaned.append(str(path))
+
+        monkeypatch.setattr(http_server.tempfile, "mkdtemp", fake_mkdtemp)
+        monkeypatch.setattr(http_server.shutil, "rmtree", fake_rmtree)
+        monkeypatch.setattr(http_server, "_hostile_available", lambda: True)
+
+        async def fake_ladder(method: str, url: str, **kwargs: Any) -> Any:
+            raise BlockedError("blocked")
+
+        monkeypatch.setattr("scrapper_tool.ladder.request_with_ladder", fake_ladder)
+        _install_fake_hostile_client(monkeypatch, response=RuntimeError("d failed"))
+        agent_module = MagicMock()
+        agent_module.AgentConfig = MagicMock()
+        agent_module.AgentConfig.from_env = MagicMock(
+            return_value=MagicMock(merged=lambda **_: MagicMock())
+        )
+        agent_module.agent_extract = AsyncMock(side_effect=AgentBlockedError("e1"))
+        agent_module.agent_browse = AsyncMock(side_effect=AgentBlockedError("e2"))
+        import sys
+
+        monkeypatch.setitem(sys.modules, "scrapper_tool.agent", agent_module)
+
+        async with _client(app_no_auth) as client:
+            resp = await client.post("/scrape", json={"url": "https://hostile.com/p"})
+        assert resp.status_code == 422
+        assert cleaned == created, "cleanup ran even though /scrape errored"
+
+    @pytest.mark.asyncio
+    async def test_d_step_receives_user_data_dir(
+        self, app_no_auth: Any, monkeypatch: pytest.MonkeyPatch, tmp_path: Any
+    ) -> None:
+        from scrapper_tool.errors import BlockedError
+
+        async def fake_ladder(method: str, url: str, **kwargs: Any) -> Any:
+            raise BlockedError("blocked")
+
+        monkeypatch.setattr("scrapper_tool.ladder.request_with_ladder", fake_ladder)
+
+        captor = _install_capturing_hostile_client(
+            monkeypatch, response=_FakeScraplingResponse(html=_PRODUCT_HTML)
+        )
+
+        async with _client(app_no_auth) as client:
+            await client.post("/scrape", json={"url": "https://hostile.com/p"})
+
+        assert "user_data_dir" in captor.captured_kwargs, (
+            "D step must forward the cascade-resolved user_data_dir"
+        )
+        assert "scrapper-cascade-" in captor.captured_kwargs["user_data_dir"]
+
+    @pytest.mark.asyncio
+    async def test_e1_inherits_user_data_dir_from_cascade(
+        self, app_no_auth: Any, monkeypatch: pytest.MonkeyPatch, tmp_path: Any
+    ) -> None:
+        from scrapper_tool.errors import BlockedError
+
+        captured_overrides: dict[str, Any] = {}
+        original_build = http_server._build_overrides
+
+        def spy_build(req: Any) -> dict[str, Any]:
+            result = original_build(req)
+            captured_overrides.clear()
+            captured_overrides.update(result)
+            return result
+
+        monkeypatch.setattr(http_server, "_build_overrides", spy_build)
+
+        async def fake_ladder(method: str, url: str, **kwargs: Any) -> Any:
+            raise BlockedError("blocked")
+
+        monkeypatch.setattr("scrapper_tool.ladder.request_with_ladder", fake_ladder)
+        _install_fake_hostile_client(monkeypatch, response=RuntimeError("d also fails"))
+
+        fake_result = MagicMock()
+        fake_result.mode = "extract"
+        fake_result.data = {"name": "via_e1"}
+        fake_result.final_url = "https://hostile.com/p"
+        fake_result.rendered_markdown = None
+        fake_result.screenshots = None
+        fake_result.tokens_used = 50
+        fake_result.steps_used = 1
+        fake_result.blocked = False
+        fake_result.error = None
+        fake_result.duration_s = 1.0
+        _mock_agent_module(monkeypatch, extract_result=fake_result)
+
+        async with _client(app_no_auth) as client:
+            await client.post(
+                "/scrape",
+                json={"url": "https://hostile.com/p", "schema_json": {"name": "str"}},
+            )
+
+        assert "user_data_dir" in captured_overrides, (
+            "E1 escalation must inherit the cascade user_data_dir for shared CF clearance"
+        )
+        assert "scrapper-cascade-" in captured_overrides["user_data_dir"]
+
+    @pytest.mark.asyncio
+    async def test_caller_provided_dir_not_cleaned_up(
+        self, app_no_auth: Any, monkeypatch: pytest.MonkeyPatch, tmp_path: Any
+    ) -> None:
+        cleaned: list[str] = []
+        monkeypatch.setattr(
+            http_server.shutil,
+            "rmtree",
+            lambda path, ignore_errors=False: cleaned.append(str(path)),
+        )
+        called_mkdtemp: list[str] = []
+        monkeypatch.setattr(
+            http_server.tempfile,
+            "mkdtemp",
+            lambda prefix="": called_mkdtemp.append(prefix) or "/UNUSED",
+        )
+        monkeypatch.setattr(http_server, "_hostile_available", lambda: True)
+
+        caller_dir = str(tmp_path / "vendor-amayama-profile")
+
+        async def fake_ladder(method: str, url: str, **kwargs: Any) -> tuple[Any, str]:
+            return _make_response(text=_PRODUCT_HTML, url=url), "chrome133a"
+
+        monkeypatch.setattr("scrapper_tool.ladder.request_with_ladder", fake_ladder)
+
+        async with _client(app_no_auth) as client:
+            await client.post(
+                "/scrape",
+                json={
+                    "url": "https://example.com/p",
+                    "persist_browser_profile_dir": caller_dir,
+                },
+            )
+
+        assert called_mkdtemp == [], "no ephemeral dir when caller supplied one"
+        assert caller_dir not in cleaned, (
+            "caller-provided dir must NOT be cleaned up by the sidecar"
+        )
+
+    @pytest.mark.asyncio
+    async def test_no_dir_when_hostile_extra_missing(
+        self, app_no_auth: Any, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setattr(http_server, "_hostile_available", lambda: False)
+
+        called_mkdtemp: list[str] = []
+        monkeypatch.setattr(
+            http_server.tempfile,
+            "mkdtemp",
+            lambda prefix="": called_mkdtemp.append(prefix) or "/UNUSED",
+        )
+
+        async def fake_ladder(method: str, url: str, **kwargs: Any) -> tuple[Any, str]:
+            return _make_response(text=_PRODUCT_HTML, url=url), "chrome133a"
+
+        monkeypatch.setattr("scrapper_tool.ladder.request_with_ladder", fake_ladder)
+
+        async with _client(app_no_auth) as client:
+            await client.post("/scrape", json={"url": "https://example.com/p"})
+
+        assert called_mkdtemp == [], "ephemeral dir must NOT be allocated when D cannot run anyway"
+
+    @pytest.mark.asyncio
+    async def test_resolved_profile_dir_does_not_leak_across_requests(
+        self, app_no_auth: Any, monkeypatch: pytest.MonkeyPatch, tmp_path: Any
+    ) -> None:
+        from scrapper_tool.errors import BlockedError
+
+        seen_dirs: list[str | None] = []
+
+        original_d = http_server._do_d_step
+
+        async def spy_d(req: Any, attempts: list[str], start: float):
+            seen_dirs.append(req.__dict__.get("_resolved_profile_dir"))
+            return await original_d(req, attempts, start)
+
+        monkeypatch.setattr(http_server, "_do_d_step", spy_d)
+        monkeypatch.setattr(http_server, "_hostile_available", lambda: True)
+
+        async def fake_ladder(method: str, url: str, **kwargs: Any) -> Any:
+            raise BlockedError("blocked")
+
+        monkeypatch.setattr("scrapper_tool.ladder.request_with_ladder", fake_ladder)
+        _install_fake_hostile_client(
+            monkeypatch, response=_FakeScraplingResponse(html=_PRODUCT_HTML)
+        )
+
+        async with _client(app_no_auth) as client:
+            await client.post("/scrape", json={"url": "https://hostile1.com/p"})
+            await client.post("/scrape", json={"url": "https://hostile2.com/p"})
+
+        assert len(seen_dirs) == 2
+        assert all(d is not None for d in seen_dirs)
+        assert seen_dirs[0] != seen_dirs[1], "each /scrape call must allocate its own ephemeral dir"
+
+    @pytest.mark.asyncio
+    async def test_ready_user_data_dir_supported_present(self, app_no_auth: Any) -> None:
+        async with _client(app_no_auth) as client:
+            resp = await client.get("/ready")
+        body = resp.json()
+        assert "user_data_dir_supported" in body["checks"], (
+            "v1.3.0: /ready must report whether installed agent libs accept user_data_dir"
+        )

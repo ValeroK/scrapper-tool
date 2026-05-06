@@ -167,11 +167,16 @@ async def _continue_to_e_tier(
     attempts: list[str],
     last_error: str | None,
     hostile_skipped: bool,
+    user_data_dir: str | None = None,
 ) -> dict[str, Any]:
     """E1 → E2 escalation for the MCP ``auto_scrape`` tool.
 
     Shared between the normal cascade (after A/B/C+D fall through) and the
     hostile_only=True path (after D fails with hostile_fallback=True).
+
+    ``user_data_dir`` (v1.3.0+): forwarded to ``AgentConfig.merged`` so
+    Crawl4AI / browser-use launch against the cascade-shared profile and
+    inherit D's CF clearance.
     """
     try:
         from scrapper_tool.agent import AgentConfig  # noqa: PLC0415
@@ -198,6 +203,8 @@ async def _continue_to_e_tier(
         overrides["model"] = model
     if browser:
         overrides["browser"] = browser
+    if user_data_dir:
+        overrides["user_data_dir"] = user_data_dir
 
     # ----- Pattern E1 -----
     attempts.append("e1")
@@ -249,12 +256,136 @@ async def _continue_to_e_tier(
         }
 
 
+def _hostile_available_for_mcp() -> bool:
+    """Probe whether [hostile] (Scrapling) is installed.
+
+    Mirrors :func:`scrapper_tool.http_server._hostile_available`. Reimplemented
+    locally so MCP doesn't pull in FastAPI just to check the extra.
+    """
+    try:
+        import scrapling  # noqa: F401, PLC0415
+    except ImportError:
+        return False
+    return True
+
+
+async def _auto_scrape_inner(
+    *,
+    url: str,
+    schema_json: dict[str, Any] | None,
+    instruction: str | None,
+    model: str | None,
+    browser: str | None,
+    timeout_s: float,
+    hostile_only: bool,
+    hostile_fallback: bool,
+    pattern_d_network_idle: bool,
+    user_data_dir: str | None,
+) -> dict[str, Any]:
+    """Cascade body for the MCP auto_scrape tool.
+
+    Extracted so auto_scrape's try/finally can wrap it cleanly without
+    indenting the whole cascade one level. Owns the A/B/C → D → E1 → E2
+    sequence; profile-dir lifecycle (mkdtemp + rmtree) lives in the
+    enclosing auto_scrape.
+    """
+    attempts: list[str] = []
+    last_error: str | None = None
+    hostile_skipped = False
+
+    # ----- hostile_only fast-path: skip A/B/C, start at D -----
+    if hostile_only:
+        d_payload, d_error, hostile_skipped = await _try_pattern_d_for_auto_scrape(
+            url, schema_json, attempts, timeout_s, pattern_d_network_idle, user_data_dir
+        )
+        if d_payload is not None:
+            return d_payload
+        if not hostile_fallback:
+            return _agent_error_payload(
+                f"hostile_only=True and D failed: "
+                f"{d_error or 'classifier rejected D output or [hostile] missing'}",
+                blocked=True,
+            ) | {
+                "pattern_used": None,
+                "pattern_attempts": attempts,
+                "product": None,
+                "hostile_skipped": hostile_skipped,
+                "is_structured": False,
+            }
+        last_error = d_error
+        return await _continue_to_e_tier(
+            url,
+            schema_json,
+            instruction,
+            model,
+            browser,
+            timeout_s,
+            attempts,
+            last_error,
+            hostile_skipped,
+            user_data_dir,
+        )
+
+    # ----- Pattern A/B/C -----
+    attempts.append("a_b_c")
+    try:
+        resp, profile = await request_with_ladder("GET", url)
+        text = resp.text or ""
+        product = _structured_product(text, str(resp.url))
+        price = _structured_price(text)
+        success = schema_json is None and (product is not None or price is not None)
+        if success:
+            truncated_text, truncated = _truncate(text)
+            return {
+                "pattern_used": "a_b_c",
+                "pattern_attempts": attempts,
+                "url": str(resp.url),
+                "winning_profile": profile,
+                "product": product,
+                "microdata_price": price,
+                "data": None,
+                "rendered_markdown": None,
+                "body": truncated_text,
+                "truncated": truncated,
+                "blocked": False,
+                "error": None,
+                "hostile_skipped": False,
+                "is_structured": True,
+            }
+    except BlockedError as exc:
+        last_error = f"a_b_c: {exc}"
+
+    # ----- Pattern D -----
+    d_payload, d_error, hostile_skipped = await _try_pattern_d_for_auto_scrape(
+        url, schema_json, attempts, timeout_s, pattern_d_network_idle, user_data_dir
+    )
+    if d_payload is not None:
+        return d_payload
+    if d_error is not None:
+        last_error = d_error
+
+    # ----- E1 → E2 escalation -----
+    return await _continue_to_e_tier(
+        url,
+        schema_json,
+        instruction,
+        model,
+        browser,
+        timeout_s,
+        attempts,
+        last_error,
+        hostile_skipped,
+        user_data_dir,
+    )
+
+
 async def _try_pattern_d_for_auto_scrape(
     url: str,
     schema_json: dict[str, Any] | None,
     attempts: list[str],
     timeout_s: float,
     network_idle: bool = False,
+    user_data_dir: str | None = None,
 ) -> tuple[dict[str, Any] | None, str | None, bool]:
     """Pattern D step for the MCP ``auto_scrape`` tool.
 
@@ -268,6 +399,9 @@ async def _try_pattern_d_for_auto_scrape(
     ``network_idle`` (v1.2.0+): when True, Scrapling waits for the page's
     network to settle before returning HTML. Set for SPA-rendered hostile
     vendors where results lazy-load via JS after CF clearance.
+
+    ``user_data_dir`` (v1.3.0+): when set, Scrapling launches against this
+    on-disk profile directory so cookies (cf_clearance) persist for E1/E2.
     """
     try:
         from scrapper_tool.patterns.d import hostile_client  # noqa: PLC0415
@@ -277,11 +411,15 @@ async def _try_pattern_d_for_auto_scrape(
     attempts.append("d")
     # Bump fetcher timeout floor when network_idle is set (mirrors http_server).
     effective_timeout = max(timeout_s, 30.0) if network_idle else timeout_s
+    fetch_kwargs: dict[str, Any] = {
+        "solve_cloudflare": True,
+        "network_idle": network_idle,
+    }
+    if user_data_dir:
+        fetch_kwargs["user_data_dir"] = user_data_dir
     try:
         async with hostile_client(timeout=effective_timeout) as fetcher:
-            d_resp = await fetcher.async_fetch(
-                url, solve_cloudflare=True, network_idle=network_idle
-            )
+            d_resp = await fetcher.async_fetch(url, **fetch_kwargs)
     except Exception as exc:  # broad: any Scrapling failure falls through to E1
         return None, f"d: {exc}", False
 
@@ -678,6 +816,7 @@ def _build_server(  # noqa: PLR0915 — single-place tool registration
         hostile_only: bool = False,
         hostile_fallback: bool = True,
         pattern_d_network_idle: bool = False,
+        persist_browser_profile_dir: str | None = None,
     ) -> dict[str, Any]:
         """Run the full A/B/C → D → E1 → E2 escalation ladder.
 
@@ -689,98 +828,48 @@ def _build_server(  # noqa: PLR0915 — single-place tool registration
         Set pattern_d_network_idle=True for SPA-rendered hostile vendors
         (Tasca, etc.) where results lazy-load via JS after CF clearance —
         adds ~5-15s of D fetch time but lets the page hydrate first.
+
+        v1.3.0: when D might run, the cascade allocates a per-request
+        ``user_data_dir`` and threads it to D + E1 + E2 so Cloudflare
+        clearance cookies persist across cascade steps. Pass
+        ``persist_browser_profile_dir`` to opt into cross-request reuse
+        (caller owns lifecycle).
         """
-        attempts: list[str] = []
-        last_error: str | None = None
-        hostile_skipped = False
+        # v1.3.0: resolve and own the cascade's profile dir lifecycle.
+        # Mirrors http_server._resolve_profile_dir.
+        cleanup_dir: str | None = None
+        if persist_browser_profile_dir:
+            profile_dir: str | None = persist_browser_profile_dir
+        elif _hostile_available_for_mcp():
+            # auto_scrape always runs the cascade including D when the
+            # extra is available (hostile_only or normal cascade); so we
+            # always allocate when [hostile] is installed and no explicit
+            # caller dir was provided.
+            import tempfile  # noqa: PLC0415
 
-        # ----- hostile_only fast-path: skip A/B/C, start at D -----
-        if hostile_only:
-            d_payload, d_error, hostile_skipped = await _try_pattern_d_for_auto_scrape(
-                url, schema_json, attempts, timeout_s, pattern_d_network_idle
-            )
-            if d_payload is not None:
-                return d_payload
-            if not hostile_fallback:
-                return _agent_error_payload(
-                    f"hostile_only=True and D failed: "
-                    f"{d_error or 'classifier rejected D output or [hostile] missing'}",
-                    blocked=True,
-                ) | {
-                    "pattern_used": None,
-                    "pattern_attempts": attempts,
-                    "product": None,
-                    "hostile_skipped": hostile_skipped,
-                    "is_structured": False,
-                }
-            last_error = d_error
-            # Fall through to the E1 → E2 block below (skips the A/B/C try block).
-            return await _continue_to_e_tier(
-                url,
-                schema_json,
-                instruction,
-                model,
-                browser,
-                timeout_s,
-                attempts,
-                last_error,
-                hostile_skipped,
-            )
+            profile_dir = tempfile.mkdtemp(prefix="scrapper-cascade-mcp-")
+            cleanup_dir = profile_dir
+        else:
+            profile_dir = None
 
-        # ----- Pattern A/B/C -----
-        attempts.append("a_b_c")
         try:
-            resp, profile = await request_with_ladder("GET", url)
-            text = resp.text or ""
-            product = _structured_product(text, str(resp.url))
-            price = _structured_price(text)
-            success = schema_json is None and (product is not None or price is not None)
-            if success:
-                truncated_text, truncated = _truncate(text)
-                return {
-                    "pattern_used": "a_b_c",
-                    "pattern_attempts": attempts,
-                    "url": str(resp.url),
-                    "winning_profile": profile,
-                    "product": product,
-                    "microdata_price": price,
-                    "data": None,
-                    "rendered_markdown": None,
-                    "body": truncated_text,
-                    "truncated": truncated,
-                    "blocked": False,
-                    "error": None,
-                    "hostile_skipped": False,
-                    "is_structured": True,
-                }
-        except BlockedError as exc:
-            last_error = f"a_b_c: {exc}"
+            return await _auto_scrape_inner(
+                url=url,
+                schema_json=schema_json,
+                instruction=instruction,
+                model=model,
+                browser=browser,
+                timeout_s=timeout_s,
+                hostile_only=hostile_only,
+                hostile_fallback=hostile_fallback,
+                pattern_d_network_idle=pattern_d_network_idle,
+                user_data_dir=profile_dir,
+            )
+        finally:
+            if cleanup_dir is not None:
+                import shutil  # noqa: PLC0415
 
-        # ----- Pattern D (Scrapling — opt-in via [hostile] extra) -----
-        # Skips silently when [hostile] isn't installed. Surfaces that
-        # decision via hostile_skipped=true on the eventual E1/E2 response
-        # so callers can opt-in by installing the extra and avoid paying
-        # the LLM cost on hostile-but-Scrapling-readable vendors.
-        d_payload, d_error, hostile_skipped = await _try_pattern_d_for_auto_scrape(
-            url, schema_json, attempts, timeout_s, pattern_d_network_idle
-        )
-        if d_payload is not None:
-            return d_payload
-        if d_error is not None:
-            last_error = d_error
-
-        # ----- E1 → E2 escalation (extracted helper, shared with hostile_only) -----
-        return await _continue_to_e_tier(
-            url,
-            schema_json,
-            instruction,
-            model,
-            browser,
-            timeout_s,
-            attempts,
-            last_error,
-            hostile_skipped,
-        )
+                shutil.rmtree(cleanup_dir, ignore_errors=True)
 
     # ---- Tool: canary -----------------------------------------------------
 

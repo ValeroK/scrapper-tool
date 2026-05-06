@@ -4,6 +4,82 @@ All notable changes to `scrapper-tool` are recorded here. Format follows [Keep a
 
 ## [Unreleased]
 
+## [1.3.0] - 2026-05-06
+
+Tasca-cost release. Pattern D's Cloudflare clearance now carries forward to
+E1/E2 within a cascade invocation via a shared per-request browser profile,
+eliminating the redundant CF challenges that pre-1.3.0 caused E-tier
+escalations to fresh-fight already-bypassed sites.
+
+### Estimated impact (Tasca shape — D fetches but extraction needs LLM)
+
+- **Pre-v1.3.0**: D solves CF (6-15s), discards. E1 fresh-fights CF (LLM call
+  wasted, ~30s, often fails). E2 fresh-fights CF (LLM call wasted, ~30s).
+  Total ~70s, 2 LLM calls, no result.
+- **Post-v1.3.0**: D solves CF (6-15s), captures hydrated HTML. If still no
+  signal → E1 inherits the cleared profile, navigates straight to result
+  rows, LLM extracts in 5-10s. Total ~25s, 1 LLM call, result returned.
+
+Net: **~64% latency cut, 50% LLM cost cut, plus failure → success conversion**
+for the entire class of "D defeats CF but the page schema needs an LLM."
+
+### Added
+
+- **Per-cascade ephemeral browser profile** (default behavior). When
+  `mode=auto` or `mode=hostile` runs against a request that might invoke
+  Pattern D, the sidecar creates a `tempfile.mkdtemp("scrapper-cascade-")`
+  and threads it as `user_data_dir` to D, E1, and E2. Cookies (including
+  `cf_clearance`) persist on disk between launches, so once D solves CF,
+  E1/E2 inherit the cleared session. Dir is cleaned up on every exit path
+  (success, blocked, exception).
+- **`persist_browser_profile_dir: str | None = None`** on `ScrapeRequest`.
+  Caller-provided absolute path that overrides the ephemeral default. Use
+  for poll-style workloads that hit the same domain repeatedly. Caller
+  owns lifecycle: per-vendor isolation, ~30 min TTL rotation to dodge
+  Cloudflare's stale-profile detection. The sidecar NEVER deletes a
+  caller-provided dir.
+- **`AgentConfig.user_data_dir`** field. Threaded through to
+  `crawl4ai.BrowserConfig` (with `use_persistent_context=True`) and
+  `browser_use.BrowserConfig` when set. Env var
+  `SCRAPPER_TOOL_AGENT_USER_DATA_DIR` for direct callers of
+  `agent_extract` / `agent_browse` who want cross-call persistence
+  outside the cascade.
+- **`/ready.checks.user_data_dir_supported`** capability probe + warning.
+  Inspects the installed Crawl4AI / browser-use `BrowserConfig`
+  signatures (no browser launch — pure introspection). When either lib
+  is missing the kwarg (older releases), the warning surfaces so
+  operators know D's CF clearance won't carry forward to E1/E2.
+- **`hostile_only` + `hostile_fallback` + `pattern_d_network_idle` +
+  `persist_browser_profile_dir`** on the MCP `auto_scrape` tool. Mirrors
+  the REST request fields. The MCP tool also manages its own profile-dir
+  lifecycle (mkdtemp on entry, rmtree in finally).
+
+### Internal refactors
+
+- Extracted `_resolve_profile_dir` helper. Encapsulates the (mode, extra,
+  caller-dir) decision matrix that picks ephemeral vs persistent vs none.
+- Extracted `_do_scrape_inner` / `_auto_scrape_inner` from the wrapping
+  try/finally. No behavior change; just keeps the cascade body legible.
+
+### Migration notes
+
+- Default behavior change: `mode=auto` and `mode=hostile` now create a
+  temp dir on every invocation that might invoke D (when `[hostile]` is
+  installed). Disk I/O overhead: ~1-3 MB per request, ~1-3s of mkdtemp
+  + cleanup. On high-throughput sidecars (>10 req/s), monitor inode
+  pressure. Cleanup is in `try/finally` so dirs don't accumulate on
+  failure paths.
+- Operators wanting the pre-v1.3.0 behavior (no shared dir) can keep
+  `[hostile]` uninstalled — the cascade then falls through to E1
+  directly, just like v1.1.x.
+- Adapters wanting cross-request reuse: set
+  `persist_browser_profile_dir=/var/lib/scrapper/profiles/<vendor>/`.
+  Per-vendor isolation + ~30 min rotation are caller responsibilities.
+- If `/ready.checks.user_data_dir_supported=false`, your installed
+  Crawl4AI / browser-use versions silently ignore `user_data_dir`. The
+  cascade still works, but D's CF clearance doesn't carry forward.
+  Upgrade: `pip install -U crawl4ai>=0.6 browser-use>=0.5`.
+
 ## [1.2.0] - 2026-05-06
 
 Tasca-unblock release. Three additive request fields and one additive response

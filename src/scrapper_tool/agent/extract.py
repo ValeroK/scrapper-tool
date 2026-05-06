@@ -125,12 +125,20 @@ async def run_extract(
             apply_chunking=True,
         )
 
-    browser_cfg = BrowserConfig(
-        headless=not config.headful,
-        browser_type=_crawl4ai_browser_type(config.browser),
-        proxy=config.proxy,
-        verbose=False,
-    )
+    # v1.3.0: when the cascade orchestrator (or env var) set a user_data_dir,
+    # pass it to Crawl4AI's BrowserConfig so cookies (cf_clearance) persist
+    # on disk between launches against the same dir. Crawl4AI honors
+    # user_data_dir only when use_persistent_context=True — both must be set.
+    browser_cfg_kwargs: dict[str, Any] = {
+        "headless": not config.headful,
+        "browser_type": _crawl4ai_browser_type(config.browser),
+        "proxy": config.proxy,
+        "verbose": False,
+    }
+    if config.user_data_dir:
+        browser_cfg_kwargs["user_data_dir"] = config.user_data_dir
+        browser_cfg_kwargs["use_persistent_context"] = True
+    browser_cfg = BrowserConfig(**browser_cfg_kwargs)
     run_cfg = CrawlerRunConfig(
         cache_mode=CacheMode.BYPASS,
         extraction_strategy=extraction_strategy,

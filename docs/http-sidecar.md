@@ -197,6 +197,33 @@ curl -s -X POST http://localhost:5792/scrape \
   }'
 ```
 
+### Cross-request CF clearance reuse (v1.3.0+)
+
+By default v1.3.0 allocates a per-cascade ephemeral browser profile dir, threads it to Pattern D + E1 + E2, then deletes it on every exit path. This eliminates the redundant CF challenges that pre-1.3.0 made E-tier escalations fresh-fight already-bypassed sites: D solves Cloudflare once, captures the HTML, and any E1/E2 fallback launches against the same on-disk cookie jar (including `cf_clearance`). Net effect on Tasca: ~70s + 2 LLM calls + no result becomes ~25s + 1 LLM call + result.
+
+For poll-style adapters (the dominant Tasca pattern: hit the same domain every 5 minutes), pass `persist_browser_profile_dir` to opt into cross-request reuse. The caller owns the lifecycle:
+
+```bash
+curl -s -X POST http://localhost:5792/scrape \
+  -H "Content-Type: application/json" \
+  -d '{
+    "url": "https://tascaparts.com/search?q=90915-YZZD4",
+    "mode": "hostile",
+    "pattern_d_network_idle": true,
+    "persist_browser_profile_dir": "/var/lib/scrapper/profiles/tasca/"
+  }'
+```
+
+**Caller responsibilities** with `persist_browser_profile_dir`:
+
+1. **Per-vendor isolation** — use a different dir per host (e.g. `/profiles/tasca/`, `/profiles/amayama/`). CF clearance cookies are domain-bound but cross-vendor profile reuse leaks fingerprint state, which CF flags eventually.
+2. **Periodic rotation** — `cf_clearance` cookies have a ~30 min TTL. Long-lived profiles get flagged as suspicious if reused across many requests. Rotate the dir every 30 min via cron or your own scheduler.
+3. **Cleanup** — the sidecar will NEVER delete a caller-provided dir. Without rotation, the dir accumulates session state indefinitely.
+
+When `persist_browser_profile_dir` is unset, the cascade ephemeral default applies and you get the within-cascade benefit without any operator burden.
+
+If your runtime's Crawl4AI or browser-use version silently ignores `user_data_dir` (older releases), `/ready` emits a `user_data_dir_unsupported` warning so you can upgrade. Check `GET /ready | jq .checks.user_data_dir_supported` to confirm the runtime can carry CF state forward.
+
 ---
 
 ## `/fetch`, `/extract`, `/browse` — power-user control

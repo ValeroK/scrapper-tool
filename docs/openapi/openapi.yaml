@@ -6,7 +6,7 @@ info:
     \ E1 \u2192 E2 auto-escalation ladder server-side so callers don't need per-pattern\
     \ logic. Pattern D (Scrapling) is invoked when the [hostile] extra is installed;\
     \ skipped otherwise (cascade falls through to E1)."
-  version: 1.2.0
+  version: 1.3.0
 paths:
   /health:
     get:
@@ -435,6 +435,23 @@ components:
             cold-call latency low for the common Cloudflare-but-not-SPA case (Amayama,
             Subaru-JP).
           default: false
+        persist_browser_profile_dir:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Persist Browser Profile Dir
+          description: "Optional absolute path to a persistent browser profile dir\
+            \ (NEW v1.3.0). When set, Pattern D and any E1/E2 escalation step share\
+            \ this dir, so Cloudflare clearance cookies (cf_clearance) persist across\
+            \ requests. Caller is responsible for: (1) per-vendor isolation (use a\
+            \ different dir per host so clearance state doesn't leak between targets),\
+            \ (2) periodic cleanup to avoid Cloudflare's stale-profile detection (~30\
+            \ min TTL is a safe default \u2014 rotate via cron or the consumer's own\
+            \ scheduler). When unset (default), the cascade creates an ephemeral per-request\
+            \ dir, shares it across D + E1 + E2, and deletes it on every exit path.\
+            \ Use this field only when you want cross-request reuse \u2014 the per-cascade\
+            \ default already eliminates the redundant CF challenges that caused E-tier\
+            \ escalations to fresh-fight already-bypassed sites."
       type: object
       required:
       - url

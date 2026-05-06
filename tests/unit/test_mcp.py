@@ -30,6 +30,7 @@ Plus the CLI-style ``main()`` entrypoint:
 from __future__ import annotations
 
 import asyncio
+from typing import Any
 from unittest.mock import MagicMock
 
 import pytest
@@ -795,3 +796,101 @@ class TestAutoScrapeHostileOnly:
         assert result["hostile_skipped"] is True
         assert result["is_structured"] is False
         assert "hostile_only" in result["error"].lower() or "d failed" in result["error"].lower()
+
+
+# ---- v1.3.0: shared CF clearance via per-cascade user_data_dir (MCP) -----
+
+
+class TestAutoScrapeSharedProfileDir:
+    """v1.3.0 - MCP auto_scrape allocates per-request user_data_dir."""
+
+    @pytest.mark.asyncio
+    async def test_d_receives_user_data_dir(
+        self,
+        server: object,
+        fake_curl: type[FakeCurlSession],
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        # All A/B/C profiles 403 -> BlockedError -> D step.
+        fake_curl.STATUS_FOR_PROFILE = {
+            "chrome133a": 403,
+            "chrome124": 403,
+            "safari18_0": 403,
+            "firefox135": 403,
+        }
+        captured_kwargs: dict[str, object] = {}
+        product_html = (
+            '<html><head><script type="application/ld+json">'
+            '{"@context":"https://schema.org","@type":"Product","name":"X",'
+            '"sku":"X1","offers":{"@type":"Offer","price":"9.99","priceCurrency":"USD"}}'
+            "</script></head><body></body></html>"
+        )
+
+        class CapturingFetcher(_FakeMcpFetcher):
+            async def async_fetch(self, url: str, **kwargs: object) -> object:
+                captured_kwargs.clear()
+                captured_kwargs.update(kwargs)
+                return _FakeMcpScraplingResponse(html=product_html)
+
+        import scrapper_tool.patterns.d as d_mod
+
+        def fake_hostile_client(**_kwargs: object) -> CapturingFetcher:
+            return CapturingFetcher(_FakeMcpScraplingResponse(html=product_html))
+
+        monkeypatch.setattr(d_mod, "hostile_client", fake_hostile_client)
+
+        tool = _get_tool(server, "auto_scrape")
+        result = await tool.fn(url="https://hostile.com/p")  # type: ignore[attr-defined]
+
+        assert result["pattern_used"] == "d"
+        assert "user_data_dir" in captured_kwargs, (
+            "MCP cascade must forward user_data_dir to Scrapling"
+        )
+        assert "scrapper-cascade-mcp-" in str(captured_kwargs["user_data_dir"])
+
+    @pytest.mark.asyncio
+    async def test_caller_provided_persist_dir_honored(
+        self,
+        server: object,
+        fake_curl: type[FakeCurlSession],
+        monkeypatch: pytest.MonkeyPatch,
+        tmp_path: Any,
+    ) -> None:
+        fake_curl.STATUS_FOR_PROFILE = {
+            "chrome133a": 403,
+            "chrome124": 403,
+            "safari18_0": 403,
+            "firefox135": 403,
+        }
+        captured_kwargs: dict[str, object] = {}
+        caller_dir = str(tmp_path / "vendor-tasca-profile")
+        product_html = (
+            '<html><head><script type="application/ld+json">'
+            '{"@context":"https://schema.org","@type":"Product","name":"Y","sku":"Y1",'
+            '"offers":{"@type":"Offer","price":"1.00","priceCurrency":"USD"}}'
+            "</script></head><body></body></html>"
+        )
+
+        class CapturingFetcher(_FakeMcpFetcher):
+            async def async_fetch(self, url: str, **kwargs: object) -> object:
+                captured_kwargs.clear()
+                captured_kwargs.update(kwargs)
+                return _FakeMcpScraplingResponse(html=product_html)
+
+        import scrapper_tool.patterns.d as d_mod
+
+        def fake_hostile_client(**_kwargs: object) -> CapturingFetcher:
+            return CapturingFetcher(_FakeMcpScraplingResponse(html=product_html))
+
+        monkeypatch.setattr(d_mod, "hostile_client", fake_hostile_client)
+
+        tool = _get_tool(server, "auto_scrape")
+        result = await tool.fn(  # type: ignore[attr-defined]
+            url="https://hostile.com/p",
+            persist_browser_profile_dir=caller_dir,
+        )
+
+        assert result["pattern_used"] == "d"
+        assert captured_kwargs.get("user_data_dir") == caller_dir, (
+            "caller-provided dir must be honored verbatim, not replaced with ephemeral"
+        )
