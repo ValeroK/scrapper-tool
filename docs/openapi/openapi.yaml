@@ -6,7 +6,7 @@ info:
     \ E1 \u2192 E2 auto-escalation ladder server-side so callers don't need per-pattern\
     \ logic. Pattern D (Scrapling) is invoked when the [hostile] extra is installed;\
     \ skipped otherwise (cascade falls through to E1)."
-  version: 1.3.0
+  version: 1.4.0
 paths:
   /health:
     get:
@@ -58,6 +58,23 @@ paths:
                 additionalProperties: true
                 type: object
                 title: Response Ready
+  /metrics:
+    get:
+      tags:
+      - operational
+      summary: Prometheus exposition (v1.4.0+)
+      description: 'Standard Prometheus text-format exposition. Counters: ``scrapper_pattern_used_total``,
+        ``scrapper_responses_structured_total``, ``scrapper_responses_unstructured_total``,
+        ``scrapper_user_data_dir_reused_total``. Histograms: ``scrapper_pattern_duration_seconds``
+        (per step+outcome), ``scrapper_cascade_steps`` (per request). Returns 503
+        when ``prometheus-client`` isn''t installed (older [http] extras).'
+      operationId: metrics
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema: {}
   /fetch:
     post:
       tags:
@@ -435,6 +452,19 @@ components:
             cold-call latency low for the common Cloudflare-but-not-SPA case (Amayama,
             Subaru-JP).
           default: false
+        solve_cloudflare:
+          anyOf:
+          - type: boolean
+          - type: string
+            const: auto
+          title: Solve Cloudflare
+          description: 'Pattern D''s Cloudflare-solve behavior (NEW v1.4.0). ``auto``
+            (default): probe first without the solver; redo with solver only when
+            a CF challenge body is detected. Saves ~10s on vendors that don''t gate
+            behind CF. ``True``: always run the solver on the first fetch (pre-1.4.0
+            behavior; explicit when caller knows the vendor always serves a CF challenge).
+            ``False``: never run the solver; D fetches once unprotected.'
+          default: auto
         persist_browser_profile_dir:
           anyOf:
           - type: string

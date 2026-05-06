@@ -4,6 +4,103 @@ All notable changes to `scrapper-tool` are recorded here. Format follows [Keep a
 
 ## [Unreleased]
 
+## [1.4.0] - 2026-05-06
+
+SPA-vendor unblock + observability + the simple-by-default API. Closes the
+gap between "Pattern D defeats Cloudflare" and "extraction returns rows"
+for vendors whose result pages render in HTML cards rather than
+schema.org/Product LD+JSON. Adds smart defaults so most callers stop
+needing per-vendor flag combos. Adds `escalation_log` + `/metrics` for
+debugging + ops. Backward-compatible — every flag from v1.3.0 keeps
+working.
+
+The deliberate split this release introduces:
+
+- **Simple path** (95% of callers): `POST /scrape {"url": "..."}` or
+  `{"url": "...", "schema_json": {...}}`. Sidecar picks the right pattern.
+- **Controllable path** (adapters with vendor recon): explicit `mode`,
+  `solve_cloudflare`, `pattern_d_network_idle`, `persist_browser_profile_dir`
+  fields work as before.
+
+### Added
+
+- **CSS-schema extraction inside Pattern D**. When `schema_json` is
+  shaped like `{"baseSelector": "...", "fields": [...]}`, Pattern D
+  applies it directly to the HTML it just fetched — no LLM call, no
+  E1 escalation. Built on selectolax (a core dep), works regardless
+  of which extras are installed. Detected via the new
+  `_extractors.css.looks_like_css_schema` helper. Pydantic-shaped
+  schemas continue to route through E1's LLM path unchanged.
+- **`intermediate_raw_text`** on every `/scrape` and `auto_scrape`
+  response. Always populated when Pattern D ran, regardless of whether
+  the cascade returned at D or escalated. Lets adapters recover D's
+  HTML for custom in-process parsers (Megazip's selectolax fallback)
+  without depending on the sidecar's success classifier.
+- **`escalation_log: list[dict]`** on responses. Each entry carries
+  `{step, outcome, reason, duration_s, detail}`. Replaces the opaque
+  `pattern_attempts: list[str]` for ops debugging — operators can now
+  see WHY a cascade escalated, not just WHICH steps ran. Outcomes:
+  `won | failed | rejected | skipped`. Reasons: `ok | blocked |
+  no_signal | extra_missing | exception`. The legacy `pattern_attempts`
+  field stays alongside (derived).
+- **Smart defaults — auto-CF detection** (`solve_cloudflare="auto"`
+  default). Pattern D's first fetch goes WITHOUT the solver. If the
+  response body matches a CF challenge fingerprint
+  (`<title>Just a moment...</title>` / `cf-mitigated"` / status 403/503
+  with CF body), redo with the solver. Saves ~10s per call on vendors
+  that don't gate behind CF. Disable with explicit `solve_cloudflare:
+  true` or `false`.
+- **Smart defaults — auto-SPA detection**. After Pattern D returns no
+  signal, if the HTML looks like an unhydrated SPA shell (small + has
+  `id="root"`, `data-reactroot`, `window.__NUXT__`, etc.), retry once
+  with `network_idle=true`. Saves operators from having to know which
+  vendors need the SPA-hydration wait.
+- **New `_extractors/` module** — extractor registry with built-ins:
+  `json_ld_product` (lifted from existing B/C), `microdata_price`
+  (lifted from existing C), `css` (NEW; selectolax), `open_graph`
+  (NEW; OpenGraph product tags). All exposed via
+  `scrapper_tool._extractors.get(name).extract(html)`.
+- **`solve_cloudflare`** field on `ScrapeRequest`. Accepts
+  `"auto"` (default), `True`, or `False`.
+- **`/metrics` endpoint** — Prometheus exposition.
+  `scrapper_pattern_used_total`, `scrapper_responses_structured_total`,
+  `scrapper_responses_unstructured_total`,
+  `scrapper_pattern_duration_seconds` (histogram per step+outcome),
+  `scrapper_cascade_steps`, `scrapper_user_data_dir_reused_total`.
+  Returns 503 when `prometheus-client` isn't installed (older `[http]`
+  installs); the bundled Docker image always has it. Adds
+  `prometheus-client>=0.20` to the `[http]` extra.
+
+### Changed
+
+- **Pattern D's default behavior changed**: `solve_cloudflare` is now
+  `"auto"` (was implicit `True` in v1.3.0). Most callers see lower
+  cold-call latency for non-CF vendors; CF-protected vendors still
+  get the solver via auto-detection. To restore strict v1.3.0 behavior,
+  set `solve_cloudflare: true` explicitly.
+
+### Documentation
+
+- **New `docs/cookbook.md`** with worked recipes per vendor shape:
+  server-rendered LD+JSON (Amayama), SPA with CSS cards (Tasca),
+  D-then-custom-parser hybrid (Megazip), LLM extraction with strict
+  schema, pure D no-escalation, cross-request CF clearance reuse,
+  force-pattern shortcuts. Plus debugging recipes (`escalation_log`
+  walkthrough, `/ready` capability check, `/metrics` query).
+- `docs/http-sidecar.md` — new "Two paths: simple by default,
+  controllable when you need it" section near the top. Smart-defaults
+  table. Response-anatomy breakdown. `/metrics` documentation.
+
+### Migration notes
+
+- All additions are additive. No callers break.
+- Adapters serving SPA vendors should pass a CSS-shaped `schema_json`.
+  See `docs/cookbook.md` Recipe 2 (Tasca) and Recipe 3 (Megazip).
+- Adapters that pin `solve_cloudflare: true` keep working but waste
+  ~10s on non-CF probes. Drop the flag to opt into auto-detection.
+- The legacy `pattern_attempts` is still emitted; switch consumers to
+  `escalation_log` opportunistically. Targeted for v2.0.0 removal.
+
 ## [1.3.0] - 2026-05-06
 
 Tasca-cost release. Pattern D's Cloudflare clearance now carries forward to

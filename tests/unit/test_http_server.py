@@ -1798,6 +1798,14 @@ class TestPatternDNetworkIdle:
     async def test_d_default_does_not_set_network_idle(
         self, app_no_auth: Any, monkeypatch: pytest.MonkeyPatch
     ) -> None:
+        # v1.4.0 contract: network_idle defaults to False; the cascade
+        # auto-detects SPA shells and retries with network_idle=True only
+        # when needed. Fixture HTML doesn't trigger SPA detection so the
+        # captured kwargs should keep network_idle=False.
+        # Pre-1.4.0 (v1.2.0/v1.3.0) also pinned solve_cloudflare=True
+        # always — v1.4.0 changed that default to "auto" detection
+        # (first pass without solver, retry with solver if CF body
+        # detected). The assertion now pins the auto-default behavior.
         from scrapper_tool.errors import BlockedError
 
         async def fake_ladder(method: str, url: str, **kwargs: Any) -> Any:
@@ -1810,7 +1818,11 @@ class TestPatternDNetworkIdle:
 
         async with _client(app_no_auth) as client:
             await client.post("/scrape", json={"url": "https://hostile.com/p"})
-        assert captor.captured_kwargs.get("solve_cloudflare") is True
+        # v1.4.0 default: first-pass solver=False (auto-CF detection
+        # decides whether a second pass with the solver is needed).
+        # Fixture HTML doesn't look like a CF challenge, so no retry,
+        # so the captured (last) call shows solve_cloudflare=False.
+        assert captor.captured_kwargs.get("solve_cloudflare") is False
         assert captor.captured_kwargs.get("network_idle") is False, (
             "Default must keep network_idle=False to preserve cold-call latency"
         )
@@ -2119,3 +2131,417 @@ class TestSharedProfileDir:
         assert "user_data_dir_supported" in body["checks"], (
             "v1.3.0: /ready must report whether installed agent libs accept user_data_dir"
         )
+
+
+# --- v1.4.0 — extractor registry + CSS dispatch ---------------------------
+
+
+class TestExtractorRegistry:
+    def test_all_names_includes_builtins(self) -> None:
+        from scrapper_tool._extractors import all_names
+
+        names = all_names()
+        for required in ("css", "json_ld_product", "microdata_price", "open_graph"):
+            assert required in names, f"missing built-in extractor: {required}"
+
+    def test_css_extractor_returns_rows(self) -> None:
+        from scrapper_tool._extractors import get
+
+        html = (
+            "<html><body>"
+            '<div class="row"><h3>A</h3><span class="price">9.99</span></div>'
+            '<div class="row"><h3>B</h3><span class="price">19.99</span></div>'
+            "</body></html>"
+        )
+        schema = {
+            "baseSelector": "div.row",
+            "fields": [
+                {"name": "title", "selector": "h3", "type": "text"},
+                {"name": "price", "selector": "span.price", "type": "text"},
+            ],
+        }
+        result = get("css").extract(html, options={"schema": schema})
+        assert result.has_signal is True
+        assert result.data == [
+            {"title": "A", "price": "9.99"},
+            {"title": "B", "price": "19.99"},
+        ]
+
+    def test_css_extractor_returns_empty_when_no_matches(self) -> None:
+        from scrapper_tool._extractors import get
+
+        schema = {
+            "baseSelector": "div.does-not-exist",
+            "fields": [{"name": "title", "selector": "h3", "type": "text"}],
+        }
+        result = get("css").extract("<html></html>", options={"schema": schema})
+        assert result.has_signal is False
+        assert result.data is None
+
+    def test_css_extractor_drops_rows_with_required_field_missing(self) -> None:
+        from scrapper_tool._extractors import get
+
+        # First row has no price; should be dropped (price required).
+        html = (
+            "<html><body>"
+            '<div class="row"><h3>A</h3></div>'
+            '<div class="row"><h3>B</h3><span class="price">19.99</span></div>'
+            "</body></html>"
+        )
+        schema = {
+            "baseSelector": "div.row",
+            "fields": [
+                {"name": "title", "selector": "h3", "type": "text"},
+                {"name": "price", "selector": "span.price", "type": "text"},
+            ],
+        }
+        result = get("css").extract(html, options={"schema": schema})
+        assert result.has_signal is True
+        assert result.data == [{"title": "B", "price": "19.99"}]
+
+    def test_css_extractor_attribute_field(self) -> None:
+        from scrapper_tool._extractors import get
+
+        html = '<html><body><a class="link" href="/widgets/1">Widget</a></body></html>'
+        schema = {
+            "baseSelector": "a.link",
+            "fields": [
+                {"name": "url", "selector": "a", "type": "attribute", "attribute": "href"},
+                {"name": "title", "selector": "a", "type": "text"},
+            ],
+        }
+        # Note: outer 'a.link' matches the row; inner 'a' selector matches the
+        # row itself when the row IS an <a>. This is the common pattern for
+        # link-based row selectors.
+        result = get("css").extract(html, options={"schema": schema})
+        assert result.has_signal is True
+        assert result.data == [{"url": "/widgets/1", "title": "Widget"}]
+
+    def test_open_graph_extractor_picks_up_product_tags(self) -> None:
+        from scrapper_tool._extractors import get
+
+        html = (
+            "<html><head>"
+            '<meta property="og:title" content="Test Widget">'
+            '<meta property="og:product:price:amount" content="49.99">'
+            '<meta property="og:product:price:currency" content="USD">'
+            "</head></html>"
+        )
+        result = get("open_graph").extract(html)
+        assert result.has_signal is True
+        assert result.data is not None
+        assert result.data["title"] == "Test Widget"
+        assert result.data["price"] == "49.99"
+        assert result.data["currency"] == "USD"
+
+
+class TestCssExtractInD:
+    """v1.4.0 — Pattern D applies a CSS schema to its HTML when supplied.
+
+    This is the change that flips Tasca / Megazip / RevolutionParts dealers
+    from "D defeats CF but extraction returns empty" to operational.
+    """
+
+    @pytest.mark.asyncio
+    async def test_css_schema_extracts_rows_from_d_html(
+        self, app_no_auth: Any, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from scrapper_tool.errors import BlockedError
+
+        async def fake_ladder(method: str, url: str, **kwargs: Any) -> Any:
+            raise BlockedError("blocked")
+
+        monkeypatch.setattr("scrapper_tool.ladder.request_with_ladder", fake_ladder)
+        product_html = (
+            "<html><body>"
+            '<div class="result-card"><h3>Widget A</h3>'
+            '<span class="price">19.99</span>'
+            '<a href="/p/widget-a">link</a></div>'
+            '<div class="result-card"><h3>Widget B</h3>'
+            '<span class="price">29.99</span>'
+            '<a href="/p/widget-b">link</a></div>'
+            "</body></html>"
+        )
+        _install_fake_hostile_client(
+            monkeypatch, response=_FakeScraplingResponse(html=product_html)
+        )
+
+        css_schema = {
+            "baseSelector": "div.result-card",
+            "fields": [
+                {"name": "title", "selector": "h3", "type": "text"},
+                {"name": "price", "selector": "span.price", "type": "text"},
+                {"name": "url", "selector": "a", "type": "attribute", "attribute": "href"},
+            ],
+        }
+        async with _client(app_no_auth) as client:
+            resp = await client.post(
+                "/scrape",
+                json={
+                    "url": "https://hostile.com/search?q=widget",
+                    "schema_json": css_schema,
+                },
+            )
+        body = resp.json()
+        assert body["pattern_used"] == "d"
+        assert body["is_structured"] is True
+        # CSS extractor's output is the canonical ``data``.
+        assert body["data"] == [
+            {"title": "Widget A", "price": "19.99", "url": "/p/widget-a"},
+            {"title": "Widget B", "price": "29.99", "url": "/p/widget-b"},
+        ]
+
+    @pytest.mark.asyncio
+    async def test_pydantic_schema_does_not_trigger_css_path(
+        self, app_no_auth: Any, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # Pydantic JSON schema -> D doesn't run CSS extractor; falls back to
+        # B/C (which finds nothing here) and the cascade escalates.
+        from scrapper_tool.errors import BlockedError
+
+        async def fake_ladder(method: str, url: str, **kwargs: Any) -> Any:
+            raise BlockedError("blocked")
+
+        monkeypatch.setattr("scrapper_tool.ladder.request_with_ladder", fake_ladder)
+        _install_fake_hostile_client(
+            monkeypatch,
+            response=_FakeScraplingResponse(html="<html><body>plain</body></html>"),
+        )
+
+        fake_result = MagicMock()
+        fake_result.mode = "extract"
+        fake_result.data = {"name": "via_e1"}
+        fake_result.final_url = "https://hostile.com/p"
+        fake_result.rendered_markdown = None
+        fake_result.screenshots = None
+        fake_result.tokens_used = 50
+        fake_result.steps_used = 1
+        fake_result.blocked = False
+        fake_result.error = None
+        fake_result.duration_s = 1.0
+        _mock_agent_module(monkeypatch, extract_result=fake_result)
+
+        async with _client(app_no_auth) as client:
+            resp = await client.post(
+                "/scrape",
+                json={
+                    "url": "https://hostile.com/p",
+                    "schema_json": {
+                        "type": "object",
+                        "properties": {"name": {"type": "string"}},
+                    },
+                },
+            )
+        body = resp.json()
+        # Pydantic schema -> D's CSS path skipped; cascade escalates to E1.
+        assert body["pattern_used"] == "e1"
+
+
+class TestIntermediateRawText:
+    """v1.4.0 — D's HTML is always exposed via intermediate_raw_text."""
+
+    @pytest.mark.asyncio
+    async def test_intermediate_raw_text_present_when_d_wins(
+        self, app_no_auth: Any, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from scrapper_tool.errors import BlockedError
+
+        async def fake_ladder(method: str, url: str, **kwargs: Any) -> Any:
+            raise BlockedError("blocked")
+
+        monkeypatch.setattr("scrapper_tool.ladder.request_with_ladder", fake_ladder)
+        _install_fake_hostile_client(
+            monkeypatch, response=_FakeScraplingResponse(html=_PRODUCT_HTML)
+        )
+
+        async with _client(app_no_auth) as client:
+            resp = await client.post("/scrape", json={"url": "https://hostile.com/p"})
+        body = resp.json()
+        assert body["pattern_used"] == "d"
+        assert body["intermediate_raw_text"] == _PRODUCT_HTML
+        assert body["raw_text"] == _PRODUCT_HTML
+
+    @pytest.mark.asyncio
+    async def test_intermediate_raw_text_present_when_d_rejected_then_e1_wins(
+        self, app_no_auth: Any, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # D fetches HTML but classifier rejects (no signal); E1 takes over.
+        # intermediate_raw_text must still carry D's HTML so adapters can
+        # fall back to their own in-process parser.
+        from scrapper_tool.errors import BlockedError
+
+        async def fake_ladder(method: str, url: str, **kwargs: Any) -> Any:
+            raise BlockedError("blocked")
+
+        monkeypatch.setattr("scrapper_tool.ladder.request_with_ladder", fake_ladder)
+        d_html = "<html><body>SPA shell — no LD+JSON, no microdata</body></html>"
+        _install_fake_hostile_client(monkeypatch, response=_FakeScraplingResponse(html=d_html))
+
+        fake_result = MagicMock()
+        fake_result.mode = "extract"
+        fake_result.data = {"name": "via_e1"}
+        fake_result.final_url = "https://hostile.com/p"
+        fake_result.rendered_markdown = "# Page"
+        fake_result.screenshots = None
+        fake_result.tokens_used = 50
+        fake_result.steps_used = 1
+        fake_result.blocked = False
+        fake_result.error = None
+        fake_result.duration_s = 1.0
+        _mock_agent_module(monkeypatch, extract_result=fake_result)
+
+        async with _client(app_no_auth) as client:
+            resp = await client.post(
+                "/scrape",
+                json={"url": "https://hostile.com/p", "schema_json": {"name": "str"}},
+            )
+        body = resp.json()
+        assert body["pattern_used"] == "e1"
+        assert body["intermediate_raw_text"] == d_html
+        # raw_text is None for E-tier wins; intermediate_raw_text is D's HTML.
+        assert body["raw_text"] is None
+
+
+class TestEscalationLog:
+    """v1.4.0 — structured per-step reasons replace opaque pattern_attempts."""
+
+    @pytest.mark.asyncio
+    async def test_a_b_c_won_log_entry(
+        self, app_no_auth: Any, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        async def fake_ladder(method: str, url: str, **kwargs: Any) -> tuple[Any, str]:
+            return _make_response(text=_PRODUCT_HTML, url=url), "chrome133a"
+
+        monkeypatch.setattr("scrapper_tool.ladder.request_with_ladder", fake_ladder)
+        async with _client(app_no_auth) as client:
+            resp = await client.post("/scrape", json={"url": "https://example.com/p"})
+        body = resp.json()
+        assert body["pattern_used"] == "a_b_c"
+        assert len(body["escalation_log"]) == 1
+        entry = body["escalation_log"][0]
+        assert entry["step"] == "a_b_c"
+        assert entry["outcome"] == "won"
+        assert entry["reason"] == "ok"
+        assert "duration_s" in entry
+
+    @pytest.mark.asyncio
+    async def test_d_skipped_log_entry_when_extra_missing(
+        self, app_no_auth: Any, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from scrapper_tool.errors import BlockedError
+
+        async def fake_ladder(method: str, url: str, **kwargs: Any) -> Any:
+            raise BlockedError("blocked")
+
+        monkeypatch.setattr("scrapper_tool.ladder.request_with_ladder", fake_ladder)
+        monkeypatch.setattr(http_server, "_hostile_available", lambda: False)
+        fake_result = MagicMock()
+        fake_result.mode = "extract"
+        fake_result.data = {"name": "via_e1"}
+        fake_result.final_url = "https://hostile.com/p"
+        fake_result.rendered_markdown = None
+        fake_result.screenshots = None
+        fake_result.tokens_used = 50
+        fake_result.steps_used = 1
+        fake_result.blocked = False
+        fake_result.error = None
+        fake_result.duration_s = 1.0
+        _mock_agent_module(monkeypatch, extract_result=fake_result)
+
+        async with _client(app_no_auth) as client:
+            resp = await client.post(
+                "/scrape",
+                json={"url": "https://hostile.com/p", "schema_json": {"name": "str"}},
+            )
+        body = resp.json()
+        steps = [e["step"] for e in body["escalation_log"]]
+        assert "a_b_c" in steps
+        assert "d" in steps
+        assert "e1" in steps
+        d_entry = next(e for e in body["escalation_log"] if e["step"] == "d")
+        assert d_entry["outcome"] == "skipped"
+        assert d_entry["reason"] == "extra_missing"
+
+
+class TestAutoCFAndAutoSPA:
+    """v1.4.0 — D auto-detects CF challenges and SPA shells."""
+
+    @pytest.mark.asyncio
+    async def test_auto_cf_skips_solver_when_no_challenge(
+        self, app_no_auth: Any, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # Default solve_cloudflare="auto"; fixture HTML doesn't look like
+        # a CF challenge; so the captured (only) call has solve_cloudflare=False.
+        from scrapper_tool.errors import BlockedError
+
+        async def fake_ladder(method: str, url: str, **kwargs: Any) -> Any:
+            raise BlockedError("blocked")
+
+        monkeypatch.setattr("scrapper_tool.ladder.request_with_ladder", fake_ladder)
+        captor = _install_capturing_hostile_client(
+            monkeypatch, response=_FakeScraplingResponse(html=_PRODUCT_HTML)
+        )
+
+        async with _client(app_no_auth) as client:
+            await client.post("/scrape", json={"url": "https://hostile.com/p"})
+        # Auto-default = first probe with solve=False; no CF body so no retry.
+        assert captor.captured_kwargs.get("solve_cloudflare") is False
+
+    @pytest.mark.asyncio
+    async def test_explicit_solve_cloudflare_true_passes_through(
+        self, app_no_auth: Any, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from scrapper_tool.errors import BlockedError
+
+        async def fake_ladder(method: str, url: str, **kwargs: Any) -> Any:
+            raise BlockedError("blocked")
+
+        monkeypatch.setattr("scrapper_tool.ladder.request_with_ladder", fake_ladder)
+        captor = _install_capturing_hostile_client(
+            monkeypatch, response=_FakeScraplingResponse(html=_PRODUCT_HTML)
+        )
+
+        async with _client(app_no_auth) as client:
+            await client.post(
+                "/scrape",
+                json={"url": "https://hostile.com/p", "solve_cloudflare": True},
+            )
+        assert captor.captured_kwargs.get("solve_cloudflare") is True
+
+
+# --- v1.4.0 — /metrics Prometheus endpoint --------------------------------
+
+
+class TestMetricsEndpoint:
+    @pytest.mark.asyncio
+    async def test_metrics_returns_prometheus_text_format(self, app_no_auth: Any) -> None:
+        async with _client(app_no_auth) as client:
+            resp = await client.get("/metrics")
+        # Either 200 (prometheus-client installed) or 503 (not installed).
+        assert resp.status_code in (200, 503)
+        if resp.status_code == 200:
+            body = resp.text
+            # Standard Prometheus exposition starts with metric metadata
+            # comments. Specific to our registry: we always have at least
+            # the four counter / two histogram families defined.
+            assert "scrapper_pattern_used" in body
+            assert "scrapper_responses_structured" in body
+
+    @pytest.mark.asyncio
+    async def test_metrics_records_pattern_used_after_scrape(
+        self, app_no_auth: Any, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # Run a /scrape that wins on A/B/C, then /metrics should show
+        # scrapper_pattern_used_total{pattern="a_b_c"} >= 1.
+        async def fake_ladder(method: str, url: str, **kwargs: Any) -> tuple[Any, str]:
+            return _make_response(text=_PRODUCT_HTML, url=url), "chrome133a"
+
+        monkeypatch.setattr("scrapper_tool.ladder.request_with_ladder", fake_ladder)
+        async with _client(app_no_auth) as client:
+            await client.post("/scrape", json={"url": "https://example.com/p"})
+            metrics_resp = await client.get("/metrics")
+        if metrics_resp.status_code != 200:
+            pytest.skip("prometheus-client not installed in this build")
+        body = metrics_resp.text
+        # Counter line shape: scrapper_pattern_used_total{pattern="a_b_c"} <N>
+        assert 'scrapper_pattern_used_total{pattern="a_b_c"}' in body

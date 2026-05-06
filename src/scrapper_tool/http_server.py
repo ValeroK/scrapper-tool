@@ -160,6 +160,19 @@ class ScrapeRequest(BaseModel):
             "common Cloudflare-but-not-SPA case (Amayama, Subaru-JP)."
         ),
     )
+    solve_cloudflare: bool | Literal["auto"] = Field(
+        "auto",
+        description=(
+            "Pattern D's Cloudflare-solve behavior (NEW v1.4.0). "
+            "``auto`` (default): probe first without the solver; redo with "
+            "solver only when a CF challenge body is detected. Saves ~10s "
+            "on vendors that don't gate behind CF. "
+            "``True``: always run the solver on the first fetch (pre-1.4.0 "
+            "behavior; explicit when caller knows the vendor always serves "
+            "a CF challenge). "
+            "``False``: never run the solver; D fetches once unprotected."
+        ),
+    )
     persist_browser_profile_dir: str | None = Field(
         None,
         description=(
@@ -544,6 +557,46 @@ def _build_app(
     async def ready() -> dict[str, Any]:
         return await _readiness_payload()
 
+    @app.get(
+        "/metrics",
+        operation_id="metrics",
+        tags=["operational"],
+        summary="Prometheus exposition (v1.4.0+)",
+        description=(
+            "Standard Prometheus text-format exposition. Counters: "
+            "``scrapper_pattern_used_total``, "
+            "``scrapper_responses_structured_total``, "
+            "``scrapper_responses_unstructured_total``, "
+            "``scrapper_user_data_dir_reused_total``. "
+            "Histograms: ``scrapper_pattern_duration_seconds`` (per step+outcome), "
+            "``scrapper_cascade_steps`` (per request). "
+            "Returns 503 when ``prometheus-client`` isn't installed (older "
+            "[http] extras)."
+        ),
+    )
+    async def metrics():  # type: ignore[no-untyped-def]
+        # Return-type annotation intentionally omitted: ``Response`` is
+        # locally imported inside _build_app, and ``from __future__ import
+        # annotations`` would force FastAPI/Pydantic to resolve the
+        # forward-ref against module scope and fail.
+        cache = _get_prometheus_registry()
+        if cache is None:
+            return Response(
+                content="prometheus-client not installed in this build\n",
+                status_code=503,
+                media_type="text/plain; charset=utf-8",
+            )
+        from prometheus_client import (  # noqa: PLC0415
+            CONTENT_TYPE_LATEST,
+            generate_latest,
+        )
+
+        registry, _ = cache
+        return Response(
+            content=generate_latest(registry),
+            media_type=CONTENT_TYPE_LATEST,
+        )
+
     @app.post(
         "/fetch",
         operation_id="fetch",
@@ -644,32 +697,90 @@ def _build_overrides(req: Any) -> dict[str, Any]:
 def _extract_b_c(
     html: str, base_url: str | None
 ) -> tuple[dict[str, Any] | None, list[Any] | None, dict[str, Any] | None]:
-    """Run Pattern B + Pattern C on ``html``.
+    """Run Pattern B + Pattern C on ``html`` (legacy 3-tuple shape).
 
-    Returns ``(product, json_ld, microdata_price)`` — any field can be ``None``
-    when the corresponding signal is absent on the page.
+    Returns ``(product, json_ld, microdata_price)`` — any field can be
+    ``None`` when the corresponding signal is absent on the page.
+
+    v1.4.0+: this is now a thin wrapper over the extractor registry
+    (``scrapper_tool._extractors``). The pipeline runs ``json_ld_product``
+    + ``microdata_price`` + ``open_graph`` and unpacks back to the legacy
+    tuple shape so existing call-sites and tests don't break.
     """
-    from scrapper_tool.patterns.b import extract_product_offer  # noqa: PLC0415
-    from scrapper_tool.patterns.c import extract_microdata_price  # noqa: PLC0415
+    from scrapper_tool._extractors import get as get_extractor  # noqa: PLC0415
 
-    product_obj = extract_product_offer(html, base_url=base_url)
-    product = product_obj.model_dump(mode="json") if product_obj is not None else None
+    json_ld_result = get_extractor("json_ld_product").extract(html, base_url=base_url)
+    microdata_result = get_extractor("microdata_price").extract(html, base_url=base_url)
 
+    product: dict[str, Any] | None = None
     json_ld: list[Any] | None = None
-    try:
-        import extruct  # noqa: PLC0415
+    if json_ld_result.has_signal and isinstance(json_ld_result.data, dict):
+        product = json_ld_result.data.get("product")
+        json_ld = json_ld_result.data.get("json_ld")
 
-        raw = extruct.extract(html, base_url=base_url, syntaxes=["json-ld"], uniform=True)
-        json_ld = raw.get("json-ld") or None
-    except Exception:
-        json_ld = None
-
-    microdata = extract_microdata_price(html)
-    microdata_price = (
-        {"price": str(microdata[0]), "currency": microdata[1]} if microdata is not None else None
-    )
+    microdata_price: dict[str, Any] | None = None
+    if microdata_result.has_signal and isinstance(microdata_result.data, dict):
+        microdata_price = microdata_result.data
 
     return product, json_ld, microdata_price
+
+
+# v1.4.0 — Pattern D's auto-CF detection. When the first fetch returns a
+# CF challenge body, redo with solve_cloudflare=True. Saves ~10s on
+# vendors that don't gate behind CF.
+_CF_CHALLENGE_STATUS_CODES: frozenset[int] = frozenset({403, 503})
+_CF_CHALLENGE_BODY_MAX_BYTES = 50_000  # CF challenge pages are tiny
+_CF_BODY_SCAN_BYTES = 8_192
+_SPA_SHELL_MAX_BYTES = 30_000
+
+_CF_CHALLENGE_SIGNATURES: tuple[str, ...] = (
+    "<title>Just a moment...",
+    "<title>Attention Required! | Cloudflare",
+    "challenges.cloudflare.com/turnstile",
+    'cf-mitigated"',
+    "cf-chl-bypass",
+)
+
+
+def _is_cf_challenge_body(html: str, status_code: int) -> bool:
+    """True when the response looks like a Cloudflare challenge page."""
+    if (
+        status_code in _CF_CHALLENGE_STATUS_CODES
+        and html
+        and len(html) < _CF_CHALLENGE_BODY_MAX_BYTES
+    ):
+        return True
+    if not html:
+        return False
+    head = html[:_CF_BODY_SCAN_BYTES].lower()
+    return any(sig.lower() in head for sig in _CF_CHALLENGE_SIGNATURES)
+
+
+# v1.4.0 — auto-SPA detection. After D + extractors return zero signal,
+# detect SPA-shell patterns and trigger a network_idle retry.
+_SPA_SHELL_SIGNATURES: tuple[str, ...] = (
+    'id="root"',
+    'id="app"',
+    'id="__next"',
+    "data-reactroot",
+    "ng-version=",
+    "window.__nuxt__",
+    "window.__initial_state__",
+)
+
+
+def _looks_like_spa_shell(html: str) -> bool:
+    """True when the response looks like an unhydrated SPA shell.
+
+    Heuristic: small HTML (<30KB) with one of the canonical SPA root
+    markers. Not perfect — the network_idle retry will still find no
+    signal if the page is genuinely empty, but auto-SPA's cost is low
+    (just one extra Scrapling fetch) so the FP rate is acceptable.
+    """
+    if not html or len(html) > _SPA_SHELL_MAX_BYTES:
+        return False
+    head = html[:_CF_BODY_SCAN_BYTES].lower()
+    return any(sig.lower() in head for sig in _SPA_SHELL_SIGNATURES)
 
 
 async def _do_fetch(req: Any) -> dict[str, Any]:
@@ -737,6 +848,141 @@ async def _do_browse(req: Any) -> dict[str, Any]:
     return result.model_dump(mode="json")
 
 
+def _get_prometheus_registry() -> Any:
+    """Lazy-build the Prometheus registry + collectors (v1.4.0).
+
+    Returns ``None`` when ``prometheus-client`` isn't importable so the
+    sidecar still runs against pre-v1.4.0 ``[http]`` installs (no
+    forced upgrade). When importable, returns a tuple of
+    ``(registry, counters_dict)`` cached on the function as
+    ``_get_prometheus_registry._cache``.
+    """
+    cache: tuple[Any, dict[str, Any]] | None = getattr(_get_prometheus_registry, "_cache", None)
+    if cache is not None:
+        return cache
+    try:
+        from prometheus_client import (  # noqa: PLC0415
+            CollectorRegistry,
+            Counter,
+            Histogram,
+        )
+    except ImportError:
+        _get_prometheus_registry._cache = None  # type: ignore[attr-defined]
+        return None
+
+    registry = CollectorRegistry()
+    metrics: dict[str, Any] = {
+        "pattern_used": Counter(
+            "scrapper_pattern_used_total",
+            "Number of /scrape calls grouped by winning pattern.",
+            labelnames=["pattern"],
+            registry=registry,
+        ),
+        "responses_structured": Counter(
+            "scrapper_responses_structured_total",
+            "Number of /scrape calls where the sidecar's classifier emitted is_structured=true.",
+            labelnames=["pattern"],
+            registry=registry,
+        ),
+        "responses_unstructured": Counter(
+            "scrapper_responses_unstructured_total",
+            "Number of /scrape calls where the sidecar emitted is_structured=false.",
+            labelnames=["pattern"],
+            registry=registry,
+        ),
+        "pattern_duration_seconds": Histogram(
+            "scrapper_pattern_duration_seconds",
+            "Duration of an individual cascade step in seconds.",
+            labelnames=["step", "outcome"],
+            buckets=(0.5, 1.0, 2.5, 5.0, 10.0, 20.0, 30.0, 60.0, 120.0, 300.0),
+            registry=registry,
+        ),
+        "cascade_steps_total": Histogram(
+            "scrapper_cascade_steps",
+            "Number of cascade steps walked per /scrape call.",
+            buckets=(1, 2, 3, 4, 5),
+            registry=registry,
+        ),
+        "user_data_dir_reused": Counter(
+            "scrapper_user_data_dir_reused_total",
+            "Number of /scrape calls that reused a caller-provided persistent profile dir.",
+            registry=registry,
+        ),
+    }
+    cache = (registry, metrics)
+    _get_prometheus_registry._cache = cache  # type: ignore[attr-defined]
+    return cache
+
+
+def _observe_cascade(payload: dict[str, Any] | None, *, exception: bool = False) -> None:
+    """Update Prometheus counters / histograms after a cascade run.
+
+    Called from ``_do_scrape``'s try/finally. Safe to call when
+    ``prometheus-client`` isn't installed (no-op).
+    """
+    cache = _get_prometheus_registry()
+    if cache is None:
+        return
+    _, metrics = cache
+    if exception or payload is None:
+        # Cascade raised — count under a synthetic "exception" pattern
+        # for ops dashboards.
+        metrics["pattern_used"].labels(pattern="exception").inc()
+        return
+
+    pattern = payload.get("pattern_used") or "none"
+    metrics["pattern_used"].labels(pattern=pattern).inc()
+    if payload.get("is_structured"):
+        metrics["responses_structured"].labels(pattern=pattern).inc()
+    else:
+        metrics["responses_unstructured"].labels(pattern=pattern).inc()
+
+    log: list[dict[str, Any]] = payload.get("escalation_log") or []
+    for entry in log:
+        step = entry.get("step", "unknown")
+        outcome = entry.get("outcome", "unknown")
+        duration = entry.get("duration_s") or 0.0
+        metrics["pattern_duration_seconds"].labels(step=step, outcome=outcome).observe(
+            float(duration)
+        )
+    metrics["cascade_steps_total"].observe(len(log))
+
+
+def _build_log_entry(
+    step: str,
+    *,
+    outcome: str,
+    reason: str,
+    duration_s: float,
+    detail: str | None = None,
+) -> dict[str, Any]:
+    """v1.4.0 — one ``escalation_log`` row.
+
+    ``outcome`` ∈ ``{won, failed, rejected, skipped}``:
+
+    * ``won`` — step produced the cascade's final response.
+    * ``failed`` — step raised or the underlying anti-bot lost.
+    * ``rejected`` — step succeeded transport-wise but the classifier
+      didn't accept the result (e.g. Pattern D got HTML but no
+      structured signal — the cascade escalates).
+    * ``skipped`` — step couldn't run (extra missing, mode dispatch).
+
+    ``reason`` ∈ ``{ok, blocked, no_signal, extra_missing, exception}``.
+    Cheap enum so consumers (PartsPilot's per-vendor breaker accounting
+    in particular) can decide whether to count this against a vendor's
+    failure budget.
+    """
+    entry: dict[str, Any] = {
+        "step": step,
+        "outcome": outcome,
+        "reason": reason,
+        "duration_s": round(duration_s, 4),
+    }
+    if detail is not None:
+        entry["detail"] = detail
+    return entry
+
+
 def _classify_extraction_success(
     req: Any,
     *,
@@ -745,6 +991,7 @@ def _classify_extraction_success(
     product: dict[str, Any] | None,
     microdata_price: dict[str, Any] | None,
     json_ld: list[Any] | None,
+    css_data: list[Any] | dict[str, Any] | None = None,
 ) -> bool:
     """v1.1.2 success classifier — shared across A/B/C and Pattern D fetch steps.
 
@@ -752,16 +999,31 @@ def _classify_extraction_success(
     the same shape — raw HTML + B/C structured extraction — so the
     accept-or-escalate decision is identical. force_llm_extract still
     forces escalation when the caller explicitly wants the LLM.
+
+    v1.4.0+: ``css_data`` is the output of the CSS extractor when the
+    caller's ``schema_json`` was CSS-shaped. A non-empty list (or
+    non-empty dict) counts as a structured signal, regardless of
+    whether B/C also matched.
     """
     page_readable = _is_http_ok(status_code) and bool(text)
-    has_any_signal = product is not None or microdata_price is not None or bool(json_ld)
+    css_has_signal = bool(css_data) if css_data is not None else False
+    has_any_signal = (
+        product is not None or microdata_price is not None or bool(json_ld) or css_has_signal
+    )
 
     if req.mode == "fetch":
         return True
     if getattr(req, "force_llm_extract", False) and req.schema_json is not None:
         return False
+    # v1.4.0: when caller supplied a CSS-shaped schema, the CSS
+    # extractor's success is the canonical signal. CSS rows alone are
+    # enough; B/C fallback is bonus.
+    from scrapper_tool._extractors.css import looks_like_css_schema  # noqa: PLC0415
+
+    if looks_like_css_schema(req.schema_json):
+        return css_has_signal or (page_readable and has_any_signal)
     if req.schema_json is None:
-        return product is not None or microdata_price is not None
+        return product is not None or microdata_price is not None or css_has_signal
     return page_readable and has_any_signal
 
 
@@ -801,89 +1063,238 @@ async def _do_d_step(
     Skips entirely (no append to ``attempts``) when [hostile] isn't
     installed — the cascade then falls through to E1.
     """
+    log: list[dict[str, Any]] = req.__dict__.setdefault("_escalation_log", [])
     if not _hostile_available():
         _logger.info("scrape.d.skipped_no_extra", url=req.url)
+        log.append(
+            _build_log_entry(
+                "d",
+                outcome="skipped",
+                reason="extra_missing",
+                duration_s=0.0,
+                detail="[hostile] extra not installed",
+            )
+        )
         return None, None, True
 
     attempts.append("d")
+    d_start = time.perf_counter()
     try:
-        from scrapper_tool.patterns.d import hostile_client  # noqa: PLC0415
-
-        timeout_s = req.timeout_s or 30.0
-        # When network_idle is set, bump the fetcher's timeout floor to 30s
-        # so we don't trip Scrapling's inner timeout mid-hydration. The
-        # outer req.timeout_s still wins if it's larger.
-        network_idle = bool(getattr(req, "pattern_d_network_idle", False))
-        effective_timeout = max(timeout_s, 30.0) if network_idle else timeout_s
-        # v1.3.0: thread the cascade-resolved profile dir to Scrapling so
-        # cookies (cf_clearance) persist on disk and E1/E2 can inherit
-        # them via the same dir.
-        profile_dir = req.__dict__.get("_resolved_profile_dir")
-        fetch_kwargs: dict[str, Any] = {
-            "solve_cloudflare": True,
-            "network_idle": network_idle,
-        }
-        if profile_dir:
-            fetch_kwargs["user_data_dir"] = profile_dir
-        async with hostile_client(timeout=effective_timeout) as fetcher:
-            response = await fetcher.async_fetch(req.url, **fetch_kwargs)
-
-        # Scrapling's response object exposes html_content + status. Some
-        # versions name them differently — fall back gracefully.
-        html = getattr(response, "html_content", None) or getattr(response, "body", None) or ""
-        status_code = int(
-            getattr(response, "status", 0) or getattr(response, "status_code", 0) or 0
-        )
-        final_url = str(getattr(response, "url", req.url) or req.url)
-
-        product, json_ld, microdata_price = _extract_b_c(html, final_url)
-
-        success = _classify_extraction_success(
-            req,
-            status_code=status_code,
-            text=html,
-            product=product,
-            microdata_price=microdata_price,
-            json_ld=json_ld,
-        )
-
-        if not success:
-            _logger.info(
-                "scrape.d.no_signal",
-                url=req.url,
-                status_code=status_code,
-                has_product=product is not None,
-                has_price=microdata_price is not None,
-            )
-            return None, None, False
-
-        _logger.info("scrape.d.win", url=req.url, status_code=status_code)
-        return (
-            {
-                "url": final_url,
-                "pattern_used": "d",
-                "pattern_attempts": attempts,
-                "product": product,
-                "data": None,
-                "raw_text": html,
-                "json_ld": json_ld,
-                "microdata_price": microdata_price,
-                "rendered_markdown": None,
-                "screenshots": None,
-                "tokens_used": 0,
-                "steps_used": 0,
-                "blocked": False,
-                "error": None,
-                "hostile_skipped": False,
-                "is_structured": True,
-                "duration_s": time.perf_counter() - start,
-            },
-            None,
-            False,
-        )
+        html, status_code, final_url = await _d_fetch_with_smart_defaults(req)
     except Exception as exc:
         _logger.warning("scrape.d.failed", url=req.url, error=str(exc))
+        log.append(
+            _build_log_entry(
+                "d",
+                outcome="failed",
+                reason="exception",
+                duration_s=time.perf_counter() - d_start,
+                detail=f"{type(exc).__name__}: {exc!s}",
+            )
+        )
         return None, exc, False
+
+    # v1.4.0 — always stash D's HTML on the request so downstream
+    # response payloads can surface it as ``intermediate_raw_text``.
+    # Adapters that want to recover D's HTML after escalation read it
+    # there, regardless of whether D's classifier accepted the page.
+    req.__dict__["_d_intermediate_html"] = html
+
+    # v1.4.0 — multi-extractor pipeline. Default order: json_ld_product,
+    # microdata_price, open_graph. CSS schema added when the caller
+    # supplied one (auto-detected via shape).
+    css_data, product, json_ld, microdata_price = _run_d_extractors(req, html, final_url)
+
+    success = _classify_extraction_success(
+        req,
+        status_code=status_code,
+        text=html,
+        product=product,
+        microdata_price=microdata_price,
+        json_ld=json_ld,
+        css_data=css_data,
+    )
+
+    d_duration = time.perf_counter() - d_start
+    if not success:
+        _logger.info(
+            "scrape.d.no_signal",
+            url=req.url,
+            status_code=status_code,
+            has_product=product is not None,
+            has_price=microdata_price is not None,
+            has_css_data=bool(css_data),
+        )
+        log.append(
+            _build_log_entry(
+                "d",
+                outcome="rejected",
+                reason="no_signal",
+                duration_s=d_duration,
+                detail=f"status={status_code}; no LD+JSON / microdata / CSS rows",
+            )
+        )
+        return None, None, False
+
+    _logger.info("scrape.d.win", url=req.url, status_code=status_code)
+    log.append(_build_log_entry("d", outcome="won", reason="ok", duration_s=d_duration))
+    return (
+        {
+            "url": final_url,
+            "pattern_used": "d",
+            "pattern_attempts": attempts,
+            "escalation_log": list(log),
+            "product": product,
+            "data": css_data,  # v1.4.0 — populated from CSS extractor when schema supplied
+            "raw_text": html,
+            "intermediate_raw_text": html,  # v1.4.0 — always D's HTML when D ran
+            "json_ld": json_ld,
+            "microdata_price": microdata_price,
+            "rendered_markdown": None,
+            "screenshots": None,
+            "tokens_used": 0,
+            "steps_used": 0,
+            "blocked": False,
+            "error": None,
+            "hostile_skipped": False,
+            "is_structured": True,
+            "duration_s": time.perf_counter() - start,
+        },
+        None,
+        False,
+    )
+
+
+async def _d_fetch_with_smart_defaults(req: Any) -> tuple[str, int, str]:
+    """Fetch ``req.url`` via Pattern D with v1.4.0 smart defaults.
+
+    Returns ``(html, status_code, final_url)``.
+
+    Smart-default behaviors:
+
+    1. **Auto-CF detection** — when ``solve_cloudflare`` is unspecified
+       (or set to ``"auto"``), first fetch without the solver. If the
+       response looks like a CF challenge body, redo with the solver.
+       Saves ~10s on vendors that don't gate behind CF.
+    2. **Auto-SPA detection** — when ``pattern_d_network_idle`` wasn't
+       explicitly set AND the first response looks like an unhydrated
+       SPA shell (small HTML with React/Vue/Angular root markers),
+       retry once with ``network_idle=True``.
+
+    Both behaviors can be disabled by explicitly setting the flags.
+    """
+    from scrapper_tool.patterns.d import hostile_client  # noqa: PLC0415
+
+    timeout_s = req.timeout_s or 30.0
+    network_idle = bool(getattr(req, "pattern_d_network_idle", False))
+    effective_timeout = max(timeout_s, 30.0) if network_idle else timeout_s
+    profile_dir = req.__dict__.get("_resolved_profile_dir")
+
+    # Solve-CF resolution: explicit True wins; explicit False wins; "auto"
+    # (or unspecified) -> two-pass detection.
+    raw_solve = getattr(req, "solve_cloudflare", "auto")
+    explicit_solve: bool | None = raw_solve if raw_solve in (True, False) else None
+
+    base_kwargs: dict[str, Any] = {"network_idle": network_idle}
+    if profile_dir:
+        base_kwargs["user_data_dir"] = profile_dir
+
+    async def _fetch_once(*, solve: bool, ni: bool) -> tuple[str, int, str]:
+        kw = dict(base_kwargs)
+        kw["solve_cloudflare"] = solve
+        kw["network_idle"] = ni
+        async with hostile_client(timeout=effective_timeout) as fetcher:
+            response = await fetcher.async_fetch(req.url, **kw)
+        html = getattr(response, "html_content", None) or getattr(response, "body", None) or ""
+        status = int(getattr(response, "status", 0) or getattr(response, "status_code", 0) or 0)
+        url = str(getattr(response, "url", req.url) or req.url)
+        return html, status, url
+
+    # ----- Pass 1: try without the solver when "auto" -----
+    first_solve = explicit_solve if explicit_solve is not None else False
+    html, status_code, final_url = await _fetch_once(solve=first_solve, ni=network_idle)
+
+    # ----- Pass 1b: auto-CF retry with the solver -----
+    if explicit_solve is None and _is_cf_challenge_body(html, status_code):
+        _logger.info("scrape.d.auto_cf_detected", url=req.url, status_code=status_code)
+        html, status_code, final_url = await _fetch_once(solve=True, ni=network_idle)
+
+    # ----- Pass 2: auto-SPA retry with network_idle -----
+    # Only fires when network_idle wasn't explicit AND the first response
+    # looks like an SPA shell.
+    if not network_idle and _looks_like_spa_shell(html):
+        _logger.info("scrape.d.auto_spa_detected", url=req.url, html_len=len(html))
+        # Use the same solve decision the first pass made.
+        final_solve = (
+            explicit_solve
+            if explicit_solve is not None
+            else _is_cf_challenge_body(html, status_code)
+        )
+        html, status_code, final_url = await _fetch_once(solve=final_solve, ni=True)
+
+    return html, status_code, final_url
+
+
+def _run_d_extractors(
+    req: Any, html: str, final_url: str
+) -> tuple[
+    list[Any] | dict[str, Any] | None,
+    dict[str, Any] | None,
+    list[Any] | None,
+    dict[str, Any] | None,
+]:
+    """Run the v1.4.0 D-step extractor pipeline.
+
+    Returns ``(css_data, product, json_ld, microdata_price)``:
+
+    * ``css_data`` — output of the CSS extractor when the caller's
+      ``schema_json`` is CSS-shaped; otherwise None.
+    * ``product`` — auto-detected ProductOffer from JSON-LD.
+    * ``json_ld`` — raw json-ld blocks list.
+    * ``microdata_price`` — ``{"price": ..., "currency": ...}``.
+
+    Order of extractors:
+
+    1. ``css`` (only when ``schema_json`` is CSS-shaped) — populates
+       ``css_data``. When CSS yields rows, this wins; the legacy B/C
+       extractors still run for observability but their output goes
+       into ``product``/``json_ld``/``microdata_price`` rather than
+       being the canonical signal.
+    2. ``json_ld_product``
+    3. ``microdata_price``
+
+    Open Graph isn't run by default in the legacy D path (kept available
+    for the cascade DSL). Adding it here unconditionally would shift the
+    "what's a structured signal" definition for back-compat callers, so
+    we keep it opt-in via the cascade DSL.
+    """
+    from scrapper_tool._extractors import get as get_extractor  # noqa: PLC0415
+    from scrapper_tool._extractors.css import looks_like_css_schema  # noqa: PLC0415
+
+    schema = getattr(req, "schema_json", None)
+
+    css_data: list[Any] | dict[str, Any] | None = None
+    if looks_like_css_schema(schema):
+        css_result = get_extractor("css").extract(
+            html, base_url=final_url, options={"schema": schema}
+        )
+        if css_result.has_signal:
+            css_data = css_result.data
+
+    json_ld_result = get_extractor("json_ld_product").extract(html, base_url=final_url)
+    microdata_result = get_extractor("microdata_price").extract(html, base_url=final_url)
+
+    product: dict[str, Any] | None = None
+    json_ld: list[Any] | None = None
+    if json_ld_result.has_signal and isinstance(json_ld_result.data, dict):
+        product = json_ld_result.data.get("product")
+        json_ld = json_ld_result.data.get("json_ld")
+
+    microdata_price: dict[str, Any] | None = None
+    if microdata_result.has_signal and isinstance(microdata_result.data, dict):
+        microdata_price = microdata_result.data
+
+    return css_data, product, json_ld, microdata_price
 
 
 async def _do_scrape_e_tier(
@@ -898,9 +1309,12 @@ async def _do_scrape_e_tier(
 
     Honors mode="extract" — when set, raises rather than continuing to E2.
     """
+    log: list[dict[str, Any]] = req.__dict__.setdefault("_escalation_log", [])
+
     # ----- E1 (Pattern E extract) -----
     if req.mode in ("auto", "extract", "hostile"):
         attempts.append("e1")
+        e1_start = time.perf_counter()
         try:
             from scrapper_tool.agent import AgentConfig, agent_extract  # noqa: PLC0415
         except ImportError as exc:
@@ -917,12 +1331,34 @@ async def _do_scrape_e_tier(
         )
         try:
             result = await agent_extract(req.url, schema, instruction=req.instruction, config=cfg)
+            e1_duration = time.perf_counter() - e1_start
             if not result.blocked:
-                return _scrape_response_from_agent(
-                    result, attempts, start, mode="e1", hostile_skipped=hostile_skipped
+                log.append(
+                    _build_log_entry("e1", outcome="won", reason="ok", duration_s=e1_duration)
                 )
+                return _scrape_response_from_agent(
+                    result, attempts, start, mode="e1", hostile_skipped=hostile_skipped, req=req
+                )
+            log.append(
+                _build_log_entry(
+                    "e1",
+                    outcome="failed",
+                    reason="blocked",
+                    duration_s=e1_duration,
+                    detail=result.error or "agent reported blocked",
+                )
+            )
             last_error = AgentBlockedError(result.error or "blocked")
         except AgentBlockedError as exc:
+            log.append(
+                _build_log_entry(
+                    "e1",
+                    outcome="failed",
+                    reason="blocked",
+                    duration_s=time.perf_counter() - e1_start,
+                    detail=str(exc),
+                )
+            )
             last_error = exc
 
     if req.mode == "extract":
@@ -932,6 +1368,7 @@ async def _do_scrape_e_tier(
 
     # ----- E2 (Pattern E browse) -----
     attempts.append("e2")
+    e2_start = time.perf_counter()
     try:
         from scrapper_tool.agent import AgentConfig, agent_browse  # noqa: PLC0415
     except ImportError as exc:
@@ -946,10 +1383,27 @@ async def _do_scrape_e_tier(
     schema = req.schema_json if isinstance(req.schema_json, dict) else None
     try:
         result = await agent_browse(req.url, instruction, schema=schema, config=cfg)
+        log.append(
+            _build_log_entry(
+                "e2",
+                outcome="won",
+                reason="ok",
+                duration_s=time.perf_counter() - e2_start,
+            )
+        )
         return _scrape_response_from_agent(
-            result, attempts, start, mode="e2", hostile_skipped=hostile_skipped
+            result, attempts, start, mode="e2", hostile_skipped=hostile_skipped, req=req
         )
     except AgentBlockedError as exc:
+        log.append(
+            _build_log_entry(
+                "e2",
+                outcome="failed",
+                reason="blocked",
+                duration_s=time.perf_counter() - e2_start,
+                detail=str(exc),
+            )
+        )
         msg = f"All patterns blocked: {', '.join(attempts)}. Last error: {exc}"
         raise AgentBlockedError(msg) from exc
 
@@ -1055,11 +1509,20 @@ async def _do_scrape(req: Any) -> dict[str, Any]:
     profile_dir, cleanup_dir = _resolve_profile_dir(req)
     req.__dict__["_resolved_profile_dir"] = profile_dir
 
+    payload: dict[str, Any] | None = None
+    raised = False
     try:
-        return await _do_scrape_inner(req, attempts, start)
+        payload = await _do_scrape_inner(req, attempts, start)
+        return payload
+    except BaseException:
+        raised = True
+        raise
     finally:
         if cleanup_dir is not None:
             shutil.rmtree(cleanup_dir, ignore_errors=True)
+        # v1.4.0 — Prometheus observation. Safe no-op when prometheus-client
+        # isn't installed (e.g. older [http] installs).
+        _observe_cascade(payload, exception=raised)
 
 
 async def _do_scrape_inner(req: Any, attempts: list[str], start: float) -> dict[str, Any]:
@@ -1072,9 +1535,15 @@ async def _do_scrape_inner(req: Any, attempts: list[str], start: float) -> dict[
     if req.mode == "hostile":
         return await _do_hostile_only(req, attempts, start)
 
+    # v1.4.0 — escalation_log accumulator. Stashed on req.__dict__ so
+    # _do_d_step / _do_scrape_e_tier can append from inside their stack
+    # without us threading it explicitly.
+    log: list[dict[str, Any]] = req.__dict__.setdefault("_escalation_log", [])
+
     # ----- A/B/C -----
     if req.mode in ("auto", "fetch"):
         attempts.append("a_b_c")
+        a_b_c_start = time.perf_counter()
         try:
             from scrapper_tool.ladder import request_with_ladder  # noqa: PLC0415
 
@@ -1093,15 +1562,21 @@ async def _do_scrape_inner(req: Any, attempts: list[str], start: float) -> dict[
                 json_ld=json_ld,
             )
 
+            a_b_c_duration = time.perf_counter() - a_b_c_start
             if success:
                 _ = profile  # currently unused in response shape; kept for logging
+                log.append(
+                    _build_log_entry("a_b_c", outcome="won", reason="ok", duration_s=a_b_c_duration)
+                )
                 return {
                     "url": str(response.url),
                     "pattern_used": "a_b_c",
                     "pattern_attempts": attempts,
+                    "escalation_log": list(log),
                     "product": product,
                     "data": None,
                     "raw_text": text,
+                    "intermediate_raw_text": None,
                     "json_ld": json_ld,
                     "microdata_price": microdata_price,
                     "rendered_markdown": None,
@@ -1114,10 +1589,37 @@ async def _do_scrape_inner(req: Any, attempts: list[str], start: float) -> dict[
                     "is_structured": True,
                     "duration_s": time.perf_counter() - start,
                 }
+            log.append(
+                _build_log_entry(
+                    "a_b_c",
+                    outcome="rejected",
+                    reason="no_signal",
+                    duration_s=a_b_c_duration,
+                    detail=f"status={response.status_code}; classifier rejected",
+                )
+            )
         except BlockedError as exc:
             last_error = exc
+            log.append(
+                _build_log_entry(
+                    "a_b_c",
+                    outcome="failed",
+                    reason="blocked",
+                    duration_s=time.perf_counter() - a_b_c_start,
+                    detail=str(exc),
+                )
+            )
         except Exception as exc:
             last_error = exc
+            log.append(
+                _build_log_entry(
+                    "a_b_c",
+                    outcome="failed",
+                    reason="exception",
+                    duration_s=time.perf_counter() - a_b_c_start,
+                    detail=f"{type(exc).__name__}: {exc!s}",
+                )
+            )
 
     if req.mode == "fetch":
         # mode="fetch" forces A/B/C only; if it failed, surface the error.
@@ -1144,20 +1646,35 @@ def _scrape_response_from_agent(
     *,
     mode: Literal["e1", "e2"],
     hostile_skipped: bool = False,
+    req: Any = None,
 ) -> dict[str, Any]:
-    """Convert an :class:`AgentResult` into the /scrape response shape."""
+    """Convert an :class:`AgentResult` into the /scrape response shape.
+
+    v1.4.0: ``req`` (optional, default None for back-compat) is read for
+    ``intermediate_raw_text`` (D's HTML when D ran prior) and the
+    ``escalation_log`` accumulator. Both default to None / empty when
+    no req is threaded.
+    """
     import base64  # noqa: PLC0415
 
     screenshots: list[str] | None = None
     if result.screenshots:
         screenshots = [base64.b64encode(s).decode("ascii") for s in result.screenshots[:3]]
+
+    intermediate = req.__dict__.get("_d_intermediate_html") if req is not None else None
+    log: list[dict[str, Any]] = (
+        list(req.__dict__.get("_escalation_log", [])) if req is not None else []
+    )
+
     return {
         "url": result.final_url,
         "pattern_used": mode,
         "pattern_attempts": attempts,
+        "escalation_log": log,
         "product": None,
         "data": result.data,
         "raw_text": None,
+        "intermediate_raw_text": intermediate,
         "json_ld": None,
         "microdata_price": None,
         "rendered_markdown": result.rendered_markdown,

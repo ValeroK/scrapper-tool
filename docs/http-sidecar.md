@@ -26,6 +26,150 @@ That's it. The `/scrape` endpoint runs the full A/B/C → D → E1 → E2 ladder
 
 ---
 
+## Two paths: simple by default, controllable when you need it (v1.4.0+)
+
+The sidecar's API is deliberately split. Pick the path that matches your call site:
+
+### Simple path — for 95% of callers
+
+Pass a URL. Optionally pass an extraction schema. Get back structured data. The sidecar picks the right pattern based on smart defaults (auto-CF detection, auto-SPA detection, schema-shape dispatch). **Two things to think about, not thirteen.**
+
+```bash
+# Just a URL — sidecar picks A/B/C, then D, then E1/E2 as needed.
+curl -s -X POST http://localhost:5792/scrape \
+  -H "Content-Type: application/json" \
+  -d '{"url":"https://example.com/product/123"}'
+
+# With a CSS-shaped schema — sidecar applies it to whichever pattern returns HTML
+# (typically Pattern D for hostile vendors). No LLM call, just selectolax.
+curl -s -X POST http://localhost:5792/scrape \
+  -H "Content-Type: application/json" \
+  -d '{
+    "url":"https://www.tascaparts.com/search?q=BR3Z6731A",
+    "schema_json": {
+      "baseSelector": "div.search-result-item",
+      "fields": [
+        {"name": "title", "selector": "h3.product-title", "type": "text"},
+        {"name": "price", "selector": "span.price", "type": "text"},
+        {"name": "url", "selector": "a.product-link",
+         "type": "attribute", "attribute": "href"}
+      ]
+    }
+  }'
+
+# With a Pydantic-shaped JSON Schema — sidecar routes to E1 (LLM extraction).
+curl -s -X POST http://localhost:5792/scrape \
+  -H "Content-Type: application/json" \
+  -d '{
+    "url":"https://example.com/p/abc",
+    "schema_json": {
+      "type": "object",
+      "properties": {"name": {"type": "string"}, "price": {"type": "number"}}
+    }
+  }'
+```
+
+### Controllable path — for adapters that know their target
+
+Adapters that have done vendor recon and know exactly which pattern + flags work can keep using the explicit fields:
+
+```bash
+# Tasca-style SPA hostile vendor — recon-classified, skip A/B/C entirely.
+curl -s -X POST http://localhost:5792/scrape \
+  -H "Content-Type: application/json" \
+  -d '{
+    "url":"https://www.tascaparts.com/search?q=BR3Z6731A",
+    "mode":"hostile",
+    "pattern_d_network_idle": true,
+    "schema_json": { "baseSelector": "...", "fields": [...] }
+  }'
+
+# Force E1 / E2 / fetch-only when you need a specific tier.
+curl -s -X POST http://localhost:5792/scrape \
+  -d '{"url":"https://example.com/p", "mode":"extract"}'
+
+# Cross-request CF clearance reuse for poll-style workloads.
+curl -s -X POST http://localhost:5792/scrape \
+  -d '{
+    "url":"https://hostile.com/p",
+    "persist_browser_profile_dir": "/var/lib/scrapper/profiles/tasca/"
+  }'
+```
+
+**Rule of thumb**: if your call site is "scrape this URL, give me the data," use the simple path. If your call site is "I know this vendor's exact failure mode and I want to avoid wasted attempts," reach for the explicit fields. Both run on the same internal pipeline; neither is faster, the difference is who decides which pattern runs.
+
+---
+
+## Smart defaults (v1.4.0+) — what the sidecar figures out for you
+
+| Behavior | What it does | When it's useful |
+|---|---|---|
+| **Auto-CF detection** (`solve_cloudflare="auto"` default) | Pattern D's first fetch goes WITHOUT the Cloudflare solver. If the response body looks like a CF challenge (status 403/503 with CF body, or `<title>Just a moment...</title>`), redo with the solver. | Saves ~10s per call on vendors that don't gate behind CF — most non-hostile vendors fall into this bucket. |
+| **Auto-SPA detection** | After Pattern D returns with no structured signal, if the HTML looks like an unhydrated SPA shell (small + has `id="root"`, `id="app"`, `data-reactroot`, etc.), retry once with `network_idle=true`. | Saves operators from having to know which vendors need the SPA-hydration wait. False positives are cheap (one extra fetch). |
+| **Schema-shape dispatch** | When `schema_json` is CSS-shaped (`baseSelector` + `fields`), Pattern D applies it to its HTML directly via selectolax — no LLM call. When it's Pydantic-shaped, the cascade routes to E1 (LLM). | Adapters don't need to set `mode` to route correctly. The schema's shape is the routing decision. |
+
+You can disable any default by setting the corresponding explicit field. Auto-CF off: `"solve_cloudflare": true` (always solve) or `"solve_cloudflare": false` (never solve).
+
+---
+
+## Response anatomy (v1.4.0+)
+
+Every `/scrape` response carries the same envelope, regardless of which pattern won:
+
+```json
+{
+  "url": "https://example.com/product/123",
+  "pattern_used": "d",
+  "pattern_attempts": ["a_b_c", "d"],
+  "escalation_log": [
+    {"step": "a_b_c", "outcome": "failed", "reason": "blocked",
+     "duration_s": 0.45, "detail": "all profiles 403"},
+    {"step": "d", "outcome": "won", "reason": "ok", "duration_s": 16.8}
+  ],
+  "is_structured": true,
+  "data": [{"title": "Widget", "price": "9.99"}],
+  "product": null,
+  "raw_text": "<!DOCTYPE html>...",
+  "intermediate_raw_text": "<!DOCTYPE html>...",
+  "json_ld": null,
+  "microdata_price": null,
+  "blocked": false,
+  "hostile_skipped": false,
+  "duration_s": 17.3
+}
+```
+
+Fields you'll usually consume:
+
+- **`is_structured`** — the sidecar's own classifier verdict. True when the page yielded a real payload (not LLM narration). Use this instead of guessing from response shape.
+- **`data`** — when present, the canonical extracted payload. CSS-extractor output (list of dicts), or LLM-extractor output (dict).
+- **`product`** / **`json_ld`** / **`microdata_price`** — schema.org auto-extraction (Pattern A/B/C/D fallback). Populated even when `data` is also present, for observability.
+- **`pattern_used`** — which step won.
+- **`escalation_log`** *(v1.4.0+)* — structured per-step trace with `outcome`/`reason`/`duration_s`. Ops debugging gold; replaces the opaque `pattern_attempts` list.
+- **`intermediate_raw_text`** *(v1.4.0+)* — Pattern D's HTML, always populated when D ran (even when D was rejected and the cascade escalated). Adapters that want their own in-process parser read this regardless of `pattern_used`.
+
+---
+
+## Observability (`/metrics`, v1.4.0+)
+
+The sidecar exposes a Prometheus exposition endpoint at `GET /metrics`. Standard counters and histograms:
+
+- `scrapper_pattern_used_total{pattern="d"}` — total /scrape calls grouped by winning pattern.
+- `scrapper_responses_structured_total{pattern="d"}` / `_unstructured_total` — `is_structured` breakdown.
+- `scrapper_pattern_duration_seconds{step,outcome}` — latency histogram per cascade step.
+- `scrapper_cascade_steps` — histogram of how many steps each cascade walked.
+- `scrapper_user_data_dir_reused_total` — count of cross-request CF clearance reuse.
+
+Standard scrape:
+
+```bash
+curl http://localhost:5792/metrics
+```
+
+Returns 503 if `prometheus-client` isn't installed in this build (older `[http]` extras). The bundled Docker image always has it.
+
+---
+
 ## When to use which interface
 
 | If you... | Use |
