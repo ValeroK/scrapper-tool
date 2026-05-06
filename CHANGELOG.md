@@ -4,6 +4,24 @@ All notable changes to `scrapper-tool` are recorded here. Format follows [Keep a
 
 ## [Unreleased]
 
+## [1.4.2] - 2026-05-06
+
+Hotfix release. v1.4.0/v1.4.1's extractor registry bootstrap had a
+short-circuit bug — when one of the built-in extractor modules was
+imported before the first ``get()`` call (which happens in normal
+flow because ``css.py`` is imported via ``looks_like_css_schema``),
+the ``if not _REGISTRY`` check skipped registering the other three
+built-ins. Result: every D-step ``/scrape`` call raised
+``KeyError: Unknown extractor 'json_ld_product'`` and surfaced as
+``SidecarBackendDown`` to the affiliate.
+
+### Fixed
+
+- ``_extractors.get()`` and ``_extractors.all_names()`` now bootstrap
+  unconditionally. Python's module cache makes the imports a near-no-op
+  on the second+ call, so the previous early-return was an over-zealous
+  optimization that lost correctness.
+
 ## [1.4.1] - 2026-05-06
 
 Hotfix release. v1.4.0's ``solve_cloudflare="auto"`` default did a

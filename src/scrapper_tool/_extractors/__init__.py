@@ -79,10 +79,14 @@ def register(extractor: Extractor) -> Extractor:
 
 
 def get(name: str) -> Extractor:
-    """Look up an extractor by name. Triggers lazy module import."""
-    if not _REGISTRY:
-        # First access — import the built-in extractors which self-register.
-        _bootstrap_builtins()
+    """Look up an extractor by name. Triggers lazy module import on first access."""
+    # Bootstrap unconditionally — Python's module cache makes the
+    # imports a near-no-op on the second+ call. Earlier versions
+    # short-circuited on ``if not _REGISTRY`` which was buggy: when
+    # one extractor module had already been imported (e.g. for
+    # ``looks_like_css_schema``), the registry was non-empty and the
+    # bootstrap got skipped, leaving the other built-ins missing.
+    _bootstrap_builtins()
     if name not in _REGISTRY:
         msg = f"Unknown extractor {name!r}; known: {sorted(_REGISTRY)}"
         raise KeyError(msg)
@@ -91,8 +95,7 @@ def get(name: str) -> Extractor:
 
 def all_names() -> list[str]:
     """Return all registered extractor names (after bootstrap)."""
-    if not _REGISTRY:
-        _bootstrap_builtins()
+    _bootstrap_builtins()
     return sorted(_REGISTRY)
 
 
