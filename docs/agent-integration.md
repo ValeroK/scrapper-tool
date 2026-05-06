@@ -20,7 +20,7 @@ This is a stdio MCP server compatible with **Claude Desktop**, **Claude Code**, 
 
 | Tool | Input | Output | Use when |
 |---|---|---|---|
-| `auto_scrape` *(v1.1.0+)* | `url, schema_json?, instruction?, model?, browser?, timeout_s?` | `{pattern_used, pattern_attempts, product?, data?, blocked, ...}` | **Recommended first tool.** Auto-escalates Pattern A/B/C → E1 → E2. Returns `pattern_used` so the agent can see what worked. |
+| `auto_scrape` *(v1.1.0+; cascade fixed v1.1.3)* | `url, schema_json?, instruction?, model?, browser?, timeout_s?` | `{pattern_used, pattern_attempts, product?, data?, blocked, hostile_skipped, ...}` | **Recommended first tool.** Auto-escalates Pattern A/B/C → D → E1 → E2. Returns `pattern_used` so the agent can see what worked, plus `hostile_skipped: true` when the `[hostile]` extra was missing and Pattern D had to be skipped. |
 | `fetch_with_ladder` | `url, method?, use_curl_cffi?, extract_structured?` | `{status, body, winning_profile, blocked, error, product?, microdata_price?}` | Agent needs to fetch a URL that may TLS-fingerprint. With `extract_structured=True` (v1.1.0+) also runs Pattern B + C — eliminates the two-tool fetch+extract pattern. |
 | `extract_product` | `html, base_url?` | `ProductOffer` dict or `null` | Agent already has HTML and wants schema.org Product+Offer fields |
 | `extract_microdata_price` | `html` | `{price, currency}` or `null` | Agent has HTML with `<meta itemprop="price">` anchors |

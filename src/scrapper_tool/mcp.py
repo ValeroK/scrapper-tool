@@ -25,10 +25,14 @@ Tools exposed
 -------------
 
 - ``auto_scrape(url, schema_json, *, instruction, model, browser, timeout_s)`` —
-  PRIMARY tool (NEW v1.1.0+). Auto-escalates Pattern A/B/C → E1 → E2 in
-  a single call and returns ``pattern_used`` so the agent can see what
-  worked. Use this instead of fetch_with_ladder + agent_extract when
-  you just want data and don't care which pattern produced it.
+  PRIMARY tool (NEW v1.1.0+; cascade fixed v1.1.3 to actually invoke
+  Pattern D). Auto-escalates Pattern A/B/C → D → E1 → E2 in a single
+  call and returns ``pattern_used`` so the agent can see what worked.
+  Pattern D (Scrapling) is invoked when the ``[hostile]`` extra is
+  installed; skipped otherwise (cascade falls through to E1, response
+  carries ``hostile_skipped=true``). Use this instead of
+  fetch_with_ladder + agent_extract when you just want data and don't
+  care which pattern produced it.
 - ``fetch_with_ladder(url, *, method, use_curl_cffi, extract_structured)`` —
   Issue an HTTP request through the impersonation ladder; returns
   status, body truncated to 64 KB, and the winning profile name. With
@@ -141,6 +145,62 @@ def _agent_error_payload(
     return payload
 
 
+async def _try_pattern_d_for_auto_scrape(
+    url: str,
+    schema_json: dict[str, Any] | None,
+    attempts: list[str],
+    timeout_s: float,
+) -> tuple[dict[str, Any] | None, str | None, bool]:
+    """Pattern D step for the MCP ``auto_scrape`` tool.
+
+    Returns ``(success_payload, last_error, hostile_skipped)``:
+
+    * ``success_payload`` — the full auto_scrape response when D succeeded, else None.
+    * ``last_error`` — formatted error string when D was attempted but failed, else None.
+    * ``hostile_skipped`` — True when the [hostile] extra is missing and D was
+      skipped without any fetch attempt (no append to ``attempts``).
+    """
+    try:
+        from scrapper_tool.patterns.d import hostile_client  # noqa: PLC0415
+    except ImportError:
+        return None, None, True
+
+    attempts.append("d")
+    try:
+        async with hostile_client(timeout=timeout_s) as fetcher:
+            d_resp = await fetcher.async_fetch(url, solve_cloudflare=True)
+    except Exception as exc:  # broad: any Scrapling failure falls through to E1
+        return None, f"d: {exc}", False
+
+    d_html = getattr(d_resp, "html_content", None) or getattr(d_resp, "body", None) or ""
+    d_url = str(getattr(d_resp, "url", url) or url)
+    d_product = _structured_product(d_html, d_url)
+    d_price = _structured_price(d_html)
+    if not (schema_json is None and (d_product is not None or d_price is not None)):
+        return None, None, False
+
+    truncated_text, truncated = _truncate(d_html)
+    return (
+        {
+            "pattern_used": "d",
+            "pattern_attempts": attempts,
+            "url": d_url,
+            "winning_profile": "scrapling",
+            "product": d_product,
+            "microdata_price": d_price,
+            "data": None,
+            "rendered_markdown": None,
+            "body": truncated_text,
+            "truncated": truncated,
+            "blocked": False,
+            "error": None,
+            "hostile_skipped": False,
+        },
+        None,
+        False,
+    )
+
+
 def _agent_result_payload(result: Any) -> dict[str, Any]:
     """Serialize an :class:`AgentResult` for MCP transport.
 
@@ -222,7 +282,7 @@ def _build_server(  # noqa: PLR0915 — single-place tool registration
         name="scrapper-tool",
         instructions=(
             "Reusable web-scraping toolkit. RECOMMENDED first tool: "
-            "auto_scrape (auto-escalates A/B/C -> E1 -> E2 in one call). "
+            "auto_scrape (auto-escalates A/B/C -> D -> E1 -> E2 in one call). "
             "Power tools: fetch_with_ladder for TLS-sensitive fetches "
             "(pass extract_structured=True to also parse JSON-LD), "
             "extract_product for schema.org Product+Offer parsing on "
@@ -480,18 +540,21 @@ def _build_server(  # noqa: PLR0915 — single-place tool registration
     @server.tool(
         name="auto_scrape",
         description=(
-            "PRIMARY scraping tool (v1.1.0+). Auto-escalating ladder: "
-            "tries Pattern A/B/C (TLS impersonation + JSON-LD/microdata "
-            "extraction) first; if blocked or schema not satisfied, "
+            "PRIMARY scraping tool (v1.1.0+; cascade fixed v1.1.3). "
+            "Auto-escalating ladder: tries Pattern A/B/C (TLS impersonation "
+            "+ JSON-LD/microdata extraction) first; if blocked or schema not "
+            "satisfied, tries Pattern D (Scrapling, when [hostile] extra "
+            "installed) for hostile vendors; if D is skipped or also fails, "
             "escalates to Pattern E1 (Crawl4AI + LLM); if still blocked, "
             "escalates to Pattern E2 (browser-use multi-step agent). "
             "Returns pattern_used + pattern_attempts so the agent can "
-            "see which pattern produced the data. Use this instead of "
-            "fetch_with_ladder + agent_extract when you just want data "
-            "and don't care which pattern produced it."
+            "see which pattern produced the data, plus hostile_skipped=true "
+            "when Pattern D was unreachable due to missing extra. Use this "
+            "instead of fetch_with_ladder + agent_extract when you just "
+            "want data and don't care which pattern produced it."
         ),
     )
-    async def auto_scrape(
+    async def auto_scrape(  # noqa: PLR0915 — wraps a 4-step cascade in one tool body
         url: str,
         schema_json: dict[str, Any] | None = None,
         instruction: str | None = None,
@@ -499,9 +562,10 @@ def _build_server(  # noqa: PLR0915 — single-place tool registration
         browser: str | None = None,
         timeout_s: float = 120.0,
     ) -> dict[str, Any]:
-        """Run the full A/B/C → E1 → E2 escalation ladder."""
+        """Run the full A/B/C → D → E1 → E2 escalation ladder."""
         attempts: list[str] = []
         last_error: str | None = None
+        hostile_skipped = False
 
         # ----- Pattern A/B/C -----
         attempts.append("a_b_c")
@@ -526,9 +590,23 @@ def _build_server(  # noqa: PLR0915 — single-place tool registration
                     "truncated": truncated,
                     "blocked": False,
                     "error": None,
+                    "hostile_skipped": False,
                 }
         except BlockedError as exc:
             last_error = f"a_b_c: {exc}"
+
+        # ----- Pattern D (Scrapling — opt-in via [hostile] extra) -----
+        # Skips silently when [hostile] isn't installed. Surfaces that
+        # decision via hostile_skipped=true on the eventual E1/E2 response
+        # so callers can opt-in by installing the extra and avoid paying
+        # the LLM cost on hostile-but-Scrapling-readable vendors.
+        d_payload, d_error, hostile_skipped = await _try_pattern_d_for_auto_scrape(
+            url, schema_json, attempts, timeout_s
+        )
+        if d_payload is not None:
+            return d_payload
+        if d_error is not None:
+            last_error = d_error
 
         # ----- Pattern E1 -----
         try:
@@ -546,6 +624,7 @@ def _build_server(  # noqa: PLR0915 — single-place tool registration
                 "data": None,
                 "product": None,
                 "rendered_markdown": None,
+                "hostile_skipped": hostile_skipped,
             }
 
         cfg = AgentConfig.from_env()
@@ -566,6 +645,7 @@ def _build_server(  # noqa: PLR0915 — single-place tool registration
                 payload["pattern_used"] = "e1"
                 payload["pattern_attempts"] = attempts
                 payload["product"] = None
+                payload["hostile_skipped"] = hostile_skipped
                 return payload
             last_error = f"e1: {result.error or 'blocked'}"
         except AgentBlockedError as exc:
@@ -586,12 +666,18 @@ def _build_server(  # noqa: PLR0915 — single-place tool registration
             payload["pattern_used"] = "e2"
             payload["pattern_attempts"] = attempts
             payload["product"] = None
+            payload["hostile_skipped"] = hostile_skipped
             return payload
         except AgentBlockedError as exc:
             return _agent_error_payload(
                 f"All patterns blocked: {', '.join(attempts)}. Last: {last_error or exc}",
                 blocked=True,
-            ) | {"pattern_used": None, "pattern_attempts": attempts, "product": None}
+            ) | {
+                "pattern_used": None,
+                "pattern_attempts": attempts,
+                "product": None,
+                "hostile_skipped": hostile_skipped,
+            }
 
     # ---- Tool: canary -----------------------------------------------------
 

@@ -206,7 +206,7 @@ LangChain) can call.
 
 | Tool | Purpose |
 |------|---------|
-| `auto_scrape(url, schema_json, instruction, model, browser, timeout_s)` *(v1.1.0+)* | **Recommended first tool.** Auto-escalating ladder A/B/C → E1 → E2 in a single call. Returns `pattern_used`. |
+| `auto_scrape(url, schema_json, instruction, model, browser, timeout_s)` *(v1.1.0+; cascade fixed v1.1.3)* | **Recommended first tool.** Auto-escalating ladder A/B/C → D → E1 → E2 in a single call. Returns `pattern_used` plus `hostile_skipped` (true when the `[hostile]` extra is missing and the cascade had to skip Pattern D). |
 | `fetch_with_ladder(url, method, use_curl_cffi, extract_structured)` | HTTP fetch through the TLS-impersonation ladder. With `extract_structured=True` (v1.1.0+) also runs Pattern B + C. |
 | `extract_product(html, base_url)` | Pattern B — schema.org Product+Offer parser. |
 | `extract_microdata_price(html)` | Pattern C — `<meta itemprop="price">` parser. |
@@ -336,8 +336,11 @@ docker compose --profile rest up -d scrapper-tool-rest
 curl http://localhost:5792/health    # {"status": "ok"}
 ```
 
-The primary endpoint is **`POST /scrape`** — it runs the full A/B/C → E1 → E2
-escalation ladder server-side so callers don't need per-pattern decision logic:
+The primary endpoint is **`POST /scrape`** — it runs the full A/B/C → D → E1 → E2
+escalation ladder server-side so callers don't need per-pattern decision logic.
+Pattern D (Scrapling) is invoked between A/B/C and E1 when the `[hostile]` extra
+is installed (the bundled Docker image ships it via `[full]`); when it isn't, the
+cascade falls through to E1 and the response carries `hostile_skipped: true`:
 
 ```bash
 curl -s -X POST http://localhost:5792/scrape \
@@ -347,7 +350,7 @@ curl -s -X POST http://localhost:5792/scrape \
 
 | Endpoint | Purpose |
 |---|---|
-| `POST /scrape` | **Primary.** Auto-escalating ladder A/B/C → E1 → E2. Returns `pattern_used`. |
+| `POST /scrape` | **Primary.** Auto-escalating ladder A/B/C → D → E1 → E2. Returns `pattern_used` plus `hostile_skipped`. |
 | `POST /fetch` | Pattern A/B/C with optional Pattern B/C structured extraction. |
 | `POST /extract` | Pattern E1 direct (Crawl4AI + LLM, 1 call). |
 | `POST /browse` | Pattern E2 direct (browser-use multi-step agent). |

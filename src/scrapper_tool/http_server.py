@@ -9,7 +9,7 @@ Endpoints
 GET  /health       Liveness probe (always 200)
 GET  /ready        Readiness — probes Ollama, model availability, browser binary
 GET  /version      Version + capabilities (which extras are installed)
-POST /scrape       **Primary endpoint** — auto-escalating ladder A/B/C → E1 → E2
+POST /scrape       **Primary endpoint** — auto-escalating ladder A/B/C → D → E1 → E2
 POST /fetch        Pattern A/B/C with optional Pattern B/C structured extraction
 POST /extract      Pattern E1 (Crawl4AI + LLM, single call)
 POST /browse       Pattern E2 (browser-use multi-step agent loop)
@@ -110,7 +110,8 @@ class ScrapeRequest(BaseModel):
     mode: Literal["auto", "fetch", "extract", "browse"] = Field(
         "auto",
         description=(
-            "auto: full ladder (A/B/C → E1 → E2). fetch/extract/browse: force a specific pattern."
+            "auto: full ladder (A/B/C → D → E1 → E2). fetch/extract/browse: force a specific "
+            "pattern. mode=fetch never invokes Pattern D — the cheap-path contract is preserved."
         ),
     )
     browser: str | None = Field(None, description="Override SCRAPPER_TOOL_AGENT_BROWSER")
@@ -343,8 +344,10 @@ def _build_app(
         version=__version__,
         description=(
             "REST sidecar for scrapper-tool. Exposes the full A-E capability stack "
-            "over plain JSON/HTTP. The /scrape endpoint runs the full A/B/C → E1 → E2 "
-            "auto-escalation ladder server-side so callers don't need per-pattern logic."
+            "over plain JSON/HTTP. The /scrape endpoint runs the full A/B/C → D → E1 → E2 "
+            "auto-escalation ladder server-side so callers don't need per-pattern logic. "
+            "Pattern D (Scrapling) is invoked when the [hostile] extra is installed; "
+            "skipped otherwise (cascade falls through to E1)."
         ),
         docs_url="/docs" if serve_docs else None,
         redoc_url="/redoc" if serve_docs else None,
@@ -478,9 +481,11 @@ def _build_app(
         tags=["scraping"],
         summary="Auto-escalating scrape (PRIMARY endpoint)",
         description=(
-            "Runs Pattern A/B/C → E1 → E2 in sequence and returns the first one that succeeds. "
-            "Use for 95% of scraping tasks; the response includes pattern_used so callers can see "
-            "which pattern produced the data."
+            "Runs Pattern A/B/C → D → E1 → E2 in sequence and returns the first one that "
+            "succeeds. Use for 95% of scraping tasks; the response includes pattern_used so "
+            "callers can see which pattern produced the data. Pattern D (Scrapling) is invoked "
+            "between A/B/C and E1 when the [hostile] extra is installed; when it isn't, the "
+            "cascade falls through to E1 and the response carries hostile_skipped=true."
         ),
     )
     async def scrape(req: ScrapeRequest, _: None = Depends(_check_api_key)) -> dict[str, Any]:
@@ -638,18 +643,141 @@ async def _do_browse(req: Any) -> dict[str, Any]:
     return result.model_dump(mode="json")
 
 
+def _classify_extraction_success(
+    req: Any,
+    *,
+    status_code: int,
+    text: str,
+    product: dict[str, Any] | None,
+    microdata_price: dict[str, Any] | None,
+    json_ld: list[Any] | None,
+) -> bool:
+    """v1.1.2 success classifier — shared across A/B/C and Pattern D fetch steps.
+
+    Both A/B/C (impersonation ladder) and Pattern D (Scrapling) produce
+    the same shape — raw HTML + B/C structured extraction — so the
+    accept-or-escalate decision is identical. force_llm_extract still
+    forces escalation when the caller explicitly wants the LLM.
+    """
+    page_readable = _is_http_ok(status_code) and bool(text)
+    has_any_signal = product is not None or microdata_price is not None or bool(json_ld)
+
+    if req.mode == "fetch":
+        return True
+    if getattr(req, "force_llm_extract", False) and req.schema_json is not None:
+        return False
+    if req.schema_json is None:
+        return product is not None or microdata_price is not None
+    return page_readable and has_any_signal
+
+
+async def _do_d_step(
+    req: Any,
+    attempts: list[str],
+    start: float,
+) -> tuple[dict[str, Any] | None, BaseException | None, bool]:
+    """Pattern D (Scrapling) cascade step.
+
+    Returns ``(response, error, hostile_skipped)``:
+
+    * ``response`` — the /scrape response dict when D succeeded, else None.
+    * ``error`` — the exception raised by D when it failed, else None.
+    * ``hostile_skipped`` — True when the [hostile] extra is missing and
+      D was skipped without any fetch attempt. The caller surfaces this
+      to the consumer so they can choose to install the extra and avoid
+      paying for an LLM call on hostile-but-Scrapling-readable vendors.
+
+    Skips entirely (no append to ``attempts``) when [hostile] isn't
+    installed — the cascade then falls through to E1.
+    """
+    if not _hostile_available():
+        _logger.info("scrape.d.skipped_no_extra", url=req.url)
+        return None, None, True
+
+    attempts.append("d")
+    try:
+        from scrapper_tool.patterns.d import hostile_client  # noqa: PLC0415
+
+        timeout_s = req.timeout_s or 30.0
+        async with hostile_client(timeout=timeout_s) as fetcher:
+            response = await fetcher.async_fetch(req.url, solve_cloudflare=True)
+
+        # Scrapling's response object exposes html_content + status. Some
+        # versions name them differently — fall back gracefully.
+        html = getattr(response, "html_content", None) or getattr(response, "body", None) or ""
+        status_code = int(
+            getattr(response, "status", 0) or getattr(response, "status_code", 0) or 0
+        )
+        final_url = str(getattr(response, "url", req.url) or req.url)
+
+        product, json_ld, microdata_price = _extract_b_c(html, final_url)
+
+        success = _classify_extraction_success(
+            req,
+            status_code=status_code,
+            text=html,
+            product=product,
+            microdata_price=microdata_price,
+            json_ld=json_ld,
+        )
+
+        if not success:
+            _logger.info(
+                "scrape.d.no_signal",
+                url=req.url,
+                status_code=status_code,
+                has_product=product is not None,
+                has_price=microdata_price is not None,
+            )
+            return None, None, False
+
+        _logger.info("scrape.d.win", url=req.url, status_code=status_code)
+        return (
+            {
+                "url": final_url,
+                "pattern_used": "d",
+                "pattern_attempts": attempts,
+                "product": product,
+                "data": None,
+                "raw_text": html,
+                "json_ld": json_ld,
+                "microdata_price": microdata_price,
+                "rendered_markdown": None,
+                "screenshots": None,
+                "tokens_used": 0,
+                "steps_used": 0,
+                "blocked": False,
+                "error": None,
+                "hostile_skipped": False,
+                "duration_s": time.perf_counter() - start,
+            },
+            None,
+            False,
+        )
+    except Exception as exc:
+        _logger.warning("scrape.d.failed", url=req.url, error=str(exc))
+        return None, exc, False
+
+
 async def _do_scrape(req: Any) -> dict[str, Any]:  # noqa: PLR0912, PLR0915
-    """POST /scrape — auto-escalating ladder A/B/C → E1 → E2.
+    """POST /scrape — auto-escalating ladder A/B/C → D → E1 → E2.
 
     Decision logic:
     - mode="fetch": only run A/B/C, never escalate (raw fetch + structured extraction).
     - mode="extract" / "browse": forward straight to that pattern.
-    - mode="auto" (default): try A/B/C first; escalate to E1 if blocked or schema not satisfied;
-      escalate to E2 if E1 is blocked.
+    - mode="auto" (default): try A/B/C first; if blocked or schema not satisfied, try Pattern D
+      (Scrapling) when the [hostile] extra is installed; if D is skipped or also fails, escalate
+      to E1; if E1 is blocked, escalate to E2.
+
+    The response always carries ``hostile_skipped: bool`` — true when the cascade reached the D
+    step but [hostile] wasn't installed. Operators reading the response can install
+    ``scrapper-tool[hostile]`` to get Pattern D and avoid paying for E1/E2 LLM calls on
+    hostile-but-Scrapling-readable vendors.
     """
     start = time.perf_counter()
     attempts: list[str] = []
     last_error: BaseException | None = None
+    hostile_skipped = False
 
     # ----- A/B/C -----
     if req.mode in ("auto", "fetch"):
@@ -663,30 +791,14 @@ async def _do_scrape(req: Any) -> dict[str, Any]:  # noqa: PLR0912, PLR0915
             text = response.text or ""
             product, json_ld, microdata_price = _extract_b_c(text, str(response.url))
 
-            # Success classification (v1.1.2 — see CHANGELOG):
-            #
-            # * mode="fetch" → always success. Forced cheap path; never escalate.
-            # * mode="auto" + force_llm_extract=true → behave like pre-v1.1.2:
-            #   when schema_json is set, escalate so the LLM applies it.
-            # * mode="auto" + no schema_json → success when B or C extracted
-            #   the auto-detected ProductOffer.
-            # * mode="auto" + schema_json (default) → success when the page
-            #   was actually readable (HTTP 200 + any structured signal the
-            #   caller can post-process from the returned text/json_ld).
-            #   This is the v1.1.2 fix for "trivial Pattern-B HTML jumps
-            #   straight to E2." Callers can opt back in to always-escalate
-            #   via force_llm_extract=true.
-            page_readable = _is_http_ok(response.status_code) and bool(text)
-            has_any_signal = product is not None or microdata_price is not None or bool(json_ld)
-
-            if req.mode == "fetch":
-                success = True
-            elif getattr(req, "force_llm_extract", False) and req.schema_json is not None:
-                success = False  # legacy path: schema_json forces LLM
-            elif req.schema_json is None:
-                success = product is not None or microdata_price is not None
-            else:
-                success = page_readable and has_any_signal
+            success = _classify_extraction_success(
+                req,
+                status_code=response.status_code,
+                text=text,
+                product=product,
+                microdata_price=microdata_price,
+                json_ld=json_ld,
+            )
 
             if success:
                 _ = profile  # currently unused in response shape; kept for logging
@@ -705,6 +817,7 @@ async def _do_scrape(req: Any) -> dict[str, Any]:  # noqa: PLR0912, PLR0915
                     "steps_used": 0,
                     "blocked": False,
                     "error": None,
+                    "hostile_skipped": False,
                     "duration_s": time.perf_counter() - start,
                 }
         except BlockedError as exc:
@@ -717,6 +830,14 @@ async def _do_scrape(req: Any) -> dict[str, Any]:  # noqa: PLR0912, PLR0915
         if isinstance(last_error, BaseException):
             raise last_error
         raise ScrapingError("/scrape mode=fetch failed without an exception (unreachable)")
+
+    # ----- D (Pattern D — Scrapling) ------------------------------------
+    if req.mode == "auto":
+        d_response, d_error, hostile_skipped = await _do_d_step(req, attempts, start)
+        if d_response is not None:
+            return d_response
+        if d_error is not None:
+            last_error = d_error
 
     # ----- E1 (Pattern E extract) -----
     if req.mode in ("auto", "extract"):
@@ -738,7 +859,9 @@ async def _do_scrape(req: Any) -> dict[str, Any]:  # noqa: PLR0912, PLR0915
         try:
             result = await agent_extract(req.url, schema, instruction=req.instruction, config=cfg)
             if not result.blocked:
-                return _scrape_response_from_agent(result, attempts, start, mode="e1")
+                return _scrape_response_from_agent(
+                    result, attempts, start, mode="e1", hostile_skipped=hostile_skipped
+                )
             last_error = AgentBlockedError(result.error or "blocked")
         except AgentBlockedError as exc:
             last_error = exc
@@ -764,14 +887,21 @@ async def _do_scrape(req: Any) -> dict[str, Any]:  # noqa: PLR0912, PLR0915
     schema = req.schema_json if isinstance(req.schema_json, dict) else None
     try:
         result = await agent_browse(req.url, instruction, schema=schema, config=cfg)
-        return _scrape_response_from_agent(result, attempts, start, mode="e2")
+        return _scrape_response_from_agent(
+            result, attempts, start, mode="e2", hostile_skipped=hostile_skipped
+        )
     except AgentBlockedError as exc:
         msg = f"All patterns blocked: {', '.join(attempts)}. Last error: {exc}"
         raise AgentBlockedError(msg) from exc
 
 
 def _scrape_response_from_agent(
-    result: Any, attempts: list[str], start: float, *, mode: Literal["e1", "e2"]
+    result: Any,
+    attempts: list[str],
+    start: float,
+    *,
+    mode: Literal["e1", "e2"],
+    hostile_skipped: bool = False,
 ) -> dict[str, Any]:
     """Convert an :class:`AgentResult` into the /scrape response shape."""
     import base64  # noqa: PLC0415
@@ -794,6 +924,7 @@ def _scrape_response_from_agent(
         "steps_used": result.steps_used,
         "blocked": result.blocked,
         "error": result.error,
+        "hostile_skipped": hostile_skipped,
         "duration_s": time.perf_counter() - start,
     }
 
@@ -821,6 +952,10 @@ async def _readiness_payload() -> dict[str, Any]:
       authoritative readiness signal now).
     * ``hostile_installed`` — ``[hostile]`` extra (Scrapling).
     * ``llm_*`` — LM Studio / Ollama / vLLM probe.
+    * ``warnings`` (NEW v1.1.3) — non-fatal advisories. Currently emits
+      ``hostile_not_installed`` when ``[hostile]`` is absent so operators
+      can see at a glance that ``/scrape mode=auto`` will skip Pattern D
+      and pay LLM costs on hostile vendors. Does NOT change ``status``.
 
     ``status`` resolution:
 
@@ -830,10 +965,17 @@ async def _readiness_payload() -> dict[str, Any]:
     * ``not_ready`` — ``[llm-agent]`` extra not even installed.
     """
     agent_installed = _agent_available()
+    hostile_installed = _hostile_available()
+    warnings_list: list[str] = []
+    if not hostile_installed:
+        warnings_list.append(
+            "hostile_not_installed: cascade will skip Pattern D and pay LLM costs "
+            "on hostile vendors. Install with: pip install scrapper-tool[hostile]"
+        )
     checks: dict[str, Any] = {
         "agent_installed": agent_installed,
         "agent_runnable": False,  # filled in below once we know the browser
-        "hostile_installed": _hostile_available(),
+        "hostile_installed": hostile_installed,
         "browser": None,
         "browser_binary": None,
         "llm_backend": None,
@@ -841,6 +983,7 @@ async def _readiness_payload() -> dict[str, Any]:
         "llm_reachable": None,
         "llm_model": None,
         "llm_model_available": None,
+        "warnings": warnings_list,
     }
     if not agent_installed:
         return {"status": "not_ready", "version": __version__, "checks": checks}

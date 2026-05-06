@@ -206,6 +206,10 @@ class TestScrape:
             raise BlockedError("blocked")
 
         monkeypatch.setattr("scrapper_tool.ladder.request_with_ladder", fake_ladder)
+        # Force the [hostile] extra to look absent so the cascade skips
+        # Pattern D and falls through directly to E1 (the original
+        # pre-1.1.3 behaviour this test was written against).
+        monkeypatch.setattr(http_server, "_hostile_available", lambda: False)
 
         # Mock the agent layer
         fake_result = MagicMock()
@@ -253,6 +257,9 @@ class TestScrape:
             raise BlockedError("all profiles 403")
 
         monkeypatch.setattr("scrapper_tool.ladder.request_with_ladder", fake_ladder)
+        # Pin Pattern D out of the cascade so this stays a 3-attempt path
+        # (a_b_c -> e1 -> e2) — see TestScrapeWithPatternD for the D-included path.
+        monkeypatch.setattr(http_server, "_hostile_available", lambda: False)
 
         agent_extract_mock = AsyncMock(side_effect=AgentBlockedError("e1 blocked"))
         agent_browse_mock = AsyncMock(side_effect=AgentBlockedError("e2 blocked"))
@@ -555,6 +562,8 @@ class TestScrapeBrowseFallback:
             raise BlockedError("blocked")
 
         monkeypatch.setattr("scrapper_tool.ladder.request_with_ladder", fake_ladder)
+        # Skip Pattern D so the chain remains a_b_c -> e1 -> e2.
+        monkeypatch.setattr(http_server, "_hostile_available", lambda: False)
         _mock_agent_module(
             monkeypatch,
             extract_side_effect=AgentBlockedError("e1 blocked"),
@@ -1064,6 +1073,8 @@ class TestScrapeAutoNoOverescalation:
             return _make_response(text=_PRODUCT_HTML, url=url), "chrome133a"
 
         monkeypatch.setattr("scrapper_tool.ladder.request_with_ladder", fake_ladder)
+        # Skip Pattern D so the assertion stays a 2-step cascade.
+        monkeypatch.setattr(http_server, "_hostile_available", lambda: False)
 
         # Mock the agent layer so we can observe the escalation.
         fake_result = MagicMock()
@@ -1120,6 +1131,9 @@ class TestScrapeAutoNoOverescalation:
             )
 
         monkeypatch.setattr("scrapper_tool.ladder.request_with_ladder", fake_ladder)
+        # Skip Pattern D — this test only exercises the v1.1.2
+        # blank-page-escalates rule, not the new D step.
+        monkeypatch.setattr(http_server, "_hostile_available", lambda: False)
 
         fake_result = MagicMock()
         fake_result.mode = "extract"
@@ -1155,3 +1169,272 @@ class TestScrapeAutoNoOverescalation:
         # No JSON-LD, no microdata, no auto-detected product, no force flag →
         # escalation IS the right call.
         assert body["pattern_used"] == "e1"
+
+
+# --- v1.1.3: Pattern D in the auto-cascade ---------------------------------
+
+
+class _FakeScraplingResponse:
+    """Stand-in for Scrapling's StealthyFetcher response object."""
+
+    def __init__(self, *, html: str, status: int = 200, url: str = "https://hostile.com/p"):
+        self.html_content = html
+        self.status = status
+        self.url = url
+
+
+class _FakeFetcher:
+    """Async context manager mimicking ``scrapper_tool.patterns.d.hostile_client``."""
+
+    def __init__(self, response: Any | BaseException) -> None:
+        self._response = response
+
+    async def __aenter__(self) -> _FakeFetcher:
+        return self
+
+    async def __aexit__(self, *args: Any) -> None:
+        return None
+
+    async def async_fetch(self, url: str, *, solve_cloudflare: bool = True) -> Any:
+        if isinstance(self._response, BaseException):
+            raise self._response
+        return self._response
+
+
+def _install_fake_hostile_client(
+    monkeypatch: pytest.MonkeyPatch,
+    *,
+    response: Any | BaseException,
+) -> None:
+    """Replace patterns.d.hostile_client with a fake yielding ``response``."""
+    import scrapper_tool.patterns.d as d_mod
+
+    def fake_hostile_client(**kwargs: Any) -> _FakeFetcher:
+        return _FakeFetcher(response)
+
+    monkeypatch.setattr(d_mod, "hostile_client", fake_hostile_client)
+    # Force the import-probe to True so the cascade actually invokes D.
+    monkeypatch.setattr(http_server, "_hostile_available", lambda: True)
+
+
+class TestScrapeWithPatternD:
+    """v1.1.3 — auto cascade now invokes Pattern D between A/B/C and E1.
+
+    Pre-1.1.3 the cascade documented A/B/C -> D -> E1 -> E2 in every doc
+    and error message but actually ran A/B/C -> E1 -> E2; Pattern D was
+    unreachable from /scrape and auto_scrape. This class pins the new
+    behaviour: D is invoked when [hostile] is installed, skipped silently
+    (with hostile_skipped=true on the response) when it isn't, and the
+    cascade falls through to E1 if D itself fails.
+    """
+
+    @pytest.mark.asyncio
+    async def test_d_succeeds_when_a_b_c_blocked_and_hostile_installed(
+        self, app_no_auth: Any, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from scrapper_tool.errors import BlockedError
+
+        async def fake_ladder(method: str, url: str, **kwargs: Any) -> Any:
+            raise BlockedError("all profiles 403")
+
+        monkeypatch.setattr("scrapper_tool.ladder.request_with_ladder", fake_ladder)
+        _install_fake_hostile_client(
+            monkeypatch,
+            response=_FakeScraplingResponse(html=_PRODUCT_HTML),
+        )
+
+        async with _client(app_no_auth) as client:
+            resp = await client.post("/scrape", json={"url": "https://hostile.com/p"})
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["pattern_used"] == "d"
+        assert body["pattern_attempts"] == ["a_b_c", "d"]
+        assert body["product"] is not None
+        assert body["product"]["name"] == "Widget"
+        assert body["hostile_skipped"] is False
+
+    @pytest.mark.asyncio
+    async def test_d_skipped_when_hostile_extra_missing(
+        self, app_no_auth: Any, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from scrapper_tool.errors import BlockedError
+
+        async def fake_ladder(method: str, url: str, **kwargs: Any) -> Any:
+            raise BlockedError("blocked")
+
+        monkeypatch.setattr("scrapper_tool.ladder.request_with_ladder", fake_ladder)
+        # Pretend [hostile] isn't installed — D step must skip silently
+        # (no append to pattern_attempts) and surface hostile_skipped=true.
+        monkeypatch.setattr(http_server, "_hostile_available", lambda: False)
+
+        fake_result = MagicMock()
+        fake_result.mode = "extract"
+        fake_result.data = {"name": "Protected"}
+        fake_result.final_url = "https://protected.com/p"
+        fake_result.rendered_markdown = "# Protected"
+        fake_result.screenshots = None
+        fake_result.tokens_used = 50
+        fake_result.steps_used = 1
+        fake_result.blocked = False
+        fake_result.error = None
+        fake_result.duration_s = 1.0
+        _mock_agent_module(monkeypatch, extract_result=fake_result)
+
+        async with _client(app_no_auth) as client:
+            resp = await client.post("/scrape", json={"url": "https://protected.com/p"})
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["pattern_used"] == "e1"
+        assert body["pattern_attempts"] == ["a_b_c", "e1"], (
+            "When [hostile] is missing, the D step appends nothing to attempts"
+        )
+        assert body["hostile_skipped"] is True
+
+    @pytest.mark.asyncio
+    async def test_d_failure_falls_through_to_e1(
+        self, app_no_auth: Any, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from scrapper_tool.errors import BlockedError
+
+        async def fake_ladder(method: str, url: str, **kwargs: Any) -> Any:
+            raise BlockedError("blocked")
+
+        monkeypatch.setattr("scrapper_tool.ladder.request_with_ladder", fake_ladder)
+        # D itself raises (Scrapling can't solve, network error, etc.) →
+        # cascade must record "d" in attempts and continue to E1.
+        _install_fake_hostile_client(
+            monkeypatch,
+            response=RuntimeError("scrapling: cloudflare turnstile unsolvable"),
+        )
+
+        fake_result = MagicMock()
+        fake_result.mode = "extract"
+        fake_result.data = {"name": "Salvaged"}
+        fake_result.final_url = "https://hostile.com/p"
+        fake_result.rendered_markdown = "# Salvaged"
+        fake_result.screenshots = None
+        fake_result.tokens_used = 200
+        fake_result.steps_used = 1
+        fake_result.blocked = False
+        fake_result.error = None
+        fake_result.duration_s = 2.0
+        _mock_agent_module(monkeypatch, extract_result=fake_result)
+
+        async with _client(app_no_auth) as client:
+            resp = await client.post("/scrape", json={"url": "https://hostile.com/p"})
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["pattern_used"] == "e1"
+        assert body["pattern_attempts"] == ["a_b_c", "d", "e1"]
+        assert body["hostile_skipped"] is False
+
+    @pytest.mark.asyncio
+    async def test_force_llm_extract_short_circuits_past_d(
+        self, app_no_auth: Any, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # A/B/C returns a readable page with structured signal but
+        # force_llm_extract=true makes A/B/C "fail" the success classifier.
+        # Pattern D is also readable here, so without the short-circuit it
+        # would succeed and return pattern_used="d". The intent of
+        # force_llm_extract is to reach the LLM — D must inherit the same
+        # opt-out and let the cascade reach E1.
+        async def fake_ladder(method: str, url: str, **kwargs: Any) -> tuple[Any, str]:
+            return _make_response(text=_PRODUCT_HTML, url=url), "chrome133a"
+
+        monkeypatch.setattr("scrapper_tool.ladder.request_with_ladder", fake_ladder)
+        _install_fake_hostile_client(
+            monkeypatch,
+            response=_FakeScraplingResponse(html=_PRODUCT_HTML),
+        )
+
+        fake_result = MagicMock()
+        fake_result.mode = "extract"
+        fake_result.data = {"name": "Widget", "price": 19.99}
+        fake_result.final_url = "https://example.com/p"
+        fake_result.rendered_markdown = "# Widget"
+        fake_result.screenshots = None
+        fake_result.tokens_used = 50
+        fake_result.steps_used = 1
+        fake_result.blocked = False
+        fake_result.error = None
+        fake_result.duration_s = 0.5
+        _mock_agent_module(monkeypatch, extract_result=fake_result)
+
+        async with _client(app_no_auth) as client:
+            resp = await client.post(
+                "/scrape",
+                json={
+                    "url": "https://example.com/p",
+                    "schema_json": {"name": "str"},
+                    "force_llm_extract": True,
+                },
+            )
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["pattern_used"] == "e1", (
+            "force_llm_extract=true must skip both A/B/C success AND D success "
+            "and reach the LLM — D inherits the same opt-out."
+        )
+        # A/B/C completed, D fetched + extracted but the classifier rejected
+        # both, so attempts records both before reaching E1.
+        assert body["pattern_attempts"] == ["a_b_c", "d", "e1"]
+
+    @pytest.mark.asyncio
+    async def test_mode_fetch_does_not_invoke_d(
+        self, app_no_auth: Any, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # mode=fetch is the explicit "cheap path" contract: A/B/C only,
+        # no Pattern D, no Pattern E. Even when [hostile] is installed.
+        # If A/B/C is blocked under mode=fetch, the request fails; we do
+        # NOT silently pull in Scrapling.
+        from scrapper_tool.errors import BlockedError
+
+        async def fake_ladder(method: str, url: str, **kwargs: Any) -> Any:
+            raise BlockedError("403")
+
+        monkeypatch.setattr("scrapper_tool.ladder.request_with_ladder", fake_ladder)
+        # Even though [hostile] is "installed", mode=fetch must not call it.
+        _install_fake_hostile_client(
+            monkeypatch,
+            response=_FakeScraplingResponse(html=_PRODUCT_HTML),
+        )
+
+        async with _client(app_no_auth) as client:
+            resp = await client.post(
+                "/scrape", json={"url": "https://blocked.com", "mode": "fetch"}
+            )
+        # mode=fetch propagates BlockedError → 422.
+        assert resp.status_code == 422
+        body = resp.json()
+        assert body["error"] == "blocked"
+
+    @pytest.mark.asyncio
+    async def test_ready_warnings_when_hostile_missing(
+        self, app_no_auth: Any, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # /ready must surface a 'hostile_not_installed' warning when the
+        # extra is absent so operators see Pattern D will be skipped.
+        monkeypatch.setattr(http_server, "_hostile_available", lambda: False)
+
+        async with _client(app_no_auth) as client:
+            resp = await client.get("/ready")
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["checks"]["hostile_installed"] is False
+        warnings = body["checks"].get("warnings") or []
+        assert any("hostile_not_installed" in w for w in warnings), (
+            f"expected a hostile_not_installed warning in {warnings}"
+        )
+
+    @pytest.mark.asyncio
+    async def test_ready_no_hostile_warning_when_installed(
+        self, app_no_auth: Any, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setattr(http_server, "_hostile_available", lambda: True)
+
+        async with _client(app_no_auth) as client:
+            resp = await client.get("/ready")
+        body = resp.json()
+        assert body["checks"]["hostile_installed"] is True
+        warnings = body["checks"].get("warnings") or []
+        assert not any("hostile_not_installed" in w for w in warnings)

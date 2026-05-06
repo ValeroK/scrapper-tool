@@ -118,6 +118,18 @@ async def scrape_anything(url: str, schema: dict | None = None):
     except BlockedError:
         pass
 
+    # Try Pattern D (Scrapling) before paying for the LLM — opt-in via [hostile].
+    try:
+        from scrapper_tool.patterns.d import hostile_client  # requires [hostile]
+
+        async with hostile_client() as fetcher:
+            d_resp = await fetcher.async_fetch(url, solve_cloudflare=True)
+        product = extract_product_offer(d_resp.html_content, base_url=str(d_resp.url))
+        if product is not None:
+            return {"pattern_used": "d", "product": product.model_dump()}
+    except ImportError:
+        pass  # [hostile] not installed — fall through to E1
+
     # Escalate to Pattern E1
     result = await agent_extract(url, schema or {"type": "object"})
     return {"pattern_used": "e1", "data": result.data}
@@ -125,7 +137,7 @@ async def scrape_anything(url: str, schema: dict | None = None):
 asyncio.run(scrape_anything("https://target.com/product/123"))
 ```
 
-The HTTP sidecar's `/scrape` endpoint does this exact ladder server-side — see [`http-sidecar.md`](http-sidecar.md).
+The HTTP sidecar's `/scrape` endpoint does this exact ladder server-side (A/B/C → D → E1 → E2) — see [`http-sidecar.md`](http-sidecar.md).
 
 ---
 

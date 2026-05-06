@@ -22,7 +22,7 @@ curl -s -X POST http://localhost:5792/scrape \
   -d '{"url":"https://example.com/product/123"}'
 ```
 
-That's it. The `/scrape` endpoint runs the full A/B/C → E1 → E2 ladder server-side and gives you back structured product data.
+That's it. The `/scrape` endpoint runs the full A/B/C → D → E1 → E2 ladder server-side and gives you back structured product data. Pattern D (Scrapling) is invoked between A/B/C and E1 when the `[hostile]` extra is installed (the bundled Docker image ships it via `[full]`); when it isn't, the cascade falls through to E1 and the response carries `hostile_skipped: true` so you know an LLM call was paid where Scrapling could have served the page directly.
 
 ---
 
@@ -45,7 +45,7 @@ That's it. The `/scrape` endpoint runs the full A/B/C → E1 → E2 ladder serve
 | `/health` | GET | no | Liveness probe — always 200 |
 | `/ready` | GET | no | Readiness with detailed component checks |
 | `/version` | GET | no | Version + which extras are installed |
-| `/scrape` | POST | optional | **Primary** — auto-escalating ladder A/B/C → E1 → E2 |
+| `/scrape` | POST | optional | **Primary** — auto-escalating ladder A/B/C → D → E1 → E2 |
 | `/fetch` | POST | optional | Pattern A/B/C — TLS-impersonation fetch + Pattern B/C extraction |
 | `/extract` | POST | optional | Pattern E1 — Crawl4AI + LLM (1 LLM call) |
 | `/browse` | POST | optional | Pattern E2 — browser-use multi-step agent |
@@ -80,7 +80,7 @@ The one you'll call 95% of the time. Give it a URL and (optionally) a schema, ge
 
 All fields except `url` are optional. With no `schema_json`, you get an auto-detected `ProductOffer` from JSON-LD/microdata when A/B/C succeeds.
 
-### When does `mode=auto` escalate to E1? (1.1.2 behaviour)
+### When does `mode=auto` escalate? (1.1.2 + 1.1.3 behaviour)
 
 A/B/C is treated as **success** (no escalation) when:
 
@@ -90,6 +90,12 @@ A/B/C is treated as **success** (no escalation) when:
 If you supply `schema_json` and A/B/C returned a readable page (2xx + any structured signal), the response carries `pattern_used="a_b_c"` and the raw `text` / `json_ld` / `microdata_price` so your code can post-process locally — no LLM call needed.
 
 **Pre-1.1.2 behaviour:** any `schema_json` request always escalated to E1, even on trivial Pattern-B HTML. That wasted ~0.5–60s per request (LLM cost + latency). Set `force_llm_extract: true` if you genuinely need the LLM to apply your custom schema even when A/B/C had structured output. Most callers see lower latency + lower LLM cost as a free upgrade.
+
+**Pattern D (1.1.3+):** when A/B/C is blocked or the page lacks any structured signal, the cascade now tries Pattern D (Scrapling's `StealthyFetcher` with auto-Turnstile-solve) before paying for an LLM call. D succeeds on most Cloudflare-Turnstile-protected vendors and is roughly 10–30× cheaper than E1 because it doesn't invoke the LLM. D is invoked when the `[hostile]` extra is installed; when it isn't, the response carries `hostile_skipped: true` and the cascade goes straight to E1 — operators see the warning in `/ready` so they know to install `pip install scrapper-tool[hostile]` to recover the cost win.
+
+### Why install `[hostile]`?
+
+Without it, every hostile-vendor request that A/B/C can't read pays for E1 (~$0.001–0.01 in tokens + 5–15 s of browser warm-up). With it, Pattern D handles Turnstile-protected pages in ~2–4 s with no LLM tokens. The bundled Docker image (`ghcr.io/valerok/scrapper-tool`) ships `[hostile]` via `[full]`, so you only need to install it explicitly when running the lib outside the published image (lean Python install, custom container, etc.).
 
 ### Response — fast path (Pattern A/B/C succeeded)
 
@@ -116,22 +122,43 @@ If you supply `schema_json` and A/B/C returned a readable page (2xx + any struct
 
 `product.price` is a **string** (not a float) — Python's `Decimal` serialises as string in pydantic v2 to avoid floating-point precision loss. Use `parseFloat(product.price)` (JS) or `float(product["price"])` (Python) if you need a number.
 
+### Response — Pattern D won (1.1.3+)
+
+```json
+{
+  "url": "https://hostile.com/product/789",
+  "pattern_used": "d",
+  "pattern_attempts": ["a_b_c", "d"],
+  "product": {"name": "Turnstile Widget", "price": "39.99", "currency": "USD"},
+  "data": null,
+  "raw_text": "<!DOCTYPE html>...",
+  "json_ld": [...],
+  "microdata_price": {"price": "39.99", "currency": "USD"},
+  "blocked": false,
+  "hostile_skipped": false,
+  "duration_s": 2.91
+}
+```
+
+A/B/C was blocked but Scrapling's `StealthyFetcher` (with `solve_cloudflare=true`) got past the WAF, and Pattern B/C extracted structured data from the resulting HTML. No LLM tokens consumed.
+
 ### Response — escalated to E1
 
 ```json
 {
   "url": "https://protected.com/product/456",
   "pattern_used": "e1",
-  "pattern_attempts": ["a_b_c", "e1"],
+  "pattern_attempts": ["a_b_c", "d", "e1"],
   "product": null,
   "data": {"name": "Protected Widget", "price": 49.99, "in_stock": true},
   "rendered_markdown": "# Protected Widget\n\n**Price:** $49.99...",
   "tokens_used": 1247,
+  "hostile_skipped": false,
   "duration_s": 8.34
 }
 ```
 
-When the auto-escalation falls back to E1 (Pattern A/B/C was blocked), the LLM applies your `schema_json` to the rendered page. `data` holds the structured result.
+When the auto-escalation falls back to E1 (Pattern A/B/C blocked AND Pattern D either failed or wasn't installed), the LLM applies your `schema_json` to the rendered page. `data` holds the structured result. Watch `hostile_skipped: true` — when present alongside `pattern_used="e1"|"e2"`, you paid for an LLM call that Pattern D could have served for free; install `scrapper-tool[hostile]` to recover the cost win on subsequent calls.
 
 ### Forcing a specific pattern
 
@@ -409,7 +436,7 @@ For Python: `uv run openapi-python-client generate --path docs/openapi/openapi.y
 
 ### Response shape pointers
 
-- `/scrape` returns the dict shape documented in the [/scrape section](#scrape--the-main-endpoint) above. `pattern_used` is one of `"a_b_c" | "e1" | "e2"`.
+- `/scrape` returns the dict shape documented in the [/scrape section](#scrape--the-main-endpoint) above. `pattern_used` is one of `"a_b_c" | "d" | "e1" | "e2"`. `hostile_skipped: true` indicates Pattern D was unreachable because the `[hostile]` extra wasn't installed.
 - `/extract` and `/browse` return `AgentResult.model_dump(mode="json")` — see `src/scrapper_tool/agent/types.py` for the full pydantic schema. Bytes fields (`screenshots`) are base64-encoded strings.
 - `/fetch` returns the dict in [the /fetch section](#post-fetch--pattern-abc).
 

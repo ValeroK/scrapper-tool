@@ -4,6 +4,31 @@ All notable changes to `scrapper-tool` are recorded here. Format follows [Keep a
 
 ## [Unreleased]
 
+## [1.1.3] - 2026-05-05
+
+Cascade-correctness fix. The `/scrape` endpoint and `auto_scrape` MCP tool documented their auto-escalation as **A/B/C → D → E1 → E2** since v1.1.0, but the implementation actually ran **A/B/C → E1 → E2** — Pattern D (Scrapling, the cheap-but-stealthy escalation for Cloudflare-Turnstile / Akamai EVA / DataDome vendors) was unreachable from either surface even when the `[hostile]` extra was installed. Reported by a downstream API consumer 2026-05-04. Result: every hostile vendor that A/B/C couldn't read paid for an LLM call (E1 / E2) that Pattern D could have served for free. The bundled Docker image (`ghcr.io/valerok/scrapper-tool:latest`) ships `[hostile]` via `[full]`, so most published-image users will see immediate cost relief on hostile vendors after upgrading.
+
+### Fixed
+
+- **`/scrape` (REST) and `auto_scrape` (MCP) now invoke Pattern D between A/B/C and E1.** When A/B/C raises `BlockedError` (or, with `schema_json` set, returns no structured signal), the cascade tries `scrapper_tool.patterns.d.hostile_client` — Scrapling's `StealthyFetcher` with `solve_cloudflare=True` — before paying for an LLM call. Pattern B/C extraction runs over D's HTML using the same success classifier as the A/B/C step, so D is "A/B/C with a stronger fetcher" semantically. On success, the response carries `pattern_used="d"`. Pre-1.1.3 these surfaces never invoked Pattern D regardless of `[hostile]` install state.
+- Pattern D is invoked only when the `[hostile]` extra is installed (probe via `_hostile_available`). When it isn't, the D step is skipped silently — `pattern_attempts` does NOT include `"d"` — and the response carries `hostile_skipped: true` so operators can see at a glance that an LLM call was paid where Scrapling could have served the page.
+- D failures (Scrapling itself blocked, network error, page returned no signal) fall through to E1 with `"d"` recorded in `pattern_attempts` for traceability.
+- The v1.1.2 `force_llm_extract=true` flag still routes to the LLM as before — D inherits the same opt-out, so `force_llm_extract` callers still reach E1 even when D could have read the page. The flag's contract ("I want the LLM to apply my schema") is preserved.
+
+### Added
+
+- **`hostile_skipped: bool`** on every `/scrape` and `auto_scrape` response. `true` means the cascade reached the D step but `[hostile]` wasn't installed; `false` means D was either invoked (successfully or not) or never reached (e.g. A/B/C succeeded). Use this in observability to gauge `pip install scrapper-tool[hostile]` install ROI for your traffic.
+- **`/ready.checks.warnings: list[str]`**. Currently emits `"hostile_not_installed: cascade will skip Pattern D and pay LLM costs on hostile vendors. Install with: pip install scrapper-tool[hostile]"` when `[hostile]` is missing. Does NOT change `status` — operators that want a hard gate can grep `warnings` themselves; the existing `ready` / `degraded` / `not_ready` boundary is preserved.
+- **`pattern_used` enum gains `"d"`.** New full set: `"a_b_c" | "d" | "e1" | "e2"`. Strict additive change — callers that branch on the existing three values keep working with a new branch they can opt to handle.
+- New unit-test classes covering the D path: `TestScrapeWithPatternD` (7 cases — D wins, D missing, D fails → E1, `force_llm_extract` short-circuit, `mode="fetch"` does not invoke D, `/ready` warnings emitted/suppressed) and `TestAutoScrapeWithPatternD` (D win + D-skipped-no-extra) on the MCP surface.
+
+### Migration notes
+
+- **Docker users**: `docker compose pull && docker compose up -d --force-recreate`. The `1.1.3` image still ships `[hostile]` via `[full]`, so the cascade gains Pattern D on the first restart with no compose changes.
+- **`pip install scrapper-tool[http]` users**: install layer unchanged; you keep the lean default. To get Pattern D, add `[hostile]` (`pip install scrapper-tool[http,hostile]`) — note the `[hostile]` / `[llm-agent]` `lxml` conflict in `[tool.uv].conflicts`, install via `[full]` if you also need Pattern E.
+- **Callers reading `pattern_used`**: handle `"d"` as a success case alongside `"a_b_c"`. The response shape (top-level `product`, `json_ld`, `microdata_price`, `raw_text`) matches the A/B/C path because D runs the same B/C extractors.
+- **No breaking changes** to the REST or MCP request schemas. `force_llm_extract`, `mode`, `schema_json`, etc. all behave identically.
+
 ## [1.1.2] - 2026-05-03
 
 Image hardening + behaviour-correctness release. Six gaps surfaced by a downstream consumer ([PartsPilot affiliate-service](https://github.com/ValeroK/affiliate-service) 2026-05-02 manual smoke against the published `1.1.0` image) — four packaging gaps that made Pattern E silently broken, and two behaviour gaps that wasted LLM budget. All fixed upstream so consumers no longer carry runtime-install workarounds in their compose stacks.

@@ -2,8 +2,8 @@
   "openapi": "3.1.0",
   "info": {
     "title": "scrapper-tool REST sidecar",
-    "description": "REST sidecar for scrapper-tool. Exposes the full A-E capability stack over plain JSON/HTTP. The /scrape endpoint runs the full A/B/C \u2192 E1 \u2192 E2 auto-escalation ladder server-side so callers don't need per-pattern logic.",
-    "version": "1.1.2"
+    "description": "REST sidecar for scrapper-tool. Exposes the full A-E capability stack over plain JSON/HTTP. The /scrape endpoint runs the full A/B/C \u2192 D \u2192 E1 \u2192 E2 auto-escalation ladder server-side so callers don't need per-pattern logic. Pattern D (Scrapling) is invoked when the [hostile] extra is installed; skipped otherwise (cascade falls through to E1).",
+    "version": "1.1.3"
   },
   "paths": {
     "/health": {
@@ -134,7 +134,7 @@
           "scraping"
         ],
         "summary": "Auto-escalating scrape (PRIMARY endpoint)",
-        "description": "Runs Pattern A/B/C \u2192 E1 \u2192 E2 in sequence and returns the first one that succeeds. Use for 95% of scraping tasks; the response includes pattern_used so callers can see which pattern produced the data.",
+        "description": "Runs Pattern A/B/C \u2192 D \u2192 E1 \u2192 E2 in sequence and returns the first one that succeeds. Use for 95% of scraping tasks; the response includes pattern_used so callers can see which pattern produced the data. Pattern D (Scrapling) is invoked between A/B/C and E1 when the [hostile] extra is installed; when it isn't, the cascade falls through to E1 and the response carries hostile_skipped=true.",
         "operationId": "scrape",
         "requestBody": {
           "content": {
@@ -569,7 +569,7 @@
               "browse"
             ],
             "title": "Mode",
-            "description": "auto: full ladder (A/B/C \u2192 E1 \u2192 E2). fetch/extract/browse: force a specific pattern.",
+            "description": "auto: full ladder (A/B/C \u2192 D \u2192 E1 \u2192 E2). fetch/extract/browse: force a specific pattern. mode=fetch never invokes Pattern D \u2014 the cheap-path contract is preserved.",
             "default": "auto"
           },
           "browser": {

@@ -281,6 +281,154 @@ class TestAutoScrape:
         assert result["product"] is not None
         assert result["product"]["name"] == "Widget Y"
         assert result["blocked"] is False
+        assert result["hostile_skipped"] is False
+
+
+# ---- v1.1.3: auto_scrape now invokes Pattern D between A/B/C and E1 ------
+
+
+class _FakeMcpScraplingResponse:
+    """Stand-in for Scrapling's StealthyFetcher response object."""
+
+    def __init__(self, *, html: str, status: int = 200, url: str = "https://hostile.com/p"):
+        self.html_content = html
+        self.status = status
+        self.url = url
+
+
+class _FakeMcpFetcher:
+    """Async context manager mimicking patterns.d.hostile_client."""
+
+    def __init__(self, response: object | BaseException) -> None:
+        self._response = response
+
+    async def __aenter__(self) -> _FakeMcpFetcher:
+        return self
+
+    async def __aexit__(self, *args: object) -> None:
+        return None
+
+    async def async_fetch(self, url: str, *, solve_cloudflare: bool = True) -> object:
+        if isinstance(self._response, BaseException):
+            raise self._response
+        return self._response
+
+
+class TestAutoScrapeWithPatternD:
+    """v1.1.3 — auto_scrape now invokes Pattern D between A/B/C and E1.
+
+    Pre-1.1.3 the cascade went straight A/B/C -> E1 -> E2; Pattern D was
+    unreachable from the MCP tool even when [hostile] was installed.
+    """
+
+    @pytest.mark.asyncio
+    async def test_d_succeeds_when_a_b_c_blocked_and_hostile_installed(
+        self,
+        server: object,
+        fake_curl: type[FakeCurlSession],
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        # All A/B/C profiles return 403 -> raises BlockedError -> cascade
+        # advances to D. Mock D to return a readable product page.
+        fake_curl.STATUS_FOR_PROFILE = {
+            "chrome133a": 403,
+            "chrome124": 403,
+            "safari18_0": 403,
+            "firefox135": 403,
+        }
+        product_html = (
+            '<html><head><script type="application/ld+json">'
+            '{"@context":"https://schema.org","@type":"Product","name":"Widget Z",'
+            '"sku":"Z1","offers":{"@type":"Offer","price":"39.99","priceCurrency":"USD"}}'
+            "</script></head><body></body></html>"
+        )
+        import scrapper_tool.patterns.d as d_mod
+
+        def fake_hostile_client(**_kwargs: object) -> _FakeMcpFetcher:
+            return _FakeMcpFetcher(_FakeMcpScraplingResponse(html=product_html))
+
+        monkeypatch.setattr(d_mod, "hostile_client", fake_hostile_client)
+
+        tool = _get_tool(server, "auto_scrape")
+        result = await tool.fn(url="https://hostile.com/p")  # type: ignore[attr-defined]
+        assert result["pattern_used"] == "d"
+        assert result["pattern_attempts"] == ["a_b_c", "d"]
+        assert result["winning_profile"] == "scrapling"
+        assert result["product"] is not None
+        assert result["product"]["name"] == "Widget Z"
+        assert result["blocked"] is False
+        assert result["hostile_skipped"] is False
+
+    @pytest.mark.asyncio
+    async def test_d_skipped_when_hostile_extra_missing(
+        self,
+        server: object,
+        fake_curl: type[FakeCurlSession],
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        # Force `from scrapper_tool.patterns.d import hostile_client` to
+        # raise ImportError inside the auto_scrape body so the cascade
+        # falls through to E1 with hostile_skipped=true. Done by removing
+        # the cached module and patching __import__.
+        import builtins
+        import sys
+
+        sys.modules.pop("scrapper_tool.patterns.d", None)
+        real_import = builtins.__import__
+
+        def patched_import(
+            name: str,
+            globals: object = None,
+            locals: object = None,
+            fromlist: object = (),
+            level: int = 0,
+        ) -> object:
+            if name == "scrapper_tool.patterns.d":
+                raise ImportError("simulated: [hostile] extra not installed")
+            return real_import(name, globals, locals, fromlist, level)
+
+        monkeypatch.setattr(builtins, "__import__", patched_import)
+
+        # A/B/C blocked → cascade tries D (skipped) → E1.
+        fake_curl.STATUS_FOR_PROFILE = {
+            "chrome133a": 403,
+            "chrome124": 403,
+            "safari18_0": 403,
+            "firefox135": 403,
+        }
+
+        # Mock the agent layer so E1 returns a result.
+        from unittest.mock import AsyncMock
+
+        fake_result = MagicMock()
+        fake_result.mode = "extract"
+        fake_result.data = {"name": "via_e1"}
+        fake_result.final_url = "https://protected.com/p"
+        fake_result.rendered_markdown = "# E1 result"
+        fake_result.screenshots = None
+        fake_result.actions = []
+        fake_result.tokens_used = 50
+        fake_result.steps_used = 1
+        fake_result.blocked = False
+        fake_result.error = None
+        fake_result.duration_s = 1.0
+
+        agent_module = MagicMock()
+        agent_module.AgentConfig = MagicMock()
+        agent_module.AgentConfig.from_env = MagicMock(
+            return_value=MagicMock(merged=lambda **_: MagicMock())
+        )
+        agent_module.agent_extract = AsyncMock(return_value=fake_result)
+        agent_module.agent_browse = AsyncMock(return_value=fake_result)
+        sys.modules["scrapper_tool.agent"] = agent_module
+
+        tool = _get_tool(server, "auto_scrape")
+        result = await tool.fn(url="https://protected.com/p")  # type: ignore[attr-defined]
+        assert result["pattern_used"] == "e1"
+        assert result["pattern_attempts"] == ["a_b_c", "e1"], (
+            "When [hostile] is missing, the D step appends nothing to attempts"
+        )
+        assert result["hostile_skipped"] is True
 
 
 # ---- Truncation -----------------------------------------------------------
