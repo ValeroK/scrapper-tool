@@ -64,16 +64,16 @@ def _extract_field(  # noqa: PLR0911 — small dispatch on field type
     selector = field_spec.get("selector")
     field_type = field_spec.get("type", "text")
 
-    match: LexborNode | None
-    if not selector:
-        # Selector-less field — caller wants the row node itself.
-        match = node
-    else:
-        # selectolax stubs claim css_first returns LexborNode (non-None),
-        # but the implementation can return None when nothing matches.
-        # Cast to the optional type so the runtime None-check below is
-        # not flagged as unreachable.
-        match = cast("LexborNode | None", node.css_first(selector))
+    # selectolax stubs claim css_first returns LexborNode (non-None),
+    # but the implementation can return None when nothing matches.
+    # Cast to the optional type so the runtime None-check below is
+    # not flagged as unreachable. Selector-less fields use the row
+    # node directly (caller wants the whole row).
+    match: LexborNode | None = (
+        node
+        if not selector
+        else cast("LexborNode | None", node.css_first(selector))
+    )
     if match is None:
         return False, None
 
