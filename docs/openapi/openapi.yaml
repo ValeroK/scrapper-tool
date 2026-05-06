@@ -6,7 +6,7 @@ info:
     \ E1 \u2192 E2 auto-escalation ladder server-side so callers don't need per-pattern\
     \ logic. Pattern D (Scrapling) is invoked when the [hostile] extra is installed;\
     \ skipped otherwise (cascade falls through to E1)."
-  version: 1.1.3
+  version: 1.2.0
 paths:
   /health:
     get:
@@ -366,10 +366,15 @@ components:
           - fetch
           - extract
           - browse
+          - hostile
           title: Mode
           description: "auto: full ladder (A/B/C \u2192 D \u2192 E1 \u2192 E2). fetch/extract/browse:\
-            \ force a specific pattern. mode=fetch never invokes Pattern D \u2014\
-            \ the cheap-path contract is preserved."
+            \ force a specific pattern (mode=fetch never invokes Pattern D \u2014\
+            \ the cheap-path contract is preserved). hostile (NEW v1.2.0): invoke\
+            \ Pattern D directly, skipping the A/B/C ladder. On D failure, falls through\
+            \ to E1/E2 unless hostile_fallback=false. Use for vendors recon-classified\
+            \ as hostile (Cloudflare Turnstile, Akamai EVA, DataDome) where A/B/C\
+            \ is known to fail."
           default: auto
         browser:
           anyOf:
@@ -409,6 +414,26 @@ components:
             200 + any structured signal, letting the caller post-process from the
             raw fetch instead of paying for an LLM call. Set ``force_llm_extract=true``
             to opt back in to the old always-escalate behaviour.'
+          default: false
+        hostile_fallback:
+          type: boolean
+          title: Hostile Fallback
+          description: When mode=hostile and Pattern D fails (extra missing, fetch
+            failed, or classifier rejected D's output), control whether the cascade
+            falls through to E1/E2 (default true) or surfaces the failure immediately
+            (false). Set false on adapters that have already paid the cost of recon
+            and want to fail fast rather than silently pay for an LLM call.
+          default: true
+        pattern_d_network_idle:
+          type: boolean
+          title: Pattern D Network Idle
+          description: When True, Pattern D's Scrapling fetcher waits for the page's
+            network to settle before returning HTML. Set this for SPA-rendered hostile
+            vendors (Tasca, RevolutionParts dealers with CF, etc.) where the static
+            HTML lacks structured signals because results lazy-load via client-side
+            JS after CF clearance. Adds ~5-15s of fetch latency. Default False keeps
+            cold-call latency low for the common Cloudflare-but-not-SPA case (Amayama,
+            Subaru-JP).
           default: false
       type: object
       required:

@@ -4,6 +4,62 @@ All notable changes to `scrapper-tool` are recorded here. Format follows [Keep a
 
 ## [Unreleased]
 
+## [1.2.0] - 2026-05-06
+
+Tasca-unblock release. Three additive request fields and one additive response
+field that let SPA-rendered hostile vendors work end-to-end and let downstream
+consumers stop reimplementing the success classifier. Builds on v1.1.3's
+Pattern D wiring.
+
+### Added
+
+- **`mode="hostile"`** on `ScrapeRequest`. Invokes Pattern D directly, skipping
+  the 4-profile A/B/C ladder. Use for vendors recon-classified as hostile
+  (Cloudflare Turnstile, Akamai EVA, DataDome) where A/B/C is known to fail.
+  Saves ~2-3s per call by skipping the doomed profile attempts and cuts 4
+  noise entries from `pattern_attempts`. Pairs with the new
+  `hostile_fallback: bool = True` field — set False to surface D failures
+  rather than silently paying for an LLM call (returns 422 on D-fetch
+  failure, 503 when `[hostile]` extra is missing).
+- **`pattern_d_network_idle: bool = False`** on `ScrapeRequest`. When True,
+  Pattern D's Scrapling fetcher waits for the page's network to settle before
+  returning HTML. Required for SPA-rendered hostile vendors (Tasca,
+  RevolutionParts dealers behind CF) where results lazy-load via JS after CF
+  clearance. Adds ~5-15s to D's fetch time; auto-bumps the per-fetch timeout
+  floor to 30s when set.
+- **`hostile_only: bool = False`** + **`hostile_fallback: bool = True`** +
+  **`pattern_d_network_idle: bool = False`** on the MCP `auto_scrape` tool.
+  Same semantics as the REST request fields.
+- **`is_structured: bool`** on every `/scrape` and `auto_scrape` response.
+  True when the sidecar's classifier accepted the page (A/B/C / D succeeded
+  with structured signal, OR E1/E2 returned `data` without the `_raw`
+  free-form-text marker). False on blocked / errored / `_raw`-only responses.
+  Removes the need for downstream consumers to derive this from response
+  shape; the sidecar already classifies via `_classify_extraction_success`
+  (A/B/C, D) and `_is_e_tier_structured` (E1, E2). Replace local derivation
+  with `payload.get("is_structured", False)`.
+
+### Internal refactors
+
+- Extracted `_do_scrape_e_tier` helper from `_do_scrape` to share the E1 → E2
+  cascade between `mode="auto"` and `mode="hostile"` (with `hostile_fallback=True`).
+  No behavior change for the existing path; the helper is a pure lift.
+- Extracted `_continue_to_e_tier` helper from MCP `auto_scrape` for the same
+  reason — shared between the normal cascade and the new `hostile_only=True`
+  path.
+
+### Migration notes
+
+- All four fields are additive; no existing callers break.
+- Downstream consumers reading the response can replace local `is_structured`
+  derivation with `payload.get("is_structured", False)`. The three-iteration
+  shape-guessing pattern (PartsPilot's `agent_client.ScrapeResult.is_structured`)
+  becomes a 1-line read.
+- For MCP clients that need `mode="hostile"` semantics, use
+  `auto_scrape(url, hostile_only=True)`.
+- For SPA-rendered hostile vendors, set `pattern_d_network_idle=True` (REST)
+  or pass it to `auto_scrape` (MCP).
+
 ## [1.1.3] - 2026-05-05
 
 Cascade-correctness fix. The `/scrape` endpoint and `auto_scrape` MCP tool documented their auto-escalation as **A/B/C → D → E1 → E2** since v1.1.0, but the implementation actually ran **A/B/C → E1 → E2** — Pattern D (Scrapling, the cheap-but-stealthy escalation for Cloudflare-Turnstile / Akamai EVA / DataDome vendors) was unreachable from either surface even when the `[hostile]` extra was installed. Reported by a downstream API consumer 2026-05-04. Result: every hostile vendor that A/B/C couldn't read paid for an LLM call (E1 / E2) that Pattern D could have served for free. The bundled Docker image (`ghcr.io/valerok/scrapper-tool:latest`) ships `[hostile]` via `[full]`, so most published-image users will see immediate cost relief on hostile vendors after upgrading.

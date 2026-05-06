@@ -97,6 +97,15 @@ If you supply `schema_json` and A/B/C returned a readable page (2xx + any struct
 
 Without it, every hostile-vendor request that A/B/C can't read pays for E1 (~$0.001–0.01 in tokens + 5–15 s of browser warm-up). With it, Pattern D handles Turnstile-protected pages in ~2–4 s with no LLM tokens. The bundled Docker image (`ghcr.io/valerok/scrapper-tool`) ships `[hostile]` via `[full]`, so you only need to install it explicitly when running the lib outside the published image (lean Python install, custom container, etc.).
 
+### How to read the response (1.2.0+)
+
+Every `/scrape` response carries `is_structured: bool` — the sidecar's classifier verdict:
+
+- **`is_structured: true`** — the page yielded a real payload. `product` / `json_ld` / `microdata_price` / `data` carry usable structured data.
+- **`is_structured: false`** — soft failure. May still have `data` (E1's `_raw` free-form text) or be fully blocked. Treat as a non-result regardless of `pattern_used`.
+
+Downstream consumers should use `payload.get("is_structured", False)` instead of deriving the verdict from response shape — the sidecar already classifies via `_classify_extraction_success` (A/B/C, D) and `_is_e_tier_structured` (E1, E2).
+
 ### Response — fast path (Pattern A/B/C succeeded)
 
 ```json
@@ -116,6 +125,8 @@ Without it, every hostile-vendor request that A/B/C can't read pays for E1 (~$0.
   "json_ld": [{"@type": "Product", "name": "Widget Pro X"}],
   "microdata_price": {"price": "29.99", "currency": "USD"},
   "blocked": false,
+  "hostile_skipped": false,
+  "is_structured": true,
   "duration_s": 0.83
 }
 ```
@@ -136,6 +147,7 @@ Without it, every hostile-vendor request that A/B/C can't read pays for E1 (~$0.
   "microdata_price": {"price": "39.99", "currency": "USD"},
   "blocked": false,
   "hostile_skipped": false,
+  "is_structured": true,
   "duration_s": 2.91
 }
 ```
@@ -154,18 +166,36 @@ A/B/C was blocked but Scrapling's `StealthyFetcher` (with `solve_cloudflare=true
   "rendered_markdown": "# Protected Widget\n\n**Price:** $49.99...",
   "tokens_used": 1247,
   "hostile_skipped": false,
+  "is_structured": true,
   "duration_s": 8.34
 }
 ```
 
 When the auto-escalation falls back to E1 (Pattern A/B/C blocked AND Pattern D either failed or wasn't installed), the LLM applies your `schema_json` to the rendered page. `data` holds the structured result. Watch `hostile_skipped: true` — when present alongside `pattern_used="e1"|"e2"`, you paid for an LLM call that Pattern D could have served for free; install `scrapper-tool[hostile]` to recover the cost win on subsequent calls.
 
+Watch `is_structured: false` even when `blocked: false` — that's the LLM-narrated-failure case. Crawl4AI returns `data: {"_raw": "..."}` when the LLM produced free-form text rather than valid JSON against your schema. Treat as a non-result.
+
 ### Forcing a specific pattern
 
 Set `mode` to skip the auto-escalation:
-- `mode="fetch"` — only run A/B/C (raw fetch + structured extraction)
-- `mode="extract"` — go straight to Pattern E1
-- `mode="browse"` — go straight to Pattern E2
+- `mode="fetch"` — only run A/B/C (raw fetch + structured extraction). Never invokes D.
+- `mode="extract"` — go straight to Pattern E1.
+- `mode="browse"` — go straight to Pattern E2.
+- `mode="hostile"` *(v1.2.0+)* — invoke Pattern D directly, skipping A/B/C. On D failure, falls back to E1/E2 unless `hostile_fallback: false`. Use for vendors recon-classified as hostile (Cloudflare Turnstile, Akamai EVA, DataDome) where A/B/C is known to fail. Saves ~2-3s per call by skipping the 4 doomed `curl_cffi` profile attempts.
+
+When `hostile_fallback: false`, a missing `[hostile]` extra returns 503 (with install hint); a D-fetch failure returns 422 (`error: "blocked"`). Use `false` on adapters that have already paid the cost of recon and want to fail fast rather than silently pay for an LLM call.
+
+**For SPA-rendered hostile vendors** *(v1.2.0+)*, set `pattern_d_network_idle: true`. Adds ~5-15s of fetch latency but lets the page hydrate before D captures HTML — required for sites where results lazy-load via JS after CF clearance (Tasca search, RevolutionParts dealers). Pairs with `mode: "hostile"` for known-hostile SPA targets:
+
+```bash
+curl -s -X POST http://localhost:5792/scrape \
+  -H "Content-Type: application/json" \
+  -d '{
+    "url": "https://tascaparts.com/search?q=90915-YZZD4",
+    "mode": "hostile",
+    "pattern_d_network_idle": true
+  }'
+```
 
 ---
 

@@ -99,6 +99,18 @@ _AGENT_NOT_INSTALLED = (
 )
 
 
+def _is_e_tier_structured(data: object | None, blocked: bool) -> bool:
+    """Verdict for an E1/E2 result — True iff ``data`` is structured JSON.
+
+    Mirrors :func:`scrapper_tool.http_server._is_e_tier_structured`. Reimplemented
+    here because the http_server module pulls in FastAPI; the MCP module must
+    stay importable without the ``[http]`` extra.
+    """
+    if blocked or data is None:
+        return False
+    return not (isinstance(data, dict) and "_raw" in data)
+
+
 def _truncate(text: str, limit: int = _BODY_TRUNCATION_BYTES) -> tuple[str, bool]:
     """Cap text to ``limit`` bytes; report whether truncation occurred."""
     encoded = text.encode("utf-8", errors="replace")
@@ -145,11 +157,104 @@ def _agent_error_payload(
     return payload
 
 
+async def _continue_to_e_tier(
+    url: str,
+    schema_json: dict[str, Any] | None,
+    instruction: str | None,
+    model: str | None,
+    browser: str | None,
+    timeout_s: float,
+    attempts: list[str],
+    last_error: str | None,
+    hostile_skipped: bool,
+) -> dict[str, Any]:
+    """E1 → E2 escalation for the MCP ``auto_scrape`` tool.
+
+    Shared between the normal cascade (after A/B/C+D fall through) and the
+    hostile_only=True path (after D fails with hostile_fallback=True).
+    """
+    try:
+        from scrapper_tool.agent import AgentConfig  # noqa: PLC0415
+        from scrapper_tool.agent import agent_browse as _agent_browse  # noqa: PLC0415
+        from scrapper_tool.agent import agent_extract as _agent_extract  # noqa: PLC0415
+    except ImportError as exc:  # pragma: no cover
+        return {
+            "pattern_used": None,
+            "pattern_attempts": attempts,
+            "url": url,
+            "blocked": True,
+            "error": _AGENT_NOT_INSTALLED,
+            "error_detail": str(exc),
+            "data": None,
+            "product": None,
+            "rendered_markdown": None,
+            "hostile_skipped": hostile_skipped,
+            "is_structured": False,
+        }
+
+    cfg = AgentConfig.from_env()
+    overrides: dict[str, Any] = {"timeout_s": timeout_s}
+    if model:
+        overrides["model"] = model
+    if browser:
+        overrides["browser"] = browser
+
+    # ----- Pattern E1 -----
+    attempts.append("e1")
+    schema_for_e1 = schema_json or {"type": "object", "additionalProperties": True}
+    try:
+        result = await _agent_extract(
+            url, schema_for_e1, instruction=instruction, config=cfg, **overrides
+        )
+        if not result.blocked:
+            payload = _agent_result_payload(result)
+            payload["pattern_used"] = "e1"
+            payload["pattern_attempts"] = attempts
+            payload["product"] = None
+            payload["hostile_skipped"] = hostile_skipped
+            payload["is_structured"] = _is_e_tier_structured(result.data, result.blocked)
+            return payload
+        last_error = f"e1: {result.error or 'blocked'}"
+    except AgentBlockedError as exc:
+        last_error = f"e1: {exc}"
+
+    # ----- Pattern E2 -----
+    attempts.append("e2")
+    e2_instruction = instruction or (
+        f"Extract structured data matching: {schema_json}"
+        if schema_json
+        else "Extract the main content of this page"
+    )
+    try:
+        result = await _agent_browse(
+            url, e2_instruction, schema=schema_json, config=cfg, **overrides
+        )
+        payload = _agent_result_payload(result)
+        payload["pattern_used"] = "e2"
+        payload["pattern_attempts"] = attempts
+        payload["product"] = None
+        payload["hostile_skipped"] = hostile_skipped
+        payload["is_structured"] = _is_e_tier_structured(result.data, result.blocked)
+        return payload
+    except AgentBlockedError as exc:
+        return _agent_error_payload(
+            f"All patterns blocked: {', '.join(attempts)}. Last: {last_error or exc}",
+            blocked=True,
+        ) | {
+            "pattern_used": None,
+            "pattern_attempts": attempts,
+            "product": None,
+            "hostile_skipped": hostile_skipped,
+            "is_structured": False,
+        }
+
+
 async def _try_pattern_d_for_auto_scrape(
     url: str,
     schema_json: dict[str, Any] | None,
     attempts: list[str],
     timeout_s: float,
+    network_idle: bool = False,
 ) -> tuple[dict[str, Any] | None, str | None, bool]:
     """Pattern D step for the MCP ``auto_scrape`` tool.
 
@@ -159,6 +264,10 @@ async def _try_pattern_d_for_auto_scrape(
     * ``last_error`` — formatted error string when D was attempted but failed, else None.
     * ``hostile_skipped`` — True when the [hostile] extra is missing and D was
       skipped without any fetch attempt (no append to ``attempts``).
+
+    ``network_idle`` (v1.2.0+): when True, Scrapling waits for the page's
+    network to settle before returning HTML. Set for SPA-rendered hostile
+    vendors where results lazy-load via JS after CF clearance.
     """
     try:
         from scrapper_tool.patterns.d import hostile_client  # noqa: PLC0415
@@ -166,9 +275,13 @@ async def _try_pattern_d_for_auto_scrape(
         return None, None, True
 
     attempts.append("d")
+    # Bump fetcher timeout floor when network_idle is set (mirrors http_server).
+    effective_timeout = max(timeout_s, 30.0) if network_idle else timeout_s
     try:
-        async with hostile_client(timeout=timeout_s) as fetcher:
-            d_resp = await fetcher.async_fetch(url, solve_cloudflare=True)
+        async with hostile_client(timeout=effective_timeout) as fetcher:
+            d_resp = await fetcher.async_fetch(
+                url, solve_cloudflare=True, network_idle=network_idle
+            )
     except Exception as exc:  # broad: any Scrapling failure falls through to E1
         return None, f"d: {exc}", False
 
@@ -195,6 +308,7 @@ async def _try_pattern_d_for_auto_scrape(
             "blocked": False,
             "error": None,
             "hostile_skipped": False,
+            "is_structured": True,
         },
         None,
         False,
@@ -540,32 +654,78 @@ def _build_server(  # noqa: PLR0915 — single-place tool registration
     @server.tool(
         name="auto_scrape",
         description=(
-            "PRIMARY scraping tool (v1.1.0+; cascade fixed v1.1.3). "
-            "Auto-escalating ladder: tries Pattern A/B/C (TLS impersonation "
-            "+ JSON-LD/microdata extraction) first; if blocked or schema not "
-            "satisfied, tries Pattern D (Scrapling, when [hostile] extra "
-            "installed) for hostile vendors; if D is skipped or also fails, "
-            "escalates to Pattern E1 (Crawl4AI + LLM); if still blocked, "
-            "escalates to Pattern E2 (browser-use multi-step agent). "
-            "Returns pattern_used + pattern_attempts so the agent can "
-            "see which pattern produced the data, plus hostile_skipped=true "
-            "when Pattern D was unreachable due to missing extra. Use this "
-            "instead of fetch_with_ladder + agent_extract when you just "
-            "want data and don't care which pattern produced it."
+            "PRIMARY scraping tool (v1.1.0+; cascade fixed v1.1.3; v1.2.0 adds "
+            "hostile_only + is_structured). Auto-escalating ladder: tries "
+            "Pattern A/B/C (TLS impersonation + JSON-LD/microdata extraction) "
+            "first; if blocked or schema not satisfied, tries Pattern D "
+            "(Scrapling, when [hostile] extra installed) for hostile vendors; "
+            "if D is skipped or also fails, escalates to Pattern E1 "
+            "(Crawl4AI + LLM); if still blocked, escalates to Pattern E2 "
+            "(browser-use multi-step agent). Set hostile_only=True to skip "
+            "the A/B/C ladder for vendors recon-classified as hostile — saves "
+            "~2-3s per call. Returns pattern_used + pattern_attempts + "
+            "is_structured (sidecar's success verdict) + hostile_skipped "
+            "(true when [hostile] extra missing)."
         ),
     )
-    async def auto_scrape(  # noqa: PLR0915 — wraps a 4-step cascade in one tool body
+    async def auto_scrape(
         url: str,
         schema_json: dict[str, Any] | None = None,
         instruction: str | None = None,
         model: str | None = None,
         browser: str | None = None,
         timeout_s: float = 120.0,
+        hostile_only: bool = False,
+        hostile_fallback: bool = True,
+        pattern_d_network_idle: bool = False,
     ) -> dict[str, Any]:
-        """Run the full A/B/C → D → E1 → E2 escalation ladder."""
+        """Run the full A/B/C → D → E1 → E2 escalation ladder.
+
+        Set hostile_only=True to skip A/B/C and start at Pattern D (mirrors
+        ``mode='hostile'`` on the REST side). When D fails with
+        hostile_fallback=False, returns a clean error rather than escalating
+        to E1/E2.
+
+        Set pattern_d_network_idle=True for SPA-rendered hostile vendors
+        (Tasca, etc.) where results lazy-load via JS after CF clearance —
+        adds ~5-15s of D fetch time but lets the page hydrate first.
+        """
         attempts: list[str] = []
         last_error: str | None = None
         hostile_skipped = False
+
+        # ----- hostile_only fast-path: skip A/B/C, start at D -----
+        if hostile_only:
+            d_payload, d_error, hostile_skipped = await _try_pattern_d_for_auto_scrape(
+                url, schema_json, attempts, timeout_s, pattern_d_network_idle
+            )
+            if d_payload is not None:
+                return d_payload
+            if not hostile_fallback:
+                return _agent_error_payload(
+                    f"hostile_only=True and D failed: "
+                    f"{d_error or 'classifier rejected D output or [hostile] missing'}",
+                    blocked=True,
+                ) | {
+                    "pattern_used": None,
+                    "pattern_attempts": attempts,
+                    "product": None,
+                    "hostile_skipped": hostile_skipped,
+                    "is_structured": False,
+                }
+            last_error = d_error
+            # Fall through to the E1 → E2 block below (skips the A/B/C try block).
+            return await _continue_to_e_tier(
+                url,
+                schema_json,
+                instruction,
+                model,
+                browser,
+                timeout_s,
+                attempts,
+                last_error,
+                hostile_skipped,
+            )
 
         # ----- Pattern A/B/C -----
         attempts.append("a_b_c")
@@ -591,6 +751,7 @@ def _build_server(  # noqa: PLR0915 — single-place tool registration
                     "blocked": False,
                     "error": None,
                     "hostile_skipped": False,
+                    "is_structured": True,
                 }
         except BlockedError as exc:
             last_error = f"a_b_c: {exc}"
@@ -601,83 +762,25 @@ def _build_server(  # noqa: PLR0915 — single-place tool registration
         # so callers can opt-in by installing the extra and avoid paying
         # the LLM cost on hostile-but-Scrapling-readable vendors.
         d_payload, d_error, hostile_skipped = await _try_pattern_d_for_auto_scrape(
-            url, schema_json, attempts, timeout_s
+            url, schema_json, attempts, timeout_s, pattern_d_network_idle
         )
         if d_payload is not None:
             return d_payload
         if d_error is not None:
             last_error = d_error
 
-        # ----- Pattern E1 -----
-        try:
-            from scrapper_tool.agent import AgentConfig  # noqa: PLC0415
-            from scrapper_tool.agent import agent_browse as _agent_browse  # noqa: PLC0415
-            from scrapper_tool.agent import agent_extract as _agent_extract  # noqa: PLC0415
-        except ImportError as exc:  # pragma: no cover
-            return {
-                "pattern_used": None,
-                "pattern_attempts": attempts,
-                "url": url,
-                "blocked": True,
-                "error": _AGENT_NOT_INSTALLED,
-                "error_detail": str(exc),
-                "data": None,
-                "product": None,
-                "rendered_markdown": None,
-                "hostile_skipped": hostile_skipped,
-            }
-
-        cfg = AgentConfig.from_env()
-        overrides: dict[str, Any] = {"timeout_s": timeout_s}
-        if model:
-            overrides["model"] = model
-        if browser:
-            overrides["browser"] = browser
-
-        attempts.append("e1")
-        schema_for_e1 = schema_json or {"type": "object", "additionalProperties": True}
-        try:
-            result = await _agent_extract(
-                url, schema_for_e1, instruction=instruction, config=cfg, **overrides
-            )
-            if not result.blocked:
-                payload = _agent_result_payload(result)
-                payload["pattern_used"] = "e1"
-                payload["pattern_attempts"] = attempts
-                payload["product"] = None
-                payload["hostile_skipped"] = hostile_skipped
-                return payload
-            last_error = f"e1: {result.error or 'blocked'}"
-        except AgentBlockedError as exc:
-            last_error = f"e1: {exc}"
-
-        # ----- Pattern E2 -----
-        attempts.append("e2")
-        e2_instruction = instruction or (
-            f"Extract structured data matching: {schema_json}"
-            if schema_json
-            else "Extract the main content of this page"
+        # ----- E1 → E2 escalation (extracted helper, shared with hostile_only) -----
+        return await _continue_to_e_tier(
+            url,
+            schema_json,
+            instruction,
+            model,
+            browser,
+            timeout_s,
+            attempts,
+            last_error,
+            hostile_skipped,
         )
-        try:
-            result = await _agent_browse(
-                url, e2_instruction, schema=schema_json, config=cfg, **overrides
-            )
-            payload = _agent_result_payload(result)
-            payload["pattern_used"] = "e2"
-            payload["pattern_attempts"] = attempts
-            payload["product"] = None
-            payload["hostile_skipped"] = hostile_skipped
-            return payload
-        except AgentBlockedError as exc:
-            return _agent_error_payload(
-                f"All patterns blocked: {', '.join(attempts)}. Last: {last_error or exc}",
-                blocked=True,
-            ) | {
-                "pattern_used": None,
-                "pattern_attempts": attempts,
-                "product": None,
-                "hostile_skipped": hostile_skipped,
-            }
 
     # ---- Tool: canary -----------------------------------------------------
 

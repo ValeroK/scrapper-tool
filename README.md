@@ -206,7 +206,7 @@ LangChain) can call.
 
 | Tool | Purpose |
 |------|---------|
-| `auto_scrape(url, schema_json, instruction, model, browser, timeout_s)` *(v1.1.0+; cascade fixed v1.1.3)* | **Recommended first tool.** Auto-escalating ladder A/B/C → D → E1 → E2 in a single call. Returns `pattern_used` plus `hostile_skipped` (true when the `[hostile]` extra is missing and the cascade had to skip Pattern D). |
+| `auto_scrape(url, schema_json, instruction, model, browser, timeout_s, hostile_only, hostile_fallback)` *(v1.1.0+; v1.2.0 adds `hostile_only` + `is_structured`)* | **Recommended first tool.** Auto-escalating ladder A/B/C → D → E1 → E2 in a single call. Set `hostile_only=True` to skip A/B/C for known-hostile vendors. Returns `pattern_used`, `is_structured` (sidecar's success verdict), and `hostile_skipped`. |
 | `fetch_with_ladder(url, method, use_curl_cffi, extract_structured)` | HTTP fetch through the TLS-impersonation ladder. With `extract_structured=True` (v1.1.0+) also runs Pattern B + C. |
 | `extract_product(html, base_url)` | Pattern B — schema.org Product+Offer parser. |
 | `extract_microdata_price(html)` | Pattern C — `<meta itemprop="price">` parser. |
@@ -350,7 +350,7 @@ curl -s -X POST http://localhost:5792/scrape \
 
 | Endpoint | Purpose |
 |---|---|
-| `POST /scrape` | **Primary.** Auto-escalating ladder A/B/C → D → E1 → E2. Returns `pattern_used` plus `hostile_skipped`. |
+| `POST /scrape` | **Primary.** Auto-escalating ladder A/B/C → D → E1 → E2. Returns `pattern_used` plus `is_structured` (sidecar's success verdict) and `hostile_skipped`. |
 | `POST /fetch` | Pattern A/B/C with optional Pattern B/C structured extraction. |
 | `POST /extract` | Pattern E1 direct (Crawl4AI + LLM, 1 call). |
 | `POST /browse` | Pattern E2 direct (browser-use multi-step agent). |

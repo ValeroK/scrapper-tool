@@ -107,11 +107,16 @@ class ScrapeRequest(BaseModel):
         ),
     )
     instruction: str | None = Field(None, description="Optional extraction guidance for the LLM")
-    mode: Literal["auto", "fetch", "extract", "browse"] = Field(
+    mode: Literal["auto", "fetch", "extract", "browse", "hostile"] = Field(
         "auto",
         description=(
-            "auto: full ladder (A/B/C → D → E1 → E2). fetch/extract/browse: force a specific "
-            "pattern. mode=fetch never invokes Pattern D — the cheap-path contract is preserved."
+            "auto: full ladder (A/B/C → D → E1 → E2). "
+            "fetch/extract/browse: force a specific pattern (mode=fetch never invokes "
+            "Pattern D — the cheap-path contract is preserved). "
+            "hostile (NEW v1.2.0): invoke Pattern D directly, skipping the A/B/C ladder. "
+            "On D failure, falls through to E1/E2 unless hostile_fallback=false. "
+            "Use for vendors recon-classified as hostile (Cloudflare Turnstile, "
+            "Akamai EVA, DataDome) where A/B/C is known to fail."
         ),
     )
     browser: str | None = Field(None, description="Override SCRAPPER_TOOL_AGENT_BROWSER")
@@ -129,6 +134,28 @@ class ScrapeRequest(BaseModel):
             "post-process from the raw fetch instead of paying for an LLM "
             "call. Set ``force_llm_extract=true`` to opt back in to the old "
             "always-escalate behaviour."
+        ),
+    )
+    hostile_fallback: bool = Field(
+        True,
+        description=(
+            "When mode=hostile and Pattern D fails (extra missing, fetch failed, "
+            "or classifier rejected D's output), control whether the cascade falls "
+            "through to E1/E2 (default true) or surfaces the failure immediately "
+            "(false). Set false on adapters that have already paid the cost of "
+            "recon and want to fail fast rather than silently pay for an LLM call."
+        ),
+    )
+    pattern_d_network_idle: bool = Field(
+        False,
+        description=(
+            "When True, Pattern D's Scrapling fetcher waits for the page's "
+            "network to settle before returning HTML. Set this for SPA-rendered "
+            "hostile vendors (Tasca, RevolutionParts dealers with CF, etc.) "
+            "where the static HTML lacks structured signals because results "
+            "lazy-load via client-side JS after CF clearance. Adds ~5-15s of "
+            "fetch latency. Default False keeps cold-call latency low for the "
+            "common Cloudflare-but-not-SPA case (Amayama, Subaru-JP)."
         ),
     )
 
@@ -671,6 +698,23 @@ def _classify_extraction_success(
     return page_readable and has_any_signal
 
 
+def _is_e_tier_structured(data: object | None, blocked: bool) -> bool:
+    """Verdict for an E1/E2 result — True iff data is structured JSON, not LLM narration.
+
+    Crawl4AI and browser-use return ``{"_raw": "<free-form text>"}`` when the
+    LLM failed to emit valid JSON against the supplied schema. That's the
+    "narration of failure" case — surface it as ``is_structured=False`` so
+    downstream consumers don't treat it as a real payload.
+
+    A/B/C and D never reach this helper — they return only when their
+    classifier (``_classify_extraction_success``) already accepted the page,
+    so their ``is_structured`` is always True.
+    """
+    if blocked or data is None:
+        return False
+    return not (isinstance(data, dict) and "_raw" in data)
+
+
 async def _do_d_step(
     req: Any,
     attempts: list[str],
@@ -699,8 +743,17 @@ async def _do_d_step(
         from scrapper_tool.patterns.d import hostile_client  # noqa: PLC0415
 
         timeout_s = req.timeout_s or 30.0
-        async with hostile_client(timeout=timeout_s) as fetcher:
-            response = await fetcher.async_fetch(req.url, solve_cloudflare=True)
+        # When network_idle is set, bump the fetcher's timeout floor to 30s
+        # so we don't trip Scrapling's inner timeout mid-hydration. The
+        # outer req.timeout_s still wins if it's larger.
+        network_idle = bool(getattr(req, "pattern_d_network_idle", False))
+        effective_timeout = max(timeout_s, 30.0) if network_idle else timeout_s
+        async with hostile_client(timeout=effective_timeout) as fetcher:
+            response = await fetcher.async_fetch(
+                req.url,
+                solve_cloudflare=True,
+                network_idle=network_idle,
+            )
 
         # Scrapling's response object exposes html_content + status. Some
         # versions name them differently — fall back gracefully.
@@ -749,6 +802,7 @@ async def _do_d_step(
                 "blocked": False,
                 "error": None,
                 "hostile_skipped": False,
+                "is_structured": True,
                 "duration_s": time.perf_counter() - start,
             },
             None,
@@ -759,88 +813,20 @@ async def _do_d_step(
         return None, exc, False
 
 
-async def _do_scrape(req: Any) -> dict[str, Any]:  # noqa: PLR0912, PLR0915
-    """POST /scrape — auto-escalating ladder A/B/C → D → E1 → E2.
+async def _do_scrape_e_tier(
+    req: Any,
+    attempts: list[str],
+    start: float,
+    hostile_skipped: bool,
+    last_error: BaseException | None,
+) -> dict[str, Any]:
+    """E1 → E2 escalation. Shared between mode=auto (after A/B/C+D fall through),
+    mode=hostile (after D fails with hostile_fallback=True), and mode=extract.
 
-    Decision logic:
-    - mode="fetch": only run A/B/C, never escalate (raw fetch + structured extraction).
-    - mode="extract" / "browse": forward straight to that pattern.
-    - mode="auto" (default): try A/B/C first; if blocked or schema not satisfied, try Pattern D
-      (Scrapling) when the [hostile] extra is installed; if D is skipped or also fails, escalate
-      to E1; if E1 is blocked, escalate to E2.
-
-    The response always carries ``hostile_skipped: bool`` — true when the cascade reached the D
-    step but [hostile] wasn't installed. Operators reading the response can install
-    ``scrapper-tool[hostile]`` to get Pattern D and avoid paying for E1/E2 LLM calls on
-    hostile-but-Scrapling-readable vendors.
+    Honors mode="extract" — when set, raises rather than continuing to E2.
     """
-    start = time.perf_counter()
-    attempts: list[str] = []
-    last_error: BaseException | None = None
-    hostile_skipped = False
-
-    # ----- A/B/C -----
-    if req.mode in ("auto", "fetch"):
-        attempts.append("a_b_c")
-        try:
-            from scrapper_tool.ladder import request_with_ladder  # noqa: PLC0415
-
-            response, profile = await request_with_ladder(
-                "GET", req.url, timeout=req.timeout_s or 30.0
-            )
-            text = response.text or ""
-            product, json_ld, microdata_price = _extract_b_c(text, str(response.url))
-
-            success = _classify_extraction_success(
-                req,
-                status_code=response.status_code,
-                text=text,
-                product=product,
-                microdata_price=microdata_price,
-                json_ld=json_ld,
-            )
-
-            if success:
-                _ = profile  # currently unused in response shape; kept for logging
-                return {
-                    "url": str(response.url),
-                    "pattern_used": "a_b_c",
-                    "pattern_attempts": attempts,
-                    "product": product,
-                    "data": None,
-                    "raw_text": text,
-                    "json_ld": json_ld,
-                    "microdata_price": microdata_price,
-                    "rendered_markdown": None,
-                    "screenshots": None,
-                    "tokens_used": 0,
-                    "steps_used": 0,
-                    "blocked": False,
-                    "error": None,
-                    "hostile_skipped": False,
-                    "duration_s": time.perf_counter() - start,
-                }
-        except BlockedError as exc:
-            last_error = exc
-        except Exception as exc:
-            last_error = exc
-
-    if req.mode == "fetch":
-        # mode="fetch" forces A/B/C only; if it failed, surface the error.
-        if isinstance(last_error, BaseException):
-            raise last_error
-        raise ScrapingError("/scrape mode=fetch failed without an exception (unreachable)")
-
-    # ----- D (Pattern D — Scrapling) ------------------------------------
-    if req.mode == "auto":
-        d_response, d_error, hostile_skipped = await _do_d_step(req, attempts, start)
-        if d_response is not None:
-            return d_response
-        if d_error is not None:
-            last_error = d_error
-
     # ----- E1 (Pattern E extract) -----
-    if req.mode in ("auto", "extract"):
+    if req.mode in ("auto", "extract", "hostile"):
         attempts.append("e1")
         try:
             from scrapper_tool.agent import AgentConfig, agent_extract  # noqa: PLC0415
@@ -895,6 +881,122 @@ async def _do_scrape(req: Any) -> dict[str, Any]:  # noqa: PLR0912, PLR0915
         raise AgentBlockedError(msg) from exc
 
 
+async def _do_hostile_only(req: Any, attempts: list[str], start: float) -> dict[str, Any]:
+    """mode='hostile' — invoke Pattern D directly; honor hostile_fallback on failure.
+
+    Reuses _do_d_step. On success returns its payload. On failure either falls
+    through to the standard E1 → E2 escalation (when hostile_fallback=True,
+    default) or raises a clean error (when False).
+    """
+    d_response, d_error, hostile_skipped = await _do_d_step(req, attempts, start)
+    if d_response is not None:
+        return d_response
+
+    if not getattr(req, "hostile_fallback", True):
+        if hostile_skipped:
+            raise ConfigurationError(
+                "mode=hostile requires the [hostile] extra. "
+                "Install with: pip install scrapper-tool[hostile]"
+            )
+        raise AgentBlockedError(
+            f"mode=hostile and Pattern D failed for {req.url}: "
+            f"{d_error or 'classifier rejected D output'}"
+        )
+
+    # Fall through to E1 → E2 with hostile_skipped flag preserved.
+    return await _do_scrape_e_tier(req, attempts, start, hostile_skipped, last_error=d_error)
+
+
+async def _do_scrape(req: Any) -> dict[str, Any]:
+    """POST /scrape — auto-escalating ladder A/B/C → D → E1 → E2.
+
+    Decision logic:
+    - mode="fetch": only run A/B/C, never escalate.
+    - mode="extract" / "browse": forward straight to that pattern.
+    - mode="hostile" (NEW v1.2.0): invoke Pattern D directly, skipping A/B/C.
+      Falls through to E1/E2 unless hostile_fallback=false.
+    - mode="auto" (default): try A/B/C first; if blocked or schema not satisfied,
+      try Pattern D when [hostile] is installed; if D is skipped or fails,
+      escalate to E1; if E1 is blocked, escalate to E2.
+
+    Every response carries ``hostile_skipped: bool`` (D was skipped because the
+    extra is missing) and ``is_structured: bool`` (the sidecar's verdict on
+    whether the page yielded a real payload).
+    """
+    start = time.perf_counter()
+    attempts: list[str] = []
+    last_error: BaseException | None = None
+    hostile_skipped = False
+
+    # ----- mode=hostile fast-path (no A/B/C ladder) -----
+    if req.mode == "hostile":
+        return await _do_hostile_only(req, attempts, start)
+
+    # ----- A/B/C -----
+    if req.mode in ("auto", "fetch"):
+        attempts.append("a_b_c")
+        try:
+            from scrapper_tool.ladder import request_with_ladder  # noqa: PLC0415
+
+            response, profile = await request_with_ladder(
+                "GET", req.url, timeout=req.timeout_s or 30.0
+            )
+            text = response.text or ""
+            product, json_ld, microdata_price = _extract_b_c(text, str(response.url))
+
+            success = _classify_extraction_success(
+                req,
+                status_code=response.status_code,
+                text=text,
+                product=product,
+                microdata_price=microdata_price,
+                json_ld=json_ld,
+            )
+
+            if success:
+                _ = profile  # currently unused in response shape; kept for logging
+                return {
+                    "url": str(response.url),
+                    "pattern_used": "a_b_c",
+                    "pattern_attempts": attempts,
+                    "product": product,
+                    "data": None,
+                    "raw_text": text,
+                    "json_ld": json_ld,
+                    "microdata_price": microdata_price,
+                    "rendered_markdown": None,
+                    "screenshots": None,
+                    "tokens_used": 0,
+                    "steps_used": 0,
+                    "blocked": False,
+                    "error": None,
+                    "hostile_skipped": False,
+                    "is_structured": True,
+                    "duration_s": time.perf_counter() - start,
+                }
+        except BlockedError as exc:
+            last_error = exc
+        except Exception as exc:
+            last_error = exc
+
+    if req.mode == "fetch":
+        # mode="fetch" forces A/B/C only; if it failed, surface the error.
+        if isinstance(last_error, BaseException):
+            raise last_error
+        raise ScrapingError("/scrape mode=fetch failed without an exception (unreachable)")
+
+    # ----- D (Pattern D — Scrapling) ------------------------------------
+    if req.mode == "auto":
+        d_response, d_error, hostile_skipped = await _do_d_step(req, attempts, start)
+        if d_response is not None:
+            return d_response
+        if d_error is not None:
+            last_error = d_error
+
+    # ----- E1 → E2 escalation -----
+    return await _do_scrape_e_tier(req, attempts, start, hostile_skipped, last_error)
+
+
 def _scrape_response_from_agent(
     result: Any,
     attempts: list[str],
@@ -925,6 +1027,7 @@ def _scrape_response_from_agent(
         "blocked": result.blocked,
         "error": result.error,
         "hostile_skipped": hostile_skipped,
+        "is_structured": _is_e_tier_structured(result.data, result.blocked),
         "duration_s": time.perf_counter() - start,
     }
 

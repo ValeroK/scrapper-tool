@@ -308,7 +308,8 @@ class _FakeMcpFetcher:
     async def __aexit__(self, *args: object) -> None:
         return None
 
-    async def async_fetch(self, url: str, *, solve_cloudflare: bool = True) -> object:
+    async def async_fetch(self, url: str, **kwargs: object) -> object:
+        # Accept any kwargs (solve_cloudflare, network_idle, user_data_dir, ...).
         if isinstance(self._response, BaseException):
             raise self._response
         return self._response
@@ -446,6 +447,71 @@ class TestBodyTruncation:
         assert truncated is True
         # Encoded length matches the cap (64 KB).
         assert len(text.encode("utf-8")) <= 64 * 1024
+
+
+# ---- v1.2.0: is_structured response field ---------------------------------
+
+
+class TestAutoScrapeIsStructured:
+    """v1.2.0 — auto_scrape responses carry the sidecar's success verdict."""
+
+    def test_helper_truth_table(self) -> None:
+        assert mcp_module._is_e_tier_structured({"name": "x"}, False) is True
+        assert mcp_module._is_e_tier_structured({"_raw": "..."}, False) is False
+        assert mcp_module._is_e_tier_structured(None, False) is False
+        assert mcp_module._is_e_tier_structured({"name": "x"}, True) is False
+
+    @pytest.mark.asyncio
+    async def test_a_b_c_success_carries_is_structured_true(
+        self,
+        server: object,
+        fake_curl: type[FakeCurlSession],
+    ) -> None:
+        product_html = (
+            '<html><head><script type="application/ld+json">'
+            '{"@context":"https://schema.org","@type":"Product","name":"Widget Y",'
+            '"sku":"Y1","offers":{"@type":"Offer","price":"29.99","priceCurrency":"USD"}}'
+            "</script></head><body></body></html>"
+        )
+        fake_curl.STATUS_FOR_PROFILE = {"chrome133a": 200}
+        fake_curl.RESPONSE_TEXT_FOR_PROFILE = {"chrome133a": product_html}
+
+        tool = _get_tool(server, "auto_scrape")
+        result = await tool.fn(url="https://example.test/p")  # type: ignore[attr-defined]
+        assert result["pattern_used"] == "a_b_c"
+        assert result["is_structured"] is True
+
+    @pytest.mark.asyncio
+    async def test_d_success_carries_is_structured_true(
+        self,
+        server: object,
+        fake_curl: type[FakeCurlSession],
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        # All A/B/C profiles 403 -> BlockedError -> D step.
+        fake_curl.STATUS_FOR_PROFILE = {
+            "chrome133a": 403,
+            "chrome124": 403,
+            "safari18_0": 403,
+            "firefox135": 403,
+        }
+        product_html = (
+            '<html><head><script type="application/ld+json">'
+            '{"@context":"https://schema.org","@type":"Product","name":"Widget Z",'
+            '"sku":"Z1","offers":{"@type":"Offer","price":"39.99","priceCurrency":"USD"}}'
+            "</script></head><body></body></html>"
+        )
+        import scrapper_tool.patterns.d as d_mod
+
+        def fake_hostile_client(**_kwargs: object) -> _FakeMcpFetcher:
+            return _FakeMcpFetcher(_FakeMcpScraplingResponse(html=product_html))
+
+        monkeypatch.setattr(d_mod, "hostile_client", fake_hostile_client)
+
+        tool = _get_tool(server, "auto_scrape")
+        result = await tool.fn(url="https://hostile.com/p")  # type: ignore[attr-defined]
+        assert result["pattern_used"] == "d"
+        assert result["is_structured"] is True
 
 
 # ---- main() entrypoint ----------------------------------------------------
@@ -656,3 +722,76 @@ class TestModuleSurface:
 # scenario is covered by the module-level `pytest.importorskip(...)` at
 # the top of this file: when mcp.server.fastmcp can't be imported, the
 # whole test module is skipped — exactly the behaviour the lib promises.
+
+
+# ---- v1.2.0: hostile_only fast-path ---------------------------------------
+
+
+class TestAutoScrapeHostileOnly:
+    """v1.2.0 — auto_scrape(hostile_only=True) skips A/B/C and starts at D."""
+
+    @pytest.mark.asyncio
+    async def test_hostile_only_invokes_d_skips_a_b_c(
+        self,
+        server: object,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        # NO fake_curl fixture — if A/B/C is invoked the test would attempt
+        # a real HTTP call. Lack of mock IS the assertion.
+        product_html = (
+            '<html><head><script type="application/ld+json">'
+            '{"@context":"https://schema.org","@type":"Product","name":"Hostile Widget",'
+            '"sku":"H1","offers":{"@type":"Offer","price":"49.99","priceCurrency":"USD"}}'
+            "</script></head><body></body></html>"
+        )
+        import scrapper_tool.patterns.d as d_mod
+
+        def fake_hostile_client(**_kwargs: object) -> _FakeMcpFetcher:
+            return _FakeMcpFetcher(_FakeMcpScraplingResponse(html=product_html))
+
+        monkeypatch.setattr(d_mod, "hostile_client", fake_hostile_client)
+
+        tool = _get_tool(server, "auto_scrape")
+        result = await tool.fn(  # type: ignore[attr-defined]
+            url="https://hostile.com/p", hostile_only=True
+        )
+        assert result["pattern_used"] == "d"
+        assert result["pattern_attempts"] == ["d"], "no a_b_c noise"
+        assert result["is_structured"] is True
+        assert result["hostile_skipped"] is False
+
+    @pytest.mark.asyncio
+    async def test_hostile_only_no_fallback_returns_blocked_when_extra_missing(
+        self,
+        server: object,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        # Force the import inside _try_pattern_d_for_auto_scrape to raise.
+        import builtins
+        import sys
+
+        sys.modules.pop("scrapper_tool.patterns.d", None)
+        real_import = builtins.__import__
+
+        def patched_import(
+            name: str,
+            globals: object = None,
+            locals: object = None,
+            fromlist: object = (),
+            level: int = 0,
+        ) -> object:
+            if name == "scrapper_tool.patterns.d":
+                raise ImportError("simulated: [hostile] not installed")
+            return real_import(name, globals, locals, fromlist, level)
+
+        monkeypatch.setattr(builtins, "__import__", patched_import)
+
+        tool = _get_tool(server, "auto_scrape")
+        result = await tool.fn(  # type: ignore[attr-defined]
+            url="https://hostile.com/p", hostile_only=True, hostile_fallback=False
+        )
+        assert result["blocked"] is True
+        assert result["pattern_used"] is None
+        assert result["hostile_skipped"] is True
+        assert result["is_structured"] is False
+        assert "hostile_only" in result["error"].lower() or "d failed" in result["error"].lower()

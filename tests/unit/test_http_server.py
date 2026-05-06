@@ -1195,7 +1195,9 @@ class _FakeFetcher:
     async def __aexit__(self, *args: Any) -> None:
         return None
 
-    async def async_fetch(self, url: str, *, solve_cloudflare: bool = True) -> Any:
+    async def async_fetch(self, url: str, **kwargs: Any) -> Any:
+        # Accept any kwargs (solve_cloudflare, network_idle, user_data_dir, ...).
+        # Tests that need to assert on kwargs subclass and override.
         if isinstance(self._response, BaseException):
             raise self._response
         return self._response
@@ -1438,3 +1440,421 @@ class TestScrapeWithPatternD:
         assert body["checks"]["hostile_installed"] is True
         warnings = body["checks"].get("warnings") or []
         assert not any("hostile_not_installed" in w for w in warnings)
+
+
+# --- v1.2.0: is_structured response field ----------------------------------
+
+
+class TestIsStructuredField:
+    """v1.2.0 — every /scrape response carries the sidecar's success verdict.
+
+    Pre-1.2.0 every downstream consumer had to derive "is this a real payload
+    or LLM narration of failure?" from response shape. The sidecar already
+    classifies internally via ``_classify_extraction_success`` (for A/B/C and
+    D) and via ``_is_e_tier_structured`` (for E1/E2). This class pins the
+    contract: ``is_structured: true`` iff the sidecar accepted the page.
+    """
+
+    def test_helper_truth_table(self) -> None:
+        # Pure-function test — no fixtures.
+        assert http_server._is_e_tier_structured({"name": "x"}, False) is True
+        assert http_server._is_e_tier_structured({"_raw": "..."}, False) is False
+        assert http_server._is_e_tier_structured(None, False) is False
+        assert http_server._is_e_tier_structured({"name": "x"}, True) is False
+        # List payloads (LLM returned an array of records) are structured.
+        assert http_server._is_e_tier_structured([{"a": 1}], False) is True
+        # Empty dict is technically structured — has no _raw marker.
+        assert http_server._is_e_tier_structured({}, False) is True
+
+    @pytest.mark.asyncio
+    async def test_a_b_c_success_carries_is_structured_true(
+        self, app_no_auth: Any, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        async def fake_ladder(method: str, url: str, **kwargs: Any) -> tuple[Any, str]:
+            return _make_response(text=_PRODUCT_HTML, url=url), "chrome133a"
+
+        monkeypatch.setattr("scrapper_tool.ladder.request_with_ladder", fake_ladder)
+
+        async with _client(app_no_auth) as client:
+            resp = await client.post("/scrape", json={"url": "https://example.com/p"})
+        body = resp.json()
+        assert body["pattern_used"] == "a_b_c"
+        assert body["is_structured"] is True
+
+    @pytest.mark.asyncio
+    async def test_d_success_carries_is_structured_true(
+        self, app_no_auth: Any, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from scrapper_tool.errors import BlockedError
+
+        async def fake_ladder(method: str, url: str, **kwargs: Any) -> Any:
+            raise BlockedError("blocked")
+
+        monkeypatch.setattr("scrapper_tool.ladder.request_with_ladder", fake_ladder)
+        _install_fake_hostile_client(
+            monkeypatch, response=_FakeScraplingResponse(html=_PRODUCT_HTML)
+        )
+
+        async with _client(app_no_auth) as client:
+            resp = await client.post("/scrape", json={"url": "https://hostile.com/p"})
+        body = resp.json()
+        assert body["pattern_used"] == "d"
+        assert body["is_structured"] is True
+
+    @pytest.mark.asyncio
+    async def test_e1_with_real_data_is_structured_true(
+        self, app_no_auth: Any, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from scrapper_tool.errors import BlockedError
+
+        async def fake_ladder(method: str, url: str, **kwargs: Any) -> Any:
+            raise BlockedError("blocked")
+
+        monkeypatch.setattr("scrapper_tool.ladder.request_with_ladder", fake_ladder)
+        monkeypatch.setattr(http_server, "_hostile_available", lambda: False)
+
+        fake_result = MagicMock()
+        fake_result.mode = "extract"
+        fake_result.data = {"name": "Real Widget", "price": 9.99}
+        fake_result.final_url = "https://protected.com/p"
+        fake_result.rendered_markdown = "# Widget"
+        fake_result.screenshots = None
+        fake_result.tokens_used = 100
+        fake_result.steps_used = 1
+        fake_result.blocked = False
+        fake_result.error = None
+        fake_result.duration_s = 1.0
+        _mock_agent_module(monkeypatch, extract_result=fake_result)
+
+        async with _client(app_no_auth) as client:
+            resp = await client.post(
+                "/scrape",
+                json={"url": "https://protected.com/p", "schema_json": {"name": "str"}},
+            )
+        body = resp.json()
+        assert body["pattern_used"] == "e1"
+        assert body["is_structured"] is True
+
+    @pytest.mark.asyncio
+    async def test_blocked_response_is_unstructured(
+        self, app_no_auth: Any, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from scrapper_tool.errors import AgentBlockedError, BlockedError
+
+        async def fake_ladder(method: str, url: str, **kwargs: Any) -> Any:
+            raise BlockedError("blocked")
+
+        monkeypatch.setattr("scrapper_tool.ladder.request_with_ladder", fake_ladder)
+        monkeypatch.setattr(http_server, "_hostile_available", lambda: False)
+        agent_extract_mock = AsyncMock(side_effect=AgentBlockedError("e1 blocked"))
+        agent_browse_mock = AsyncMock(side_effect=AgentBlockedError("e2 blocked"))
+        agent_module = MagicMock()
+        agent_module.AgentConfig = MagicMock()
+        agent_module.AgentConfig.from_env = MagicMock(
+            return_value=MagicMock(merged=lambda **_: MagicMock())
+        )
+        agent_module.agent_extract = agent_extract_mock
+        agent_module.agent_browse = agent_browse_mock
+        import sys
+
+        monkeypatch.setitem(sys.modules, "scrapper_tool.agent", agent_module)
+
+        async with _client(app_no_auth) as client:
+            resp = await client.post("/scrape", json={"url": "https://blocked.com"})
+        # Fully-blocked path returns 422 via AgentBlockedError handler — body
+        # there doesn't carry is_structured, but the contract is documented as
+        # is_structured=false on any soft-failure path that DOES return 200.
+        # This pins the 422 case as the expected terminus.
+        assert resp.status_code == 422
+
+    @pytest.mark.asyncio
+    async def test_e1_with_raw_marker_is_unstructured(
+        self, app_no_auth: Any, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # E1 returned data but it's the LLM-narration sentinel: {"_raw": "..."}.
+        # Must surface as is_structured=false even though blocked=false.
+        from scrapper_tool.errors import BlockedError
+
+        async def fake_ladder(method: str, url: str, **kwargs: Any) -> Any:
+            raise BlockedError("blocked")
+
+        monkeypatch.setattr("scrapper_tool.ladder.request_with_ladder", fake_ladder)
+        monkeypatch.setattr(http_server, "_hostile_available", lambda: False)
+
+        fake_result = MagicMock()
+        fake_result.mode = "extract"
+        fake_result.data = {"_raw": "I could not extract structured data."}
+        fake_result.final_url = "https://protected.com/p"
+        fake_result.rendered_markdown = "# Page"
+        fake_result.screenshots = None
+        fake_result.tokens_used = 50
+        fake_result.steps_used = 1
+        fake_result.blocked = False
+        fake_result.error = None
+        fake_result.duration_s = 0.5
+        _mock_agent_module(monkeypatch, extract_result=fake_result)
+
+        async with _client(app_no_auth) as client:
+            resp = await client.post(
+                "/scrape",
+                json={"url": "https://protected.com/p", "schema_json": {"name": "str"}},
+            )
+        body = resp.json()
+        assert body["pattern_used"] == "e1"
+        assert body["blocked"] is False
+        assert body["is_structured"] is False, (
+            "data with {_raw: ...} marker is LLM narration, not a structured payload"
+        )
+
+
+# --- v1.2.0: mode=hostile ---------------------------------------------------
+
+
+class TestModeHostile:
+    """v1.2.0 — mode=hostile invokes Pattern D directly, skipping A/B/C.
+
+    For vendors recon-classified as hostile (Cloudflare Turnstile, Akamai EVA,
+    DataDome) where A/B/C is known to fail. Saves ~2-3s per call (4 doomed
+    profile attempts skipped) and cleans up pattern_attempts telemetry.
+    """
+
+    @pytest.mark.asyncio
+    async def test_mode_hostile_invokes_d_directly_skips_a_b_c(
+        self, app_no_auth: Any, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # No ladder mock at all — if A/B/C is invoked the test will time out
+        # making a real network call. The lack of a mock IS the assertion.
+        _install_fake_hostile_client(
+            monkeypatch, response=_FakeScraplingResponse(html=_PRODUCT_HTML)
+        )
+
+        async with _client(app_no_auth) as client:
+            resp = await client.post(
+                "/scrape",
+                json={"url": "https://hostile.com/p", "mode": "hostile"},
+            )
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["pattern_used"] == "d"
+        assert body["pattern_attempts"] == ["d"], "no A/B/C noise"
+        assert body["is_structured"] is True
+        assert body["hostile_skipped"] is False
+
+    @pytest.mark.asyncio
+    async def test_mode_hostile_falls_back_to_e1_by_default(
+        self, app_no_auth: Any, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # D fails (classifier rejects an unhydrated SPA shell). With
+        # hostile_fallback=True (default), cascade reaches E1.
+        _install_fake_hostile_client(
+            monkeypatch,
+            response=_FakeScraplingResponse(html="<html><body>shell</body></html>"),
+        )
+
+        fake_result = MagicMock()
+        fake_result.mode = "extract"
+        fake_result.data = {"name": "via_e1"}
+        fake_result.final_url = "https://hostile.com/p"
+        fake_result.rendered_markdown = "# E1"
+        fake_result.screenshots = None
+        fake_result.tokens_used = 100
+        fake_result.steps_used = 1
+        fake_result.blocked = False
+        fake_result.error = None
+        fake_result.duration_s = 1.0
+        _mock_agent_module(monkeypatch, extract_result=fake_result)
+
+        async with _client(app_no_auth) as client:
+            resp = await client.post(
+                "/scrape",
+                json={
+                    "url": "https://hostile.com/p",
+                    "mode": "hostile",
+                    "schema_json": {"name": "str"},
+                },
+            )
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["pattern_used"] == "e1"
+        assert body["pattern_attempts"] == ["d", "e1"], "no a_b_c entry"
+        assert body["is_structured"] is True
+
+    @pytest.mark.asyncio
+    async def test_mode_hostile_no_fallback_raises_on_d_failure(
+        self, app_no_auth: Any, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # D itself raises; hostile_fallback=False -> AgentBlockedError -> 422.
+        _install_fake_hostile_client(
+            monkeypatch,
+            response=RuntimeError("scrapling: turnstile unsolvable"),
+        )
+
+        async with _client(app_no_auth) as client:
+            resp = await client.post(
+                "/scrape",
+                json={
+                    "url": "https://hostile.com/p",
+                    "mode": "hostile",
+                    "hostile_fallback": False,
+                },
+            )
+        assert resp.status_code == 422
+        assert resp.json()["error"] == "blocked"
+
+    @pytest.mark.asyncio
+    async def test_mode_hostile_no_fallback_no_extra_returns_503(
+        self, app_no_auth: Any, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # [hostile] missing + hostile_fallback=False -> ConfigurationError -> 503.
+        monkeypatch.setattr(http_server, "_hostile_available", lambda: False)
+
+        async with _client(app_no_auth) as client:
+            resp = await client.post(
+                "/scrape",
+                json={
+                    "url": "https://hostile.com/p",
+                    "mode": "hostile",
+                    "hostile_fallback": False,
+                },
+            )
+        assert resp.status_code == 503
+        body = resp.json()
+        assert "hostile" in body["detail"].lower()
+
+    @pytest.mark.asyncio
+    async def test_mode_hostile_fallback_when_extra_missing(
+        self, app_no_auth: Any, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # [hostile] missing but hostile_fallback=True (default) -> falls back to E1.
+        monkeypatch.setattr(http_server, "_hostile_available", lambda: False)
+
+        fake_result = MagicMock()
+        fake_result.mode = "extract"
+        fake_result.data = {"name": "fallback"}
+        fake_result.final_url = "https://hostile.com/p"
+        fake_result.rendered_markdown = None
+        fake_result.screenshots = None
+        fake_result.tokens_used = 50
+        fake_result.steps_used = 1
+        fake_result.blocked = False
+        fake_result.error = None
+        fake_result.duration_s = 0.5
+        _mock_agent_module(monkeypatch, extract_result=fake_result)
+
+        async with _client(app_no_auth) as client:
+            resp = await client.post(
+                "/scrape",
+                json={"url": "https://hostile.com/p", "mode": "hostile"},
+            )
+        body = resp.json()
+        assert body["pattern_used"] == "e1"
+        assert body["hostile_skipped"] is True
+        # No "d" entry because the D step was skipped (extra missing).
+        assert body["pattern_attempts"] == ["e1"]
+
+
+# --- v1.2.0: pattern_d_network_idle knob -----------------------------------
+
+
+class _CapturingFetcher(_FakeFetcher):
+    """Fake fetcher that records kwargs of the most recent async_fetch call."""
+
+    captured_kwargs: dict[str, Any] = {}
+
+    async def async_fetch(self, url: str, **kwargs: Any) -> Any:
+        type(self).captured_kwargs.clear()
+        type(self).captured_kwargs.update(kwargs)
+        if isinstance(self._response, BaseException):
+            raise self._response
+        return self._response
+
+
+def _install_capturing_hostile_client(
+    monkeypatch: pytest.MonkeyPatch,
+    *,
+    response: Any,
+) -> type[_CapturingFetcher]:
+    """Install a kwarg-capturing fake hostile_client; return the captor class."""
+    import scrapper_tool.patterns.d as d_mod
+
+    _CapturingFetcher.captured_kwargs = {}
+
+    def fake_hostile_client(**_kwargs: Any) -> _CapturingFetcher:
+        return _CapturingFetcher(response)
+
+    monkeypatch.setattr(d_mod, "hostile_client", fake_hostile_client)
+    monkeypatch.setattr(http_server, "_hostile_available", lambda: True)
+    return _CapturingFetcher
+
+
+class TestPatternDNetworkIdle:
+    """v1.2.0 — pattern_d_network_idle forwards through to Scrapling.
+
+    SPA-rendered hostile vendors (Tasca, RevolutionParts dealers behind CF)
+    need network_idle=True to capture hydrated HTML rather than the SPA shell.
+    """
+
+    @pytest.mark.asyncio
+    async def test_d_default_does_not_set_network_idle(
+        self, app_no_auth: Any, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from scrapper_tool.errors import BlockedError
+
+        async def fake_ladder(method: str, url: str, **kwargs: Any) -> Any:
+            raise BlockedError("blocked")
+
+        monkeypatch.setattr("scrapper_tool.ladder.request_with_ladder", fake_ladder)
+        captor = _install_capturing_hostile_client(
+            monkeypatch, response=_FakeScraplingResponse(html=_PRODUCT_HTML)
+        )
+
+        async with _client(app_no_auth) as client:
+            await client.post("/scrape", json={"url": "https://hostile.com/p"})
+        assert captor.captured_kwargs.get("solve_cloudflare") is True
+        assert captor.captured_kwargs.get("network_idle") is False, (
+            "Default must keep network_idle=False to preserve cold-call latency"
+        )
+
+    @pytest.mark.asyncio
+    async def test_d_forwards_network_idle_when_set(
+        self, app_no_auth: Any, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from scrapper_tool.errors import BlockedError
+
+        async def fake_ladder(method: str, url: str, **kwargs: Any) -> Any:
+            raise BlockedError("blocked")
+
+        monkeypatch.setattr("scrapper_tool.ladder.request_with_ladder", fake_ladder)
+        captor = _install_capturing_hostile_client(
+            monkeypatch, response=_FakeScraplingResponse(html=_PRODUCT_HTML)
+        )
+
+        async with _client(app_no_auth) as client:
+            await client.post(
+                "/scrape",
+                json={
+                    "url": "https://tasca.com/search?q=ABC123",
+                    "pattern_d_network_idle": True,
+                },
+            )
+        assert captor.captured_kwargs.get("network_idle") is True
+
+    @pytest.mark.asyncio
+    async def test_mode_hostile_also_forwards_network_idle(
+        self, app_no_auth: Any, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # mode=hostile path calls _do_d_step too — must honor network_idle.
+        captor = _install_capturing_hostile_client(
+            monkeypatch, response=_FakeScraplingResponse(html=_PRODUCT_HTML)
+        )
+
+        async with _client(app_no_auth) as client:
+            await client.post(
+                "/scrape",
+                json={
+                    "url": "https://tasca.com/search?q=XYZ",
+                    "mode": "hostile",
+                    "pattern_d_network_idle": True,
+                },
+            )
+        assert captor.captured_kwargs.get("network_idle") is True
