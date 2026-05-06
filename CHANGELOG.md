@@ -4,6 +4,24 @@ All notable changes to `scrapper-tool` are recorded here. Format follows [Keep a
 
 ## [Unreleased]
 
+## [1.4.1] - 2026-05-06
+
+Hotfix release. v1.4.0's ``solve_cloudflare="auto"`` default did a
+probe-first prelude even for ``mode="hostile"`` callers — recon-pinned
+hostile vendors (Amayama, Megazip, Tasca) wasted ~3s on the prelude
+probe and risked Scrapling's internal CF-retry loop firing twice
+(observed pushing per-call latency past the 200s sidecar timeout).
+
+### Fixed
+
+- When ``mode="hostile"`` is set, ``solve_cloudflare="auto"`` now
+  resolves to ``True`` (skip the probe; solve straight away). This
+  preserves the v1.3.0 cost story for hostile-pinned adapters while
+  keeping the probe-first auto behavior for ``mode="auto"`` callers.
+- Live smoke against PartsPilot's Amayama probe set: pre-1.4.1 the
+  cascade timed out at 200s with `SidecarBackendDown`; post-1.4.1
+  back to ~17s + structured Product (matches v1.3.0 baseline).
+
 ## [1.4.0] - 2026-05-06
 
 SPA-vendor unblock + observability + the simple-by-default API. Closes the

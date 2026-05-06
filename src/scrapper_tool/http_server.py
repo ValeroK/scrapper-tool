@@ -1190,10 +1190,23 @@ async def _d_fetch_with_smart_defaults(req: Any) -> tuple[str, int, str]:
     effective_timeout = max(timeout_s, 30.0) if network_idle else timeout_s
     profile_dir = req.__dict__.get("_resolved_profile_dir")
 
-    # Solve-CF resolution: explicit True wins; explicit False wins; "auto"
-    # (or unspecified) -> two-pass detection.
+    # Solve-CF resolution: explicit True/False wins. ``"auto"`` (default)
+    # does two-pass detection — but only when the caller didn't already
+    # tell us the target is hostile. ``mode="hostile"`` is the explicit
+    # "skip the recon, solve CF straight away" signal; honoring auto in
+    # that case wastes ~3s on the prelude probe and risks Scrapling's
+    # internal retry loop running twice. So when mode=hostile, auto
+    # resolves to True (preserves v1.3.0 cost story for hostile-pinned
+    # adapters). When mode=auto, auto means probe-first (saves ~10s on
+    # non-CF vendors).
     raw_solve = getattr(req, "solve_cloudflare", "auto")
-    explicit_solve: bool | None = raw_solve if raw_solve in (True, False) else None
+    explicit_solve: bool | None
+    if raw_solve in (True, False):
+        explicit_solve = raw_solve
+    elif getattr(req, "mode", "auto") == "hostile":
+        explicit_solve = True
+    else:
+        explicit_solve = None  # "auto" + mode=auto -> probe-first detect
 
     base_kwargs: dict[str, Any] = {"network_idle": network_idle}
     if profile_dir:
