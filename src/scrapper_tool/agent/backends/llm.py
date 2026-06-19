@@ -210,7 +210,8 @@ def get_llm_backend(config: AgentConfig) -> LLMBackend:
             "llama_cpp": LlamaCppBackend,
             "vllm": VLLMBackend,
         }[config.llm]
-        return cls(model=config.model, base_url=config.ollama_url)
+        api_key = config.llm_api_key.get_secret_value() if config.llm_api_key else None
+        return cls(model=config.model, base_url=config.ollama_url, api_key=api_key)
     msg = f"Unknown LLM backend: {config.llm!r}"
     raise ValueError(msg)
 

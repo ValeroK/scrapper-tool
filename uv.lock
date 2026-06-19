@@ -6575,7 +6575,7 @@ fetchers = [
 
 [[package]]
 name = "scrapper-tool"
-version = "1.4.0"
+version = "1.4.2"
 source = { editable = "." }
 dependencies = [
     { name = "curl-cffi" },

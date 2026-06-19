@@ -112,6 +112,7 @@ class AgentConfig(BaseModel):
     llm: LLMBackendName = "ollama"
     model: str = "qwen3-vl:8b"
     ollama_url: str = "http://localhost:11434"
+    llm_api_key: SecretStr | None = None
 
     # --- Run budget
     max_steps: int = 50
@@ -137,6 +138,7 @@ class AgentConfig(BaseModel):
         """
         env = os.environ
         captcha_key = env.get("SCRAPPER_TOOL_CAPTCHA_KEY")
+        llm_api_key = env.get("SCRAPPER_TOOL_AGENT_LLM_API_KEY")
         # Pydantic accepts plain str values for Literal-typed fields and
         # validates them, so we pass them through model_validate which
         # surfaces any invalid value with a clean error.
@@ -151,6 +153,7 @@ class AgentConfig(BaseModel):
                 "llm": env.get("SCRAPPER_TOOL_AGENT_LLM", "ollama"),
                 "model": env.get("SCRAPPER_TOOL_AGENT_MODEL", "qwen3-vl:8b"),
                 "ollama_url": env.get("SCRAPPER_TOOL_AGENT_OLLAMA_URL", "http://localhost:11434"),
+                "llm_api_key": SecretStr(llm_api_key) if llm_api_key else None,
                 "max_steps": int(env.get("SCRAPPER_TOOL_AGENT_MAX_STEPS", "50")),
                 "timeout_s": float(env.get("SCRAPPER_TOOL_AGENT_TIMEOUT_S", "120")),
                 "captcha_solver": env.get("SCRAPPER_TOOL_CAPTCHA_SOLVER", "auto"),

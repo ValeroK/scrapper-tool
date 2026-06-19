@@ -189,6 +189,19 @@ class TestLLMResolver:
         backend = get_llm_backend(cfg)
         assert isinstance(backend, OpenAICompatBackend)
 
+    def test_openai_compat_with_api_key(self) -> None:
+        from pydantic import SecretStr
+
+        api_key = "sk-test-key-12345"
+        cfg = AgentConfig(
+            llm="openai_compat",
+            ollama_url="http://localhost:8080",
+            llm_api_key=SecretStr(api_key),
+        )
+        backend = get_llm_backend(cfg)
+        assert isinstance(backend, OpenAICompatBackend)
+        assert backend.api_key == api_key
+
     def test_unknown_raises(self) -> None:
         cfg = AgentConfig.model_construct(llm="evil")  # bypass validation
         with pytest.raises(ValueError, match="Unknown LLM backend"):

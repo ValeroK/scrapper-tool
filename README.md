@@ -579,6 +579,71 @@ async with agent_session(config=cfg) as s:
 result = await agent_extract(url, schema=..., config=cfg, model="qwen3-coder:30b")
 ```
 
+### LLM Configuration
+
+Pattern E requires an external LLM server. Configure which one and how to reach it:
+
+| Config Option | Environment Variable | Type | Example | Notes |
+|---|---|---|---|---|
+| `llm` | `SCRAPPER_TOOL_AGENT_LLM` | str | `openai_compat` | Backend: `ollama`, `openai_compat`, `llama_cpp`, `vllm` |
+| `model` | `SCRAPPER_TOOL_AGENT_MODEL` | str | `gpt-4-turbo` | Model name for your LLM backend |
+| `ollama_url` | `SCRAPPER_TOOL_AGENT_OLLAMA_URL` | str | `https://api.openai.com` | Server URL. Doubles as base_url for OpenAI-compatible backends |
+| `llm_api_key` | `SCRAPPER_TOOL_AGENT_LLM_API_KEY` | str | `sk-...` | API key for OpenAI-compatible backends (optional for local Ollama) |
+
+#### Example configurations
+
+**Ollama (local, zero cost):**
+```bash
+export SCRAPPER_TOOL_AGENT_LLM=ollama
+export SCRAPPER_TOOL_AGENT_MODEL=qwen3-vl:8b
+export SCRAPPER_TOOL_AGENT_OLLAMA_URL=http://localhost:11434
+```
+
+**LM Studio (local, zero cost):**
+```bash
+export SCRAPPER_TOOL_AGENT_LLM=openai_compat
+export SCRAPPER_TOOL_AGENT_MODEL=qwen3-vl-8b-instruct
+export SCRAPPER_TOOL_AGENT_OLLAMA_URL=http://localhost:1234
+```
+
+**OpenAI API:**
+```bash
+export SCRAPPER_TOOL_AGENT_LLM=openai_compat
+export SCRAPPER_TOOL_AGENT_MODEL=gpt-4-turbo
+export SCRAPPER_TOOL_AGENT_OLLAMA_URL=https://api.openai.com
+export SCRAPPER_TOOL_AGENT_LLM_API_KEY=sk-your-api-key
+```
+
+**vLLM (local or remote):**
+```bash
+export SCRAPPER_TOOL_AGENT_LLM=vllm
+export SCRAPPER_TOOL_AGENT_MODEL=qwen3-vl:8b
+export SCRAPPER_TOOL_AGENT_OLLAMA_URL=http://localhost:8000
+```
+
+**In Python:**
+```python
+from scrapper_tool.agent import AgentConfig
+from pydantic import SecretStr
+
+# Ollama
+cfg = AgentConfig(
+    llm="ollama",
+    model="qwen3-vl:8b",
+    ollama_url="http://localhost:11434"
+)
+
+# OpenAI-compatible with API key
+cfg = AgentConfig(
+    llm="openai_compat",
+    model="gpt-4-turbo",
+    ollama_url="https://api.openai.com",
+    llm_api_key=SecretStr("sk-...")
+)
+
+result = await agent_extract(url, schema=..., config=cfg)
+```
+
 ### Reference
 
 - **[`docs/SETTINGS.md`](docs/SETTINGS.md)** — every variable, default, choice

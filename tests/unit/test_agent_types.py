@@ -73,6 +73,14 @@ class TestFromEnv:
         assert cfg.captcha_paid_fallback == "twocaptcha"
         assert cfg.respect_robots is False
 
+    def test_from_env_reads_llm_api_key(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setenv("SCRAPPER_TOOL_AGENT_LLM", "openai_compat")
+        monkeypatch.setenv("SCRAPPER_TOOL_AGENT_LLM_API_KEY", "sk-openai-test-key")
+        cfg = AgentConfig.from_env()
+        assert cfg.llm == "openai_compat"
+        assert cfg.llm_api_key is not None
+        assert cfg.llm_api_key.get_secret_value() == "sk-openai-test-key"
+
     def test_envbool_handles_truthy_strings(self, monkeypatch: pytest.MonkeyPatch) -> None:
         for truthy in ("1", "true", "TRUE", "yes", "on"):
             monkeypatch.setenv("SCRAPPER_TOOL_AGENT_HEADFUL", truthy)
