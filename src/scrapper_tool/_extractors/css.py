@@ -70,9 +70,7 @@ def _extract_field(  # noqa: PLR0911 — small dispatch on field type
     # not flagged as unreachable. Selector-less fields use the row
     # node directly (caller wants the whole row).
     match: LexborNode | None = (
-        node
-        if not selector
-        else cast("LexborNode | None", node.css_first(selector))
+        node if not selector else cast("LexborNode | None", node.css_first(selector))
     )
     if match is None:
         return False, None
