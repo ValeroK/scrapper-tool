@@ -1,3 +1,4 @@
+# syntax=docker/dockerfile:1
 # scrapper-tool — DEFAULT image (Pattern A-E in one container).
 #
 # Bundles:
@@ -27,7 +28,9 @@
 
 FROM python:3.13-slim-bookworm AS builder
 
-RUN apt-get update && apt-get install -y --no-install-recommends \
+RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
+    --mount=type=cache,target=/var/lib/apt,sharing=locked \
+    apt-get update && apt-get install -y --no-install-recommends \
         build-essential \
         ca-certificates \
         curl \
@@ -35,20 +38,27 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
         libffi-dev \
         libssl-dev \
         libxml2-dev \
-        libxslt1-dev \
-    && rm -rf /var/lib/apt/lists/*
+        libxslt1-dev
 
 COPY --from=ghcr.io/astral-sh/uv:0.5 /uv /uvx /usr/local/bin/
 
 WORKDIR /app
-COPY pyproject.toml uv.lock README.md ./
-COPY src/ ./src/
-
 ENV UV_LINK_MODE=copy
+
+# Copy manifests only — this layer is cached until pyproject.toml or uv.lock changes.
+COPY pyproject.toml uv.lock README.md ./
 # `[full]` pulls hostile + llm-agent + turnstile-solver + agent.
 # `[http]` pulls FastAPI + uvicorn for the REST sidecar (`scrapper-tool-serve`).
 # The lxml override in pyproject.toml's [tool.uv] section makes this resolve.
-RUN uv sync --frozen --extra dev --extra agent --extra full --extra http
+# --no-install-project: install only dependencies, not the project itself.
+# This layer survives source-code-only changes.
+RUN --mount=type=cache,target=/root/.cache/uv \
+    uv sync --frozen --no-install-project --extra dev --extra agent --extra full --extra http
+
+# Copy source and install the project (fast — all packages already in the layer above).
+COPY src/ ./src/
+RUN --mount=type=cache,target=/root/.cache/uv \
+    uv sync --frozen --extra dev --extra agent --extra full --extra http
 
 # ---- Stage 2: runtime --------------------------------------------------------
 
@@ -59,7 +69,9 @@ LABEL org.opencontainers.image.title="scrapper-tool" \
       org.opencontainers.image.source="https://github.com/ValeroK/scrapper-tool" \
       org.opencontainers.image.licenses="MIT"
 
-RUN apt-get update && apt-get install -y --no-install-recommends \
+RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
+    --mount=type=cache,target=/var/lib/apt,sharing=locked \
+    apt-get update && apt-get install -y --no-install-recommends \
         ca-certificates \
         curl \
         fonts-liberation \
@@ -92,8 +104,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
         libxkbcommon0 \
         libxrandr2 \
         xdg-utils \
-        xvfb \
-    && rm -rf /var/lib/apt/lists/*
+        xvfb
 
 WORKDIR /app
 COPY --from=builder /app/.venv /app/.venv

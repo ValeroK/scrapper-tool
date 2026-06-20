@@ -39,6 +39,7 @@ jobs:
 
   test:
     name: Tests (py${{ matrix.python-version }}, extras=${{ matrix.extras }})
+    needs: [lint-and-type]
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
@@ -81,6 +82,7 @@ jobs:
 
   pip-audit:
     name: Dependency audit
+    needs: [lint-and-type]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
@@ -104,6 +106,7 @@ jobs:
 
   openapi-spec-check:
     name: OpenAPI spec is up-to-date
+    needs: [lint-and-type]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
