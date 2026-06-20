@@ -832,12 +832,16 @@ class TestAutoScrapeSharedProfileDir:
                 captured_kwargs.update(kwargs)
                 return _FakeMcpScraplingResponse(html=product_html)
 
+        import scrapper_tool.mcp as mcp_mod
         import scrapper_tool.patterns.d as d_mod
 
         def fake_hostile_client(**_kwargs: object) -> CapturingFetcher:
             return CapturingFetcher(_FakeMcpScraplingResponse(html=product_html))
 
         monkeypatch.setattr(d_mod, "hostile_client", fake_hostile_client)
+        # Simulate [hostile] being installed so the cascade allocates a
+        # per-request user_data_dir even without scrapling on the path.
+        monkeypatch.setattr(mcp_mod, "_hostile_available_for_mcp", lambda: True)
 
         tool = _get_tool(server, "auto_scrape")
         result = await tool.fn(url="https://hostile.com/p")  # type: ignore[attr-defined]
