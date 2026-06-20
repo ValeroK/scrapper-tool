@@ -148,7 +148,7 @@ prerelease = "allow"
 # tests confirm both libraries function. If a future Crawl4AI release
 # starts depending on lxml-5-only API, install [hostile] and [llm-agent]
 # in separate environments instead of using [full].
-override-dependencies = ["lxml>=6.0.3"]
+override-dependencies = ["lxml>=6.0.3", "pip>=26.1.2"]
 
 # When NOT using the [full] extra, ``[hostile]`` and ``[llm-agent]``
 # stay separate. Declaring the extras as conflicting tells uv to lock
