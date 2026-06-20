@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "scrapper-tool"
-version = "1.4.2"
+version = "1.4.3"
 description = "Reusable web-scraping toolkit — Pattern A/B/C/D ladder, TLS-impersonation fallback chain, deterministic fixture-replay testing, and an optional MCP server for LLM agents."
 readme = "README.md"
 requires-python = ">=3.12"
@@ -52,7 +52,7 @@ agent = ["mcp>=1.2"]
 # 2Captcha) are HTTP-only and use the existing httpx core dep — no extra
 # install. They stay inert unless SCRAPPER_TOOL_CAPTCHA_KEY is set.
 llm-agent = [
-    "crawl4ai>=0.5",
+    "crawl4ai>=0.9",
     "browser-use>=0.5",
     # Camoufox v0.4+ refuses to launch without ``geoip2`` because its
     # locale-matching layer queries a MaxMind GeoLite2 db at start.
