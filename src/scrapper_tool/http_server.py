@@ -1954,7 +1954,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             respect_robots=_cfg.respect_robots,
             captcha_solver=_cfg.captcha_solver,
             captcha_api_key="set" if _cfg.captcha_api_key else "not set",
-            captcha_paid_fallback=_cfg.captcha_paid_fallback or "not set",
+            captcha_paid_fallback=_cfg.captcha_paid_fallback,
         )
     except Exception as _exc:
         _logger.warning("http_server.agent_config_unavailable", error=str(_exc))
