@@ -1855,9 +1855,12 @@ async def _probe_llm(cfg: Any) -> tuple[bool | None, bool | None]:  # noqa: PLR0
 
     if cfg.llm == "openai_compat":
         url = f"{cfg.ollama_url.rstrip('/')}/v1/models"
+        headers: dict[str, str] = {}
+        if cfg.llm_api_key:
+            headers["Authorization"] = f"Bearer {cfg.llm_api_key.get_secret_value()}"
         try:
             async with httpx.AsyncClient(timeout=5.0) as client:
-                resp = await client.get(url)
+                resp = await client.get(url, headers=headers)
                 if resp.status_code != _HTTP_OK:
                     return True, False
                 data = resp.json()
@@ -1928,6 +1931,33 @@ def main(argv: Sequence[str] | None = None) -> int:
         cors_origins=cors_origins,
         serve_docs=serve_docs,
     )
+
+    # Log which agent env vars are loaded so operators can confirm config
+    # without secrets appearing in logs. Secret fields show "set"/"not set".
+    try:
+        from scrapper_tool.agent.types import AgentConfig  # noqa: PLC0415
+
+        _cfg = AgentConfig.from_env()
+        _logger.info(
+            "http_server.agent_config",
+            browser=_cfg.browser,
+            fingerprint=_cfg.fingerprint,
+            behavior=_cfg.behavior,
+            headful=_cfg.headful,
+            llm=_cfg.llm,
+            model=_cfg.model,
+            ollama_url=_cfg.ollama_url,
+            llm_api_key="set" if _cfg.llm_api_key else "not set",
+            max_steps=_cfg.max_steps,
+            timeout_s=_cfg.timeout_s,
+            proxy="set" if _cfg.proxy else "not set",
+            respect_robots=_cfg.respect_robots,
+            captcha_solver=_cfg.captcha_solver,
+            captcha_api_key="set" if _cfg.captcha_api_key else "not set",
+            captcha_paid_fallback=_cfg.captcha_paid_fallback or "not set",
+        )
+    except Exception as _exc:
+        _logger.warning("http_server.agent_config_unavailable", error=str(_exc))
 
     uvicorn.run(
         app,

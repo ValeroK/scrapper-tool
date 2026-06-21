@@ -890,7 +890,7 @@ class TestLLMProbe:
             async def __aexit__(self, *args: Any) -> None:
                 return None
 
-            async def get(self, url: str) -> FakeResponse:
+            async def get(self, url: str, **kwargs: Any) -> FakeResponse:
                 return FakeResponse()
 
         monkeypatch.setattr(httpx, "AsyncClient", FakeClient)
@@ -899,10 +899,54 @@ class TestLLMProbe:
             llm="openai_compat",
             ollama_url="http://localhost:6543",
             model="google/gemma-4-e4b",
+            llm_api_key=None,
         )
         reachable, available = await http_server._probe_llm(cfg)
         assert reachable is True
         assert available is True
+
+    @pytest.mark.asyncio
+    async def test_probe_openai_compat_sends_auth_header(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """_probe_llm must forward Authorization: Bearer when llm_api_key is set."""
+        import httpx
+        from pydantic import SecretStr
+
+        captured_headers: dict[str, str] = {}
+
+        class FakeResponse:
+            status_code = 200
+
+            def json(self) -> dict[str, Any]:
+                return {"data": [{"id": "gpt-4o"}]}
+
+        class FakeClient:
+            def __init__(self, *args: Any, **kwargs: Any) -> None:
+                pass
+
+            async def __aenter__(self) -> FakeClient:
+                return self
+
+            async def __aexit__(self, *args: Any) -> None:
+                return None
+
+            async def get(self, url: str, **kwargs: Any) -> FakeResponse:
+                captured_headers.update(kwargs.get("headers") or {})
+                return FakeResponse()
+
+        monkeypatch.setattr(httpx, "AsyncClient", FakeClient)
+
+        cfg = MagicMock(
+            llm="openai_compat",
+            ollama_url="http://api.example.com",
+            model="gpt-4o",
+            llm_api_key=SecretStr("sk-test-key"),
+        )
+        reachable, available = await http_server._probe_llm(cfg)
+        assert reachable is True
+        assert available is True
+        assert captured_headers.get("Authorization") == "Bearer sk-test-key"
 
 
 # --- Browser module checks ----------------------------------------------
