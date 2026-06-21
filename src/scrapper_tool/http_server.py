@@ -1912,6 +1912,19 @@ def main(argv: Sequence[str] | None = None) -> int:
         serve_docs=serve_docs,
     )
 
+    # Inventory of which SCRAPPER_TOOL_* env vars are actually present in the
+    # environment. Names only — never values — so this is safe even for the
+    # secret-bearing vars (API keys, proxy creds). This is the unambiguous
+    # answer to "which env variables did the container start with", since the
+    # resolved-config log below cannot distinguish an env-provided value from
+    # a built-in default.
+    _present_env = sorted(k for k in os.environ if k.startswith("SCRAPPER_TOOL_"))
+    _logger.info(
+        "http_server.env_vars_present",
+        names=_present_env,
+        count=len(_present_env),
+    )
+
     # Log which agent env vars are loaded so operators can confirm config
     # without secrets appearing in logs. Secret fields show "set"/"not set".
     try:

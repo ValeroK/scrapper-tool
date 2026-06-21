@@ -828,9 +828,7 @@ class TestLLMProbe:
             assert available is None
 
     @pytest.mark.asyncio
-    async def test_probe_success_returns_true_true(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
+    async def test_probe_success_returns_true_true(self, monkeypatch: pytest.MonkeyPatch) -> None:
         import scrapper_tool.agent.backends.llm as llm_mod
 
         mock_backend = AsyncMock()
