@@ -811,142 +811,85 @@ class TestScrapeForcedModes:
 
 
 class TestLLMProbe:
+    """Tests for _probe_llm.
+
+    _probe_llm delegates to get_llm_backend(cfg).probe() — these tests mock at
+    the backend level (scrapper_tool.agent.backends.llm.get_llm_backend).
+    Auth-header and model-availability tests live in TestOpenAICompatBackend
+    in test_agent_backends.py, which is the right layer.
+    """
+
     @pytest.mark.asyncio
-    async def test_probe_ollama_reachable_with_model(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        # Mock httpx.AsyncClient to return a model list
-        import httpx
+    async def test_probe_skips_unprobed_backends(self) -> None:
+        for llm in ("llama_cpp", "vllm"):
+            cfg = MagicMock(llm=llm)
+            reachable, available = await http_server._probe_llm(cfg)
+            assert reachable is None
+            assert available is None
 
-        class FakeResponse:
-            status_code = 200
+    @pytest.mark.asyncio
+    async def test_probe_success_returns_true_true(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        import scrapper_tool.agent.backends.llm as llm_mod
 
-            def json(self) -> dict[str, Any]:
-                return {"models": [{"name": "qwen3-vl:8b"}, {"name": "llama3:8b"}]}
+        mock_backend = AsyncMock()
+        mock_backend.probe = AsyncMock(return_value=None)
+        monkeypatch.setattr(llm_mod, "get_llm_backend", lambda _cfg: mock_backend)
 
-        class FakeClient:
-            def __init__(self, *args: Any, **kwargs: Any) -> None:
-                pass
-
-            async def __aenter__(self) -> FakeClient:
-                return self
-
-            async def __aexit__(self, *args: Any) -> None:
-                return None
-
-            async def get(self, url: str) -> FakeResponse:
-                return FakeResponse()
-
-        monkeypatch.setattr(httpx, "AsyncClient", FakeClient)
-
-        cfg = MagicMock(llm="ollama", ollama_url="http://localhost:11434", model="qwen3-vl:8b")
+        cfg = MagicMock(llm="ollama")
         reachable, available = await http_server._probe_llm(cfg)
         assert reachable is True
         assert available is True
 
     @pytest.mark.asyncio
-    async def test_probe_ollama_unreachable_returns_false(
+    async def test_probe_unreachable_returns_false_false(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        import httpx
+        import scrapper_tool.agent.backends.llm as llm_mod
+        from scrapper_tool.errors import AgentLLMError
 
-        class FakeClient:
-            def __init__(self, *args: Any, **kwargs: Any) -> None:
-                pass
+        mock_backend = AsyncMock()
+        mock_backend.probe = AsyncMock(side_effect=AgentLLMError("server unreachable"))
+        monkeypatch.setattr(llm_mod, "get_llm_backend", lambda _cfg: mock_backend)
 
-            async def __aenter__(self) -> FakeClient:
-                return self
-
-            async def __aexit__(self, *args: Any) -> None:
-                return None
-
-            async def get(self, url: str) -> Any:
-                raise httpx.ConnectError("connection refused")
-
-        monkeypatch.setattr(httpx, "AsyncClient", FakeClient)
-
-        cfg = MagicMock(llm="ollama", ollama_url="http://localhost:11434", model="qwen3-vl:8b")
+        cfg = MagicMock(llm="openai_compat")
         reachable, available = await http_server._probe_llm(cfg)
         assert reachable is False
         assert available is False
 
     @pytest.mark.asyncio
-    async def test_probe_openai_compat_reachable_with_model(
+    async def test_probe_model_not_found_returns_true_false(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        import httpx
+        import scrapper_tool.agent.backends.llm as llm_mod
+        from scrapper_tool.errors import AgentLLMError
 
-        class FakeResponse:
-            status_code = 200
-
-            def json(self) -> dict[str, Any]:
-                return {"data": [{"id": "google/gemma-4-e4b"}]}
-
-        class FakeClient:
-            def __init__(self, *args: Any, **kwargs: Any) -> None:
-                pass
-
-            async def __aenter__(self) -> FakeClient:
-                return self
-
-            async def __aexit__(self, *args: Any) -> None:
-                return None
-
-            async def get(self, url: str, **kwargs: Any) -> FakeResponse:
-                return FakeResponse()
-
-        monkeypatch.setattr(httpx, "AsyncClient", FakeClient)
-
-        cfg = MagicMock(
-            llm="openai_compat",
-            ollama_url="http://localhost:6543",
-            model="google/gemma-4-e4b",
-            llm_api_key=None,
+        mock_backend = AsyncMock()
+        mock_backend.probe = AsyncMock(
+            side_effect=AgentLLMError("Model 'x' not listed by /v1/models")
         )
+        monkeypatch.setattr(llm_mod, "get_llm_backend", lambda _cfg: mock_backend)
+
+        cfg = MagicMock(llm="openai_compat")
         reachable, available = await http_server._probe_llm(cfg)
         assert reachable is True
-        assert available is True
+        assert available is False
 
     @pytest.mark.asyncio
-    async def test_probe_openai_compat_sends_auth_header(
+    async def test_probe_unexpected_exception_returns_false_false(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """_probe_llm must forward Authorization: Bearer when llm_api_key is set."""
-        import httpx
-        from pydantic import SecretStr
+        import scrapper_tool.agent.backends.llm as llm_mod
 
-        captured_headers: dict[str, str] = {}
+        mock_backend = AsyncMock()
+        mock_backend.probe = AsyncMock(side_effect=RuntimeError("unexpected"))
+        monkeypatch.setattr(llm_mod, "get_llm_backend", lambda _cfg: mock_backend)
 
-        class FakeResponse:
-            status_code = 200
-
-            def json(self) -> dict[str, Any]:
-                return {"data": [{"id": "gpt-4o"}]}
-
-        class FakeClient:
-            def __init__(self, *args: Any, **kwargs: Any) -> None:
-                pass
-
-            async def __aenter__(self) -> FakeClient:
-                return self
-
-            async def __aexit__(self, *args: Any) -> None:
-                return None
-
-            async def get(self, url: str, **kwargs: Any) -> FakeResponse:
-                captured_headers.update(kwargs.get("headers") or {})
-                return FakeResponse()
-
-        monkeypatch.setattr(httpx, "AsyncClient", FakeClient)
-
-        cfg = MagicMock(
-            llm="openai_compat",
-            ollama_url="http://api.example.com",
-            model="gpt-4o",
-            llm_api_key=SecretStr("sk-test-key"),
-        )
+        cfg = MagicMock(llm="ollama")
         reachable, available = await http_server._probe_llm(cfg)
-        assert reachable is True
-        assert available is True
-        assert captured_headers.get("Authorization") == "Bearer sk-test-key"
+        assert reachable is False
+        assert available is False
 
 
 # --- Browser module checks ----------------------------------------------

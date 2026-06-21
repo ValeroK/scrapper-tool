@@ -156,6 +156,19 @@ class OpenAICompatBackend:
         if resp.status_code >= 400:  # noqa: PLR2004 — HTTP error threshold
             msg = f"OpenAI-compat probe returned HTTP {resp.status_code} from {url}"
             raise AgentLLMError(msg)
+
+        # Best-effort model check. Skip when the server returns an empty list
+        # (some providers omit the catalogue entirely).
+        try:
+            data = resp.json()
+            ids = {m.get("id", "") for m in data.get("data", [])}
+            if ids and self.model not in ids and not any(self.model in n for n in ids):
+                available = ", ".join(sorted(ids))
+                msg = f"Model {self.model!r} not listed by /v1/models. Available: {available}"
+                raise AgentLLMError(msg)
+        except (ValueError, AttributeError):
+            pass  # non-JSON or unexpected shape — skip model check
+
         _logger.info("agent.llm.openai_compat.probe_ok", model=self.model)
 
     def to_browser_use_llm(self) -> Any:

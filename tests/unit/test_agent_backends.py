@@ -280,7 +280,7 @@ class TestOpenAICompatBackend:
             api_key="sk-local",
         )
 
-        async def fake_get(self: Any, url: str) -> Any:
+        async def fake_get(self: Any, url: str, **_: Any) -> Any:
             assert url.endswith("/v1/models")
             return MockResponse(200, {"data": [{"id": "qwen3-coder:30b"}]})
 
@@ -288,10 +288,57 @@ class TestOpenAICompatBackend:
         await backend.probe()
 
     @pytest.mark.asyncio
+    async def test_probe_sends_auth_header(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        backend = OpenAICompatBackend(
+            model="gpt-4o", base_url="http://api.example.com", api_key="sk-secret"
+        )
+        captured: dict[str, Any] = {}
+
+        class FakeClient:
+            def __init__(self, *args: Any, **kwargs: Any) -> None:
+                captured.update(kwargs)
+
+            async def __aenter__(self) -> FakeClient:
+                return self
+
+            async def __aexit__(self, *args: Any) -> None:
+                return None
+
+            async def get(self, url: str, **_: Any) -> Any:
+                return MockResponse(200, {"data": [{"id": "gpt-4o"}]})
+
+        monkeypatch.setattr(httpx, "AsyncClient", FakeClient)
+        await backend.probe()
+        assert captured.get("headers", {}).get("Authorization") == "Bearer sk-secret"
+
+    @pytest.mark.asyncio
+    async def test_probe_model_not_in_list_raises(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        backend = OpenAICompatBackend(model="missing-model", base_url="http://x")
+
+        async def fake_get(self: Any, url: str, **_: Any) -> Any:
+            return MockResponse(200, {"data": [{"id": "other-model"}]})
+
+        monkeypatch.setattr(httpx.AsyncClient, "get", fake_get)
+        with pytest.raises(AgentLLMError, match="not listed"):
+            await backend.probe()
+
+    @pytest.mark.asyncio
+    async def test_probe_empty_model_list_does_not_raise(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        backend = OpenAICompatBackend(model="any-model", base_url="http://x")
+
+        async def fake_get(self: Any, url: str, **_: Any) -> Any:
+            return MockResponse(200, {"data": []})
+
+        monkeypatch.setattr(httpx.AsyncClient, "get", fake_get)
+        await backend.probe()  # must not raise
+
+    @pytest.mark.asyncio
     async def test_probe_unreachable(self, monkeypatch: pytest.MonkeyPatch) -> None:
         backend = OpenAICompatBackend(model="m", base_url="http://x")
 
-        async def fake_get(self: Any, url: str) -> Any:
+        async def fake_get(self: Any, url: str, **_: Any) -> Any:
             raise httpx.ConnectError("nope")
 
         monkeypatch.setattr(httpx.AsyncClient, "get", fake_get)
@@ -302,7 +349,7 @@ class TestOpenAICompatBackend:
     async def test_probe_http_error(self, monkeypatch: pytest.MonkeyPatch) -> None:
         backend = OpenAICompatBackend(model="m", base_url="http://x")
 
-        async def fake_get(self: Any, url: str) -> Any:
+        async def fake_get(self: Any, url: str, **_: Any) -> Any:
             return MockResponse(503, {"error": "down"})
 
         monkeypatch.setattr(httpx.AsyncClient, "get", fake_get)

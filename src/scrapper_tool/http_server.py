@@ -1827,51 +1827,31 @@ def _check_browser_module(browser: str) -> str:  # noqa: PLR0911 — one return 
     return "unknown"
 
 
-async def _probe_llm(cfg: Any) -> tuple[bool | None, bool | None]:  # noqa: PLR0911
+async def _probe_llm(cfg: Any) -> tuple[bool | None, bool | None]:
     """Probe the configured LLM endpoint. Returns (reachable, model_available).
 
     Returns (None, None) for backends we can't probe (llama_cpp / vllm).
+    Delegates to the agent-layer backend probes so auth headers, endpoint
+    paths, and model-availability logic live in one place.
     """
-    import httpx  # noqa: PLC0415
+    if cfg.llm in {"llama_cpp", "vllm"}:
+        return None, None
 
-    if cfg.llm == "ollama":
-        url = f"{cfg.ollama_url.rstrip('/')}/api/tags"
-        try:
-            async with httpx.AsyncClient(timeout=5.0) as client:
-                resp = await client.get(url)
-                if resp.status_code != _HTTP_OK:
-                    return False, False
-                data = resp.json()
-                models = data.get("models") or []
-                names = {m.get("name", "") for m in models}
-                wanted = cfg.model
-                wanted_base = wanted.split(":")[0]
-                available = wanted in names or any(
-                    n == wanted or n.split(":")[0] == wanted_base for n in names
-                )
-                return True, available
-        except Exception:
+    try:
+        from scrapper_tool.agent.backends.llm import get_llm_backend  # noqa: PLC0415
+        from scrapper_tool.errors import AgentLLMError  # noqa: PLC0415
+    except ImportError:
+        return None, None
+
+    try:
+        await get_llm_backend(cfg).probe()
+        return True, True
+    except AgentLLMError as exc:
+        if "unreachable" in str(exc).lower():
             return False, False
-
-    if cfg.llm == "openai_compat":
-        url = f"{cfg.ollama_url.rstrip('/')}/v1/models"
-        headers: dict[str, str] = {}
-        if cfg.llm_api_key:
-            headers["Authorization"] = f"Bearer {cfg.llm_api_key.get_secret_value()}"
-        try:
-            async with httpx.AsyncClient(timeout=5.0) as client:
-                resp = await client.get(url, headers=headers)
-                if resp.status_code != _HTTP_OK:
-                    return True, False
-                data = resp.json()
-                models = data.get("data") or []
-                names = {m.get("id", "") for m in models}
-                available = cfg.model in names or any(cfg.model in n for n in names)
-                return True, available
-        except Exception:
-            return False, False
-
-    return None, None
+        return True, False
+    except Exception:
+        return False, False
 
 
 # ---------------------------------------------------------------------------
