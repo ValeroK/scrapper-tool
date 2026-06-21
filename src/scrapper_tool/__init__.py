@@ -63,7 +63,7 @@ from scrapper_tool.ladder import (
     request_with_ladder,
 )
 
-__version__ = "1.4.4"
+__version__ = "1.4.5"
 
 
 def _agent_lazy(name: str) -> object:
