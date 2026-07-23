@@ -29,6 +29,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field, replace
 from typing import TYPE_CHECKING, Any
 
+from scrapper_tool._challenge import has_real_content
 from scrapper_tool._logging import get_logger
 from scrapper_tool.agent.backends.browser import (
     BrowserLaunchOptions,
@@ -48,10 +49,6 @@ _logger = get_logger(__name__)
 # late/lazy content arrive. This is what made a plain Camoufox navigation pass a
 # Radware wall where a bare fetch did not.
 _DEFAULT_SETTLE_S = 2.0
-
-# Statuses that indicate the egress IP / fingerprint was rejected, not that the
-# page is genuinely missing. Mirrors the ladder's rotate-on set.
-_BLOCKED_STATUS_CODES = frozenset({403, 429, 503})
 
 
 @dataclass(frozen=True)
@@ -156,13 +153,18 @@ async def render_html(
             except Exception as exc:  # pragma: no cover — defensive
                 _logger.debug("patterns.render.cookies_failed", error=str(exc))
 
-        # Feed IP health back to the pool: a 403/503 on a render is as much an
-        # IP signal as it is on the HTTP ladder.
+        # Feed IP health back to the pool based on CONTENT, not status.
+        #
+        # Status is not a success signal for a rendered page: store.mopar.com
+        # returns HTTP 403 while serving 1.35 MB of genuine DOM (the anti-bot 403s
+        # the document, then JS clears the challenge and the real page renders).
+        # Penalising the proxy there would poison the pool with false blocks on
+        # every successful render. Conversely a bot-walled 200 is a failure.
         if managed_pool is not None:
-            if status in _BLOCKED_STATUS_CODES:
-                managed_pool.mark_blocked(attempt_proxy)
-            else:
+            if has_real_content(html, status):
                 managed_pool.mark_ok(attempt_proxy)
+            else:
+                managed_pool.mark_blocked(attempt_proxy)
 
         _logger.info(
             "patterns.render.rendered",

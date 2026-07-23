@@ -770,17 +770,17 @@ _CF_CHALLENGE_SIGNATURES: tuple[str, ...] = (
 
 
 def _is_cf_challenge_body(html: str, status_code: int) -> bool:
-    """True when the response looks like a Cloudflare challenge page."""
-    if (
-        status_code in _CF_CHALLENGE_STATUS_CODES
-        and html
-        and len(html) < _CF_CHALLENGE_BODY_MAX_BYTES
-    ):
-        return True
-    if not html:
-        return False
-    head = html[:_CF_BODY_SCAN_BYTES].lower()
-    return any(sig.lower() in head for sig in _CF_CHALLENGE_SIGNATURES)
+    """True when the response looks like a Cloudflare challenge page.
+
+    v1.6.0: delegates to the shared detector (``scrapper_tool._challenge``) so MCP
+    and the render tier use the same heuristics. Deliberately still the
+    Cloudflare-only variant — this decides whether Pattern D retries with
+    Scrapling's CF-specific ``solve_cloudflare``, so broadening it would make
+    Scrapling attempt a CF solve against non-CF vendors.
+    """
+    from scrapper_tool._challenge import is_cf_challenge_body  # noqa: PLC0415
+
+    return is_cf_challenge_body(html, status_code)
 
 
 # v1.4.0 — auto-SPA detection. After D + extractors return zero signal,
@@ -803,11 +803,14 @@ def _looks_like_spa_shell(html: str) -> bool:
     markers. Not perfect — the network_idle retry will still find no
     signal if the page is genuinely empty, but auto-SPA's cost is low
     (just one extra Scrapling fetch) so the FP rate is acceptable.
+
+    v1.6.0: delegates to the shared detector. NB this size-capped check misses
+    *large* unhydrated pages (a 419 KB shell full of ``{displayTitle}``
+    placeholders sails past it) — ``_challenge.looks_unhydrated`` covers that case.
     """
-    if not html or len(html) > _SPA_SHELL_MAX_BYTES:
-        return False
-    head = html[:_CF_BODY_SCAN_BYTES].lower()
-    return any(sig.lower() in head for sig in _SPA_SHELL_SIGNATURES)
+    from scrapper_tool._challenge import looks_like_spa_shell  # noqa: PLC0415
+
+    return looks_like_spa_shell(html)
 
 
 async def _do_fetch(req: Any) -> dict[str, Any]:
