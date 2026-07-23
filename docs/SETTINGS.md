@@ -158,7 +158,8 @@ Without a key, Tier 2 is skipped — captcha-encountered → `AgentBlockedError(
 `/scrape` (REST) and `auto_scrape` (MCP) run the same ladder:
 
 ```
-A/B/C  curl_cffi TLS impersonation  ->  cheapest
+replay cached recipe + fetch/render -> cheapest, often free
+A/B/C  curl_cffi TLS impersonation
 D      Scrapling (hostile fetcher)
 render stealth browser + deterministic extractors   <- NO LLM
 E1     Crawl4AI + LLM
@@ -168,6 +169,8 @@ E2     browser-use agent            -> priciest, interactive=true only
 | Env var | Default | Purpose |
 |---------|---------|---------|
 | `SCRAPPER_TOOL_RENDER_TIER` | `1` (on) | The stealth-render tier. Set `0` to skip straight from D to the LLM tiers. |
+| `SCRAPPER_TOOL_RECIPE_CACHE` | `1` (on) | Learn-once / replay. Set `0` to disable both learning and replay. |
+| `SCRAPPER_TOOL_RECIPE_DIR` | temp dir | Where learned recipes are stored (one JSON file per domain). |
 
 The render tier is on by default because it is both cheaper and more reliable
 than escalating to an LLM. Measured on real targets: one site returned 403 on
@@ -176,6 +179,35 @@ from 4 extractable headlines to 212 once rendered — in both cases the existing
 Pattern B/C/CSS extractors then did the job with **zero tokens**. It uses the
 browser configured by `SCRAPPER_TOOL_AGENT_BROWSER` and skips itself cleanly
 when the `[llm-agent]` extra isn't installed (no entry in `pattern_attempts`).
+
+### Learn-once / replay
+
+When an expensive tier succeeds, the cascade works backwards from the data it
+produced to the CSS selectors that would have produced it for free, then caches
+that recipe per domain. The next request for that domain replays it — a fetch
+plus a selectolax parse instead of a browser launch or an LLM call
+(`pattern_used="replay"`).
+
+Three things make it safe to cache a heuristic:
+
+- **Every recipe is verified before it's cached.** The derived schema is run
+  through the real CSS extractor and checked against the data it came from. One
+  that can't reproduce its own training example is discarded, not stored.
+- **The tier it was learned from travels with it.** Selectors for a rendered DOM
+  are replayed with a render; only a recipe proven to work against raw HTTP is
+  replayed with a plain fetch. When a render-learned recipe *also* matches the
+  body A/B/C already fetched, it's downgraded automatically — so a render that
+  won for anti-bot reasons rather than JS reasons still yields free replays.
+- **Drift self-heals.** A recipe that stops matching is evicted on the spot and
+  the normal cascade re-derives a fresh one. A stale recipe costs one wasted
+  fetch, once.
+
+Recipes are deliberately *not* derived for JSON-LD/microdata wins: Pattern B
+already extracts those deterministically at tier 1, so a CSS recipe would be
+strictly more fragile for no gain. Derivation also declines when a page's only
+handles are build-generated class hashes and it carries no `data-testid`-style
+attribute — a missing recipe just means full price next time, while a wrong one
+would mean wrong data indefinitely.
 
 ### Challenge detection
 

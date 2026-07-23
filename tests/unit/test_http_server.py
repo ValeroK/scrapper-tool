@@ -11,6 +11,7 @@ exercise. Real network calls (``request_with_ladder``, ``agent_extract``,
 
 from __future__ import annotations
 
+from datetime import UTC, datetime
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock
 
@@ -29,6 +30,7 @@ from scrapper_tool import (
     __version__,
     http_server,
 )
+from scrapper_tool.recipe.store import cache_key
 
 # --- Fixtures -------------------------------------------------------------
 
@@ -1694,6 +1696,265 @@ class TestScrapeRenderTier:
     ) -> None:
         monkeypatch.setenv("SCRAPPER_TOOL_RENDER_TIER", value)
         assert http_server._render_tier_enabled() is expected
+
+
+# --- C3/C4: learn-once, replay, and drift self-heal -------------------------
+
+
+_RECIPE_LISTING_HTML = """<html><body><div class="feed">
+  <div class="feed-item"><h2 class="t">Mazda 3</h2><span class="p">45,000</span></div>
+  <div class="feed-item"><h2 class="t">Toyota Corolla</h2><span class="p">52,000</span></div>
+</div></body></html>"""
+
+_RECIPE_ROWS = [
+    {"title": "Mazda 3", "price": "45,000"},
+    {"title": "Toyota Corolla", "price": "52,000"},
+]
+
+# A listing page carries no JSON-LD/microdata, so the caller supplies a CSS
+# schema — the realistic shape for the pages recipes are worth learning on.
+_RECIPE_SCHEMA: dict[str, Any] = {
+    "baseSelector": "div.feed-item",
+    "fields": [
+        {"name": "title", "selector": "h2.t", "type": "text"},
+        {"name": "price", "selector": "span.p", "type": "text"},
+    ],
+}
+
+
+class TestRecipeLearnAndReplay:
+    """The cost killer: one expensive win, then free replays.
+
+    Everything here is about the round trip actually closing. A learn step that
+    silently derives nothing, or a replay tier that never hits, is invisible in
+    production — it just looks like the cascade being slow forever.
+    """
+
+    @staticmethod
+    def _blocked_ladder(monkeypatch: pytest.MonkeyPatch) -> None:
+        from scrapper_tool.errors import BlockedError
+
+        async def fake_ladder(method: str, url: str, **kwargs: Any) -> Any:
+            raise BlockedError("blocked")
+
+        monkeypatch.setattr("scrapper_tool.ladder.request_with_ladder", fake_ladder)
+        monkeypatch.setattr(http_server, "_hostile_available", lambda: False)
+
+    @pytest.mark.asyncio
+    async def test_render_win_teaches_a_recipe_that_the_next_call_replays(
+        self, app_no_auth: Any, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The headline claim: second call pays nothing the first call paid."""
+        from scrapper_tool.recipe.store import get_store
+
+        self._blocked_ladder(monkeypatch)
+        renders: list[dict[str, Any]] = []
+        _install_fake_render(monkeypatch, html=_RECIPE_LISTING_HTML, calls=renders)
+        body = {"url": "https://cars.test/list", "schema_json": _RECIPE_SCHEMA}
+
+        async with _client(app_no_auth) as client:
+            first = (await client.post("/scrape", json=body)).json()
+            assert first["pattern_used"] == "render"
+            assert get_store().get(cache_key(body["url"], _RECIPE_SCHEMA)) is not None, (
+                "a render win must teach a recipe"
+            )
+
+            second = (await client.post("/scrape", json=body)).json()
+
+        assert second["pattern_used"] == "replay"
+        assert second["pattern_attempts"] == ["replay"], "replay short-circuits the whole cascade"
+        assert second["data"] == _RECIPE_ROWS
+        assert second["tokens_used"] == 0
+        # A/B/C was blocked here, so there was no raw body to prove the
+        # selectors work without JS — the recipe stays a render recipe and the
+        # replay still renders. What it skips is the whole cascade above it.
+        assert len(renders) == 2
+
+    @pytest.mark.asyncio
+    async def test_recipe_downgrades_to_a_plain_fetch_when_the_raw_body_has_it(
+        self, app_no_auth: Any, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The best case: the render won, but JS wasn't why.
+
+        A render can win for reasons unrelated to JS — it cleared a bot wall, or
+        the page only looked unhydrated. Then the selectors work fine on the raw
+        HTTP body, and pinning the recipe to "render" would make every future
+        replay pay for a browser it doesn't need. The downgrade is *proved*, not
+        guessed: the derived schema is run against the body A/B/C already had.
+        """
+        from scrapper_tool.recipe.store import get_store
+
+        # A/B/C returns the real markup but the classifier rejects it (no
+        # structured signal without the caller's schema), so render still runs.
+        async def fake_ladder(method: str, url: str, **kwargs: Any) -> Any:
+            return _make_response(text=_RECIPE_LISTING_HTML, url=url), "chrome133a"
+
+        monkeypatch.setattr("scrapper_tool.ladder.request_with_ladder", fake_ladder)
+        monkeypatch.setattr(http_server, "_hostile_available", lambda: False)
+        renders: list[dict[str, Any]] = []
+        _install_fake_render(monkeypatch, html=_RECIPE_LISTING_HTML, calls=renders)
+        body = {"url": "https://cars.test/list", "schema_json": _RECIPE_SCHEMA}
+
+        async with _client(app_no_auth) as client:
+            first = (await client.post("/scrape", json=body)).json()
+            assert first["pattern_used"] == "render"
+            learned = get_store().get(cache_key(body["url"], _RECIPE_SCHEMA))
+            assert learned is not None
+            assert learned.source_tier == "a_b_c", "provably fetch-replayable"
+            assert learned.needs_render is False
+
+            second = (await client.post("/scrape", json=body)).json()
+
+        assert second["pattern_used"] == "replay"
+        assert second["data"] == _RECIPE_ROWS
+        assert len(renders) == 1, "the replay must not launch a browser"
+
+    @pytest.mark.asyncio
+    async def test_replay_reruns_the_cascade_and_reheals_when_the_site_changes(
+        self, app_no_auth: Any, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """C4 — a recipe that stops matching is evicted, not retried forever."""
+        from scrapper_tool.recipe.derive import Recipe
+        from scrapper_tool.recipe.store import get_store
+
+        self._blocked_ladder(monkeypatch)
+        stale = Recipe(
+            domain="cars.test",
+            schema={
+                "baseSelector": "div.OLD-markup",
+                "fields": [{"name": "title", "selector": "h2", "type": "text"}],
+            },
+            source_tier="render",
+            sample_url="https://cars.test/list",
+            multi_row=True,
+            created_at=datetime.now(UTC).isoformat(),
+            schema_hash="stale",
+            field_names=("title",),
+        )
+        key = cache_key("https://cars.test/list", _RECIPE_SCHEMA)
+        get_store().put(key, stale)
+        _install_fake_render(monkeypatch, html=_RECIPE_LISTING_HTML)
+
+        async with _client(app_no_auth) as client:
+            body = (
+                await client.post(
+                    "/scrape",
+                    json={"url": "https://cars.test/list", "schema_json": _RECIPE_SCHEMA},
+                )
+            ).json()
+
+        assert body["pattern_used"] == "render", "drift must fall through, not return nothing"
+        assert "replay" not in body["pattern_attempts"]
+        healed = get_store().get(key)
+        assert healed is not None, "the cascade should have re-learned"
+        assert healed.schema["baseSelector"] == "div.feed-item", (
+            "self-heal means the stale recipe is REPLACED, not just deleted"
+        )
+
+    @pytest.mark.asyncio
+    async def test_replay_is_skipped_when_the_cache_is_disabled(
+        self, app_no_auth: Any, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from scrapper_tool.recipe.store import get_store
+
+        self._blocked_ladder(monkeypatch)
+        _install_fake_render(monkeypatch, html=_RECIPE_LISTING_HTML)
+        monkeypatch.setenv("SCRAPPER_TOOL_RECIPE_CACHE", "0")
+
+        async with _client(app_no_auth) as client:
+            body = (
+                await client.post(
+                    "/scrape",
+                    json={"url": "https://cars.test/list", "schema_json": _RECIPE_SCHEMA},
+                )
+            ).json()
+
+        assert body["pattern_used"] == "render"
+        assert get_store().get(cache_key("https://cars.test/list", _RECIPE_SCHEMA)) is None, (
+            "learning must also respect the toggle"
+        )
+
+    @pytest.mark.asyncio
+    async def test_a_render_learned_recipe_is_not_replayed_over_a_raw_fetch(
+        self, app_no_auth: Any, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Selectors for a rendered DOM find nothing in raw HTML.
+
+        Replaying one over a plain fetch would return nothing and be misread as
+        drift, evicting a recipe that was perfectly good.
+        """
+        from scrapper_tool.recipe.derive import derive_recipe
+        from scrapper_tool.recipe.store import get_store
+
+        recipe = derive_recipe(
+            _RECIPE_LISTING_HTML, _RECIPE_ROWS, source_tier="render", url="https://cars.test/list"
+        )
+        assert recipe is not None
+        key = cache_key("https://cars.test/list")
+        get_store().put(key, recipe)
+
+        # Render tier off => no render function => the replay must decline.
+        monkeypatch.setenv("SCRAPPER_TOOL_RENDER_TIER", "0")
+
+        async def fake_ladder(method: str, url: str, **kwargs: Any) -> Any:
+            return _make_response(text=_PRODUCT_HTML, url=url), "chrome133a"
+
+        monkeypatch.setattr("scrapper_tool.ladder.request_with_ladder", fake_ladder)
+
+        async with _client(app_no_auth) as client:
+            body = (await client.post("/scrape", json={"url": "https://cars.test/list"})).json()
+
+        assert body["pattern_used"] == "a_b_c"
+        assert get_store().get(key) is not None, "declining to replay must not evict the recipe"
+
+    @pytest.mark.asyncio
+    async def test_learning_failure_never_breaks_the_scrape(
+        self, app_no_auth: Any, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Learning is an optimisation for next time; it cannot fail this call."""
+        self._blocked_ladder(monkeypatch)
+        _install_fake_render(monkeypatch, html=_RECIPE_LISTING_HTML)
+
+        def exploding_learn(*args: Any, **kwargs: Any) -> None:
+            raise RuntimeError("disk on fire")
+
+        monkeypatch.setattr("scrapper_tool.recipe.replay.learn_from_success", exploding_learn)
+
+        async with _client(app_no_auth) as client:
+            resp = await client.post(
+                "/scrape", json={"url": "https://cars.test/list", "schema_json": _RECIPE_SCHEMA}
+            )
+
+        assert resp.status_code == 200
+        assert resp.json()["pattern_used"] == "render"
+
+    @pytest.mark.asyncio
+    async def test_different_requested_schemas_do_not_share_a_recipe(
+        self, app_no_auth: Any, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from scrapper_tool.recipe.derive import derive_recipe
+        from scrapper_tool.recipe.store import get_store
+
+        recipe = derive_recipe(
+            _RECIPE_LISTING_HTML, _RECIPE_ROWS, source_tier="a_b_c", url="https://cars.test/list"
+        )
+        assert recipe is not None
+        get_store().put(cache_key("https://cars.test/list", {"fields": ["title"]}), recipe)
+
+        async def fake_ladder(method: str, url: str, **kwargs: Any) -> Any:
+            return _make_response(text=_PRODUCT_HTML, url=url), "chrome133a"
+
+        monkeypatch.setattr("scrapper_tool.ladder.request_with_ladder", fake_ladder)
+
+        async with _client(app_no_auth) as client:
+            body = (
+                await client.post(
+                    "/scrape",
+                    json={"url": "https://cars.test/list", "schema_json": {"fields": ["price"]}},
+                )
+            ).json()
+
+        assert body["pattern_used"] != "replay", "a recipe for other fields must not be reused"
 
 
 # --- B4: E2 is gated behind interactive=true --------------------------------

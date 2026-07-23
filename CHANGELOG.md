@@ -18,6 +18,24 @@ All notable changes to `scrapper-tool` are recorded here. Format follows [Keep a
   real rendered DOM is a win. The cascade-resolved profile directory is shared
   with the browser, carrying clearance cookies forward from earlier rungs, and
   the rendered DOM becomes `intermediate_raw_text` when the LLM tier still runs.
+- **Learn-once / replay (`pattern_used="replay"`).** When an expensive tier
+  succeeds, the cascade derives the CSS selectors that would have produced the
+  same data for free, verifies them against that page, and caches the recipe per
+  domain. The next request for that domain replays it — a fetch plus a
+  selectolax parse instead of a browser launch or an LLM call. On by default
+  (`SCRAPPER_TOOL_RECIPE_CACHE=0` disables; `SCRAPPER_TOOL_RECIPE_DIR` relocates
+  the cache). Wired into both REST `/scrape` and MCP `auto_scrape`.
+  - Recipes carry the tier they were learned from, so a render-learned recipe is
+    replayed with a render rather than silently returning nothing over a raw
+    fetch — and when its selectors provably also match the body A/B/C already
+    fetched, it is downgraded to a fetch recipe so future replays skip the
+    browser entirely.
+  - Drift self-heals: a recipe that stops matching is evicted and the normal
+    cascade re-derives a fresh one.
+  - No recipe is derived for JSON-LD/microdata wins (Pattern B already handles
+    those deterministically) or for pages whose only handles are build-generated
+    class hashes. Refusing costs one full-price request; a wrong recipe would
+    cost correctness.
 - **Challenge detection now steers escalation, and is reported.** Every
   `/scrape` and `auto_scrape` response carries `challenge_detected` — the bot
   vendor that walled us (`cloudflare`, `radware`, `datadome`, `perimeterx`,

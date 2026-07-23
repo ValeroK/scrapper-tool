@@ -19,7 +19,14 @@ Run modes
 
 from __future__ import annotations
 
+from typing import TYPE_CHECKING
+
 import pytest
+
+from scrapper_tool.recipe.store import set_store
+
+if TYPE_CHECKING:
+    from pathlib import Path
 
 
 @pytest.fixture(autouse=True)
@@ -37,3 +44,17 @@ def _disable_render_tier(monkeypatch: pytest.MonkeyPatch) -> None:
     directly against :func:`_render_tier_enabled`.
     """
     monkeypatch.setenv("SCRAPPER_TOOL_RENDER_TIER", "0")
+
+
+@pytest.fixture(autouse=True)
+def _isolate_recipe_cache(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    """Give every test its own empty recipe cache.
+
+    The cache is default-ON and persists to a shared temp dir, so without this a
+    recipe learned by one test (or by a previous run, or by real local use)
+    would silently serve the replay tier in another and change its cascade. Each
+    test gets a fresh directory, so replay is a guaranteed miss unless the test
+    populates it deliberately.
+    """
+    monkeypatch.setenv("SCRAPPER_TOOL_RECIPE_DIR", str(tmp_path / "recipes"))
+    set_store(None)  # drop the process-wide handle so the new dir takes effect

@@ -67,7 +67,7 @@ from scrapper_tool.errors import (  # noqa: E402
 )
 
 if TYPE_CHECKING:
-    from collections.abc import Sequence
+    from collections.abc import Awaitable, Callable, Sequence
 
 
 # ---------------------------------------------------------------------------
@@ -1286,6 +1286,138 @@ async def _d_fetch_with_smart_defaults(req: Any) -> tuple[str, int, str]:
     return html, status_code, final_url
 
 
+async def _do_replay_step(
+    req: Any,
+    attempts: list[str],
+    start: float,
+) -> dict[str, Any] | None:
+    """Tier 0 — replay this domain's learned recipe. No browser, no LLM.
+
+    The cheapest possible outcome: a fetch plus a selectolax parse, reproducing
+    what previously cost a browser launch or an LLM call. Returns None on any
+    miss so the normal cascade runs — including on drift, where the stale recipe
+    is evicted first so the cascade's re-derivation replaces it.
+    """
+    log: list[dict[str, Any]] = req.__dict__.setdefault("_escalation_log", [])
+    r_start = time.perf_counter()
+    try:
+        from scrapper_tool.recipe.replay import try_replay  # noqa: PLC0415
+
+        outcome = await try_replay(
+            req.url,
+            fetch=_make_ladder_fetch(req),
+            render=_make_render_fetch(req),
+            schema_json=req.schema_json,
+        )
+    except Exception as exc:  # cache problems must never break a scrape
+        _logger.warning("scrape.replay.failed", url=req.url, error=str(exc)[:160])
+        return None
+    if outcome is None:
+        return None
+
+    attempts.append("replay")
+    rows: Any = outcome.rows if outcome.recipe.multi_row else outcome.rows[0]
+    log.append(
+        _build_log_entry(
+            "replay",
+            outcome="won",
+            reason="ok",
+            duration_s=time.perf_counter() - r_start,
+            detail=f"recipe from {outcome.recipe.source_tier}; {len(outcome.rows)} row(s)",
+        )
+    )
+    _logger.info("scrape.replay.win", url=req.url, rows=len(outcome.rows))
+    return {
+        "url": outcome.final_url,
+        "pattern_used": "replay",
+        "pattern_attempts": attempts,
+        "escalation_log": list(log),
+        "product": None,
+        "data": rows,
+        "raw_text": outcome.html,
+        "intermediate_raw_text": None,
+        "json_ld": None,
+        "microdata_price": None,
+        "rendered_markdown": None,
+        "screenshots": None,
+        "tokens_used": 0,
+        "steps_used": 0,
+        "blocked": False,
+        "error": None,
+        "hostile_skipped": False,
+        "is_structured": True,
+        "duration_s": time.perf_counter() - start,
+    }
+
+
+def _make_ladder_fetch(req: Any) -> Callable[[], Awaitable[tuple[str, int, str]]]:
+    """A zero-arg HTTP fetch for replaying an ``a_b_c``-learned recipe."""
+
+    async def fetch() -> tuple[str, int, str]:
+        from scrapper_tool.ladder import request_with_ladder  # noqa: PLC0415
+
+        response, _profile = await request_with_ladder(
+            "GET", req.url, timeout=req.timeout_s or 30.0
+        )
+        return response.text or "", response.status_code, str(response.url)
+
+    return fetch
+
+
+def _make_render_fetch(req: Any) -> Callable[[], Awaitable[tuple[str, int, str]]] | None:
+    """A zero-arg render for replaying a browser-learned recipe, if possible."""
+    if not _render_tier_enabled():
+        return None
+
+    async def render() -> tuple[str, int, str]:
+        from scrapper_tool.agent import AgentConfig  # noqa: PLC0415
+        from scrapper_tool.agent.backends.browser import BrowserLaunchOptions  # noqa: PLC0415
+        from scrapper_tool.patterns.render import render_html  # noqa: PLC0415
+
+        cfg = AgentConfig.from_env().merged(**_build_overrides(req))
+        result = await render_html(
+            req.url,
+            browser=cfg.browser,
+            timeout_s=cfg.timeout_s,
+            options=BrowserLaunchOptions(
+                headful=cfg.headful,
+                proxy=cfg.proxy,
+                user_data_dir=cfg.user_data_dir,
+                headless_mode=cfg.camoufox_headless_mode,
+                block_images=cfg.block_images,
+                fingerprint_preset=cfg.fingerprint_preset,
+                os=cfg.camoufox_os,
+                locale=cfg.camoufox_locale,
+            ),
+            cdp_url=cfg.obscura_cdp_url,
+        )
+        return result.html, result.status, result.final_url
+
+    return render
+
+
+def _learn_recipe(req: Any, html: str, data: Any, *, source_tier: str) -> None:
+    """Teach the cache from a tier that just succeeded. Never raises."""
+    if not html or not data:
+        return
+    try:
+        from scrapper_tool.recipe.replay import learn_from_success  # noqa: PLC0415
+
+        learn_from_success(
+            req.url,
+            html,
+            data,
+            source_tier=source_tier,
+            schema_json=req.schema_json,
+            # If A/B/C already fetched a body, let the learner check whether the
+            # selectors work against it too — a browser-learned recipe that also
+            # matches raw HTML replays without a browser.
+            cheap_html=req.__dict__.get("_a_b_c_html"),
+        )
+    except Exception as exc:  # an optimisation for next time; never fail now
+        _logger.debug("scrape.learn.failed", url=req.url, error=str(exc)[:160])
+
+
 def _note_challenge(req: Any, log: list[dict[str, Any]], html: str, status_code: int) -> str | None:
     """Record which bot vendor walled us, if any. Returns the vendor name.
 
@@ -1445,6 +1577,8 @@ async def _do_render_step(
 
     _logger.info("scrape.render.win", url=req.url, status_code=status_code, bytes=len(html))
     log.append(_build_log_entry("render", outcome="won", reason="ok", duration_s=duration))
+    # Learn from the expensive win so the next page on this domain replays free.
+    _learn_recipe(req, html, css_data or product, source_tier="render")
     return (
         {
             "url": final_url,
@@ -1578,6 +1712,18 @@ async def _do_scrape_e_tier(
             if not result.blocked:
                 log.append(
                     _build_log_entry("e1", outcome="won", reason="ok", duration_s=e1_duration)
+                )
+                # The highest-value thing to learn from: this is the tier that
+                # costs real money per page, and a recipe replaces it entirely.
+                # Learn against the DOM an earlier tier captured — E1 returns
+                # markdown, and selectors have to be derived from the real HTML.
+                _learn_recipe(
+                    req,
+                    req.__dict__.get("_render_intermediate_html")
+                    or req.__dict__.get("_d_intermediate_html")
+                    or "",
+                    result.data,
+                    source_tier="render" if req.__dict__.get("_render_intermediate_html") else "d",
                 )
                 return _scrape_response_from_agent(
                     result, attempts, start, mode="e1", hostile_skipped=hostile_skipped, req=req
@@ -1810,6 +1956,12 @@ async def _do_scrape_inner(req: Any, attempts: list[str], start: float) -> dict[
     # without us threading it explicitly.
     log: list[dict[str, Any]] = req.__dict__.setdefault("_escalation_log", [])
 
+    # ----- Replay (tier 0 — cached recipe, no browser, no LLM) -----------
+    if req.mode == "auto":
+        replayed = await _do_replay_step(req, attempts, start)
+        if replayed is not None:
+            return replayed
+
     # ----- A/B/C -----
     if req.mode in ("auto", "fetch"):
         attempts.append("a_b_c")
@@ -1821,6 +1973,9 @@ async def _do_scrape_inner(req: Any, attempts: list[str], start: float) -> dict[
                 "GET", req.url, timeout=req.timeout_s or 30.0
             )
             text = response.text or ""
+            # Kept for the recipe learner: if a later tier's selectors also
+            # match this raw body, its recipe can replay without a browser.
+            req.__dict__["_a_b_c_html"] = text
             product, json_ld, microdata_price = _extract_b_c(text, str(response.url))
 
             success = _classify_extraction_success(
