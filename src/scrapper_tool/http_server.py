@@ -138,6 +138,18 @@ class ScrapeRequest(BaseModel):
             "always-escalate behaviour."
         ),
     )
+    interactive: bool = Field(
+        False,
+        description=(
+            "Whether this target needs a multi-step agent (NEW v1.6.0). E2 "
+            "(browser-use) is the most expensive tier by a wide margin and only "
+            "earns its cost on genuinely interactive flows — login, pagination, "
+            "dynamic forms. With interactive=false (default) a blocked E1 stops "
+            "and returns the blocked result rather than auto-escalating into an "
+            "agent loop that will hit the same wall, slower. Set true when the "
+            "page really does require interaction."
+        ),
+    )
     hostile_fallback: bool = Field(
         True,
         description=(
@@ -1532,8 +1544,15 @@ async def _do_scrape_e_tier(
     mode=hostile (after D fails with hostile_fallback=True), and mode=extract.
 
     Honors mode="extract" — when set, raises rather than continuing to E2.
+
+    v1.6.0: also honors ``interactive``. E2 is the most expensive tier by a wide
+    margin, and auto-escalating into it on *any* blocked E1 spends an agent loop
+    to hit the same wall more slowly. Unless the caller says the target needs
+    interaction, the cascade now stops at E1 and returns the blocked result.
+    An explicit ``mode="browse"`` is a direct request for E2 and is never gated.
     """
     log: list[dict[str, Any]] = req.__dict__.setdefault("_escalation_log", [])
+    blocked_e1: Any = None
 
     # ----- E1 (Pattern E extract) -----
     if req.mode in ("auto", "extract", "hostile"):
@@ -1573,6 +1592,7 @@ async def _do_scrape_e_tier(
                 )
             )
             last_error = AgentBlockedError(result.error or "blocked")
+            blocked_e1 = result
         except AgentBlockedError as exc:
             log.append(
                 _build_log_entry(
@@ -1589,6 +1609,29 @@ async def _do_scrape_e_tier(
         if isinstance(last_error, BaseException):
             raise last_error
         raise ScrapingError("/scrape mode=extract failed without an exception (unreachable)")
+
+    # ----- E2 gate: interactive tasks only -----
+    # mode="browse" is a direct request for E2, so it bypasses the gate.
+    if req.mode != "browse" and not getattr(req, "interactive", False):
+        log.append(
+            _build_log_entry(
+                "e2",
+                outcome="skipped",
+                reason="no_signal",
+                duration_s=0.0,
+                detail="interactive=false; E2 reserved for login/pagination/form flows",
+            )
+        )
+        if blocked_e1 is not None:
+            # Hand back E1's blocked result — the caller gets the escalation log
+            # and whatever partial content E1 did see, which is strictly more
+            # useful than a bare error.
+            return _scrape_response_from_agent(
+                blocked_e1, attempts, start, mode="e1", hostile_skipped=hostile_skipped, req=req
+            )
+        if isinstance(last_error, BaseException):
+            raise last_error
+        raise ScrapingError("/scrape exhausted the cascade without an exception (unreachable)")
 
     # ----- E2 (Pattern E browse) -----
     attempts.append("e2")

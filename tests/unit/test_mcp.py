@@ -732,6 +732,108 @@ class TestAutoScrapeChallengeDetection:
         assert result["challenge_detected"] is None
 
 
+# ---- B4: E2 is gated behind interactive=true (MCP parity) -----------------
+
+
+def _fake_agent_module_e1_blocked(*, browse_result: Any = None) -> MagicMock:
+    """A ``scrapper_tool.agent`` stand-in whose E1 always reports blocked."""
+    blocked = MagicMock()
+    blocked.mode = "extract"
+    blocked.data = None
+    blocked.final_url = "https://protected.com/p"
+    blocked.rendered_markdown = None
+    blocked.screenshots = None
+    blocked.actions = []
+    blocked.tokens_used = 10
+    blocked.steps_used = 1
+    blocked.blocked = True
+    blocked.error = "hit a captcha"
+    blocked.duration_s = 1.0
+
+    agent_module = MagicMock()
+    agent_module.AgentConfig = MagicMock()
+    agent_module.AgentConfig.from_env = MagicMock(return_value=MagicMock())
+
+    async def fake_extract(*_args: Any, **_kwargs: Any) -> Any:
+        return blocked
+
+    async def fake_browse(*_args: Any, **_kwargs: Any) -> Any:
+        if browse_result is None:
+            raise AssertionError("E2 must not run without interactive=true")
+        return browse_result
+
+    agent_module.agent_extract = fake_extract
+    agent_module.agent_browse = fake_browse
+    return agent_module
+
+
+class TestAutoScrapeE2Gate:
+    """MCP parity for the interactive gate — and MCP's first E2 coverage at all."""
+
+    @staticmethod
+    def _all_blocked(fake_curl: type[FakeCurlSession], monkeypatch: pytest.MonkeyPatch) -> None:
+        fake_curl.STATUS_FOR_PROFILE = dict.fromkeys(
+            ("chrome133a", "chrome124", "safari18_0", "firefox135"), 403
+        )
+        monkeypatch.setattr(mcp_module, "_try_pattern_d_for_auto_scrape", _skip_d_for_auto_scrape)
+        monkeypatch.setenv("SCRAPPER_TOOL_RENDER_TIER", "0")
+
+    @pytest.mark.asyncio
+    async def test_blocked_e1_stops_without_interactive(
+        self,
+        server: object,
+        fake_curl: type[FakeCurlSession],
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        import sys
+
+        self._all_blocked(fake_curl, monkeypatch)
+        monkeypatch.setitem(sys.modules, "scrapper_tool.agent", _fake_agent_module_e1_blocked())
+
+        tool = _get_tool(server, "auto_scrape")
+        result = await tool.fn(url="https://protected.com/p")  # type: ignore[attr-defined]
+
+        assert result["pattern_attempts"] == ["a_b_c", "e1"]
+        assert result["pattern_used"] == "e1"
+        assert result["blocked"] is True
+
+    @pytest.mark.asyncio
+    async def test_blocked_e1_escalates_with_interactive(
+        self,
+        server: object,
+        fake_curl: type[FakeCurlSession],
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        import sys
+
+        self._all_blocked(fake_curl, monkeypatch)
+        browsed = MagicMock()
+        browsed.mode = "browse"
+        browsed.data = {"name": "Reached via agent"}
+        browsed.final_url = "https://protected.com/p"
+        browsed.rendered_markdown = None
+        browsed.screenshots = None
+        browsed.actions = []
+        browsed.tokens_used = 900
+        browsed.steps_used = 5
+        browsed.blocked = False
+        browsed.error = None
+        browsed.duration_s = 9.0
+        monkeypatch.setitem(
+            sys.modules,
+            "scrapper_tool.agent",
+            _fake_agent_module_e1_blocked(browse_result=browsed),
+        )
+
+        tool = _get_tool(server, "auto_scrape")
+        result = await tool.fn(  # type: ignore[attr-defined]
+            url="https://protected.com/p", interactive=True
+        )
+
+        assert result["pattern_used"] == "e2"
+        assert result["pattern_attempts"] == ["a_b_c", "e1", "e2"]
+
+
 # ---- Truncation -----------------------------------------------------------
 
 

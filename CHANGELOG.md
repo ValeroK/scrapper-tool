@@ -38,6 +38,17 @@ All notable changes to `scrapper-tool` are recorded here. Format follows [Keep a
   profile-gated `obscura` service is included in `docker-compose.yml`.
 
 ### Changed
+- **BREAKING (cascade behaviour): E2 no longer runs automatically.** A blocked
+  E1 used to auto-escalate into the browser-use agent loop on every `mode=auto`
+  scrape. E2 is the most expensive tier by a wide margin and the only thing it
+  can do that the render tier can't is *interact* — a page that is simply walled
+  will wall the agent too, just slower and for many more tokens. Pass
+  `interactive: true` (REST `/scrape`) or `interactive=True` (MCP
+  `auto_scrape`) for targets that genuinely need login / pagination / dynamic
+  forms. Otherwise the cascade stops at E1 and returns E1's blocked result,
+  which carries the escalation log and any partial content. An explicit REST
+  `mode="browse"` is a direct request for E2 and is never gated. To restore the
+  old behaviour, set `interactive: true` on the calls that relied on it.
 - **Captcha solver cascade is now actually wired into Pattern E.** Previously
   `get_captcha_solver(config)` was constructed and discarded (`_ =`) in both E1
   and E2, so `.solve()` never ran — only Camoufox's built-in `humanize` defeated

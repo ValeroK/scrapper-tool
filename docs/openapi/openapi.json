@@ -653,6 +653,12 @@
             "description": "Pre-v1.1.2 behaviour: with ``mode=auto`` and ``schema_json`` set, always escalate to E1 even when A/B/C returned a readable page. From v1.1.2 the default is to accept A/B/C as success when the page returned 200 + any structured signal, letting the caller post-process from the raw fetch instead of paying for an LLM call. Set ``force_llm_extract=true`` to opt back in to the old always-escalate behaviour.",
             "default": false
           },
+          "interactive": {
+            "type": "boolean",
+            "title": "Interactive",
+            "description": "Whether this target needs a multi-step agent (NEW v1.6.0). E2 (browser-use) is the most expensive tier by a wide margin and only earns its cost on genuinely interactive flows \u2014 login, pagination, dynamic forms. With interactive=false (default) a blocked E1 stops and returns the blocked result rather than auto-escalating into an agent loop that will hit the same wall, slower. Set true when the page really does require interaction.",
+            "default": false
+          },
           "hostile_fallback": {
             "type": "boolean",
             "title": "Hostile Fallback",

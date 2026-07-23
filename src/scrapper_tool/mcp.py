@@ -185,6 +185,7 @@ async def _continue_to_e_tier(
     last_error: str | None,
     hostile_skipped: bool,
     user_data_dir: str | None = None,
+    interactive: bool = False,
 ) -> dict[str, Any]:
     """E1 → E2 escalation for the MCP ``auto_scrape`` tool.
 
@@ -194,6 +195,11 @@ async def _continue_to_e_tier(
     ``user_data_dir`` (v1.3.0+): forwarded to ``AgentConfig.merged`` so
     Crawl4AI / browser-use launch against the cascade-shared profile and
     inherit D's CF clearance.
+
+    ``interactive`` (v1.6.0+): REST parity. E2 is the priciest tier by a wide
+    margin and only earns its cost on login / pagination / dynamic-form flows;
+    on anything else a blocked E1 stops here rather than spending an agent loop
+    to hit the same wall more slowly.
     """
     try:
         from scrapper_tool.agent import AgentConfig  # noqa: PLC0415
@@ -226,6 +232,7 @@ async def _continue_to_e_tier(
     # ----- Pattern E1 -----
     attempts.append("e1")
     schema_for_e1 = schema_json or {"type": "object", "additionalProperties": True}
+    blocked_e1: Any = None
     try:
         result = await _agent_extract(
             url, schema_for_e1, instruction=instruction, config=cfg, **overrides
@@ -239,8 +246,33 @@ async def _continue_to_e_tier(
             payload["is_structured"] = _is_e_tier_structured(result.data, result.blocked)
             return payload
         last_error = f"e1: {result.error or 'blocked'}"
+        blocked_e1 = result
     except AgentBlockedError as exc:
         last_error = f"e1: {exc}"
+
+    # ----- E2 gate: interactive tasks only -----
+    if not interactive:
+        if blocked_e1 is not None:
+            # E1's blocked result carries the partial content and error detail —
+            # strictly more useful to hand back than a bare "blocked".
+            payload = _agent_result_payload(blocked_e1)
+            payload["pattern_used"] = "e1"
+            payload["pattern_attempts"] = attempts
+            payload["product"] = None
+            payload["hostile_skipped"] = hostile_skipped
+            payload["is_structured"] = False
+            return payload
+        return _agent_error_payload(
+            f"Blocked at E1: {last_error}. Set interactive=true to escalate to "
+            "the E2 agent (login / pagination / dynamic forms).",
+            blocked=True,
+        ) | {
+            "pattern_used": None,
+            "pattern_attempts": attempts,
+            "product": None,
+            "hostile_skipped": hostile_skipped,
+            "is_structured": False,
+        }
 
     # ----- Pattern E2 -----
     attempts.append("e2")
@@ -298,6 +330,7 @@ async def _auto_scrape_inner(
     hostile_fallback: bool,
     pattern_d_network_idle: bool,
     user_data_dir: str | None,
+    interactive: bool = False,
     state: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Cascade body for the MCP auto_scrape tool.
@@ -347,6 +380,7 @@ async def _auto_scrape_inner(
             last_error,
             hostile_skipped,
             user_data_dir,
+            interactive,
         )
 
     # ----- Pattern A/B/C -----
@@ -423,6 +457,7 @@ async def _auto_scrape_inner(
         last_error,
         hostile_skipped,
         user_data_dir,
+        interactive,
     )
 
 
@@ -1001,11 +1036,15 @@ def _build_server(  # noqa: PLR0915 — single-place tool registration
             "Pattern A/B/C (TLS impersonation + JSON-LD/microdata extraction) "
             "first; if blocked or schema not satisfied, tries Pattern D "
             "(Scrapling, when [hostile] extra installed) for hostile vendors; "
-            "if D is skipped or also fails, escalates to Pattern E1 "
-            "(Crawl4AI + LLM); if still blocked, escalates to Pattern E2 "
-            "(browser-use multi-step agent). Set hostile_only=True to skip "
-            "the A/B/C ladder for vendors recon-classified as hostile — saves "
-            "~2-3s per call. Returns pattern_used + pattern_attempts + "
+            "then a stealth-browser render with the same deterministic "
+            "extractors and NO LLM (v1.6.0); if that still yields nothing, "
+            "escalates to Pattern E1 (Crawl4AI + LLM). Pattern E2 (browser-use "
+            "multi-step agent) runs only with interactive=True — it is the "
+            "priciest tier and earns its cost on login / pagination / dynamic "
+            "forms, not on a page that is simply walled. Set hostile_only=True "
+            "to skip the A/B/C ladder for vendors recon-classified as hostile — "
+            "saves ~2-3s per call. Returns pattern_used + pattern_attempts + "
+            "challenge_detected (the bot vendor that walled us, or null) + "
             "is_structured (sidecar's success verdict) + hostile_skipped "
             "(true when [hostile] extra missing)."
         ),
@@ -1021,8 +1060,14 @@ def _build_server(  # noqa: PLR0915 — single-place tool registration
         hostile_fallback: bool = True,
         pattern_d_network_idle: bool = False,
         persist_browser_profile_dir: str | None = None,
+        interactive: bool = False,
     ) -> dict[str, Any]:
-        """Run the full A/B/C → D → E1 → E2 escalation ladder.
+        """Run the full A/B/C → D → render → E1 → E2 escalation ladder.
+
+        Set interactive=True only when the target genuinely needs a multi-step
+        agent (login, pagination, dynamic forms). E2 is by far the most
+        expensive tier, so by default a blocked E1 stops and returns the blocked
+        result instead of spending an agent loop to hit the same wall.
 
         Set hostile_only=True to skip A/B/C and start at Pattern D (mirrors
         ``mode='hostile'`` on the REST side). When D fails with
@@ -1069,6 +1114,7 @@ def _build_server(  # noqa: PLR0915 — single-place tool registration
                 hostile_fallback=hostile_fallback,
                 pattern_d_network_idle=pattern_d_network_idle,
                 user_data_dir=profile_dir,
+                interactive=interactive,
                 state=state,
             )
             # Reported no matter which tier won: the vendor that walled us is

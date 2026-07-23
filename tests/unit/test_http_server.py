@@ -276,7 +276,12 @@ class TestScrape:
         monkeypatch.setitem(sys.modules, "scrapper_tool.agent", agent_module)
 
         async with _client(app_no_auth) as client:
-            resp = await client.post("/scrape", json={"url": "https://blocked.com"})
+            # interactive=true opts into E2, so "fully blocked" means all of
+            # a_b_c -> e1 -> e2 lost. Without it the cascade stops at E1 (see
+            # TestE2InteractiveGate).
+            resp = await client.post(
+                "/scrape", json={"url": "https://blocked.com", "interactive": True}
+            )
         assert resp.status_code == 422
         body = resp.json()
         assert body["error"] == "blocked"
@@ -571,7 +576,10 @@ class TestScrapeBrowseFallback:
         )
 
         async with _client(app_no_auth) as client:
-            resp = await client.post("/scrape", json={"url": "https://protected.com/p"})
+            # E2 is gated behind interactive=true from v1.6.0.
+            resp = await client.post(
+                "/scrape", json={"url": "https://protected.com/p", "interactive": True}
+            )
         assert resp.status_code == 200
         body = resp.json()
         assert body["pattern_used"] == "e2"
@@ -1686,6 +1694,129 @@ class TestScrapeRenderTier:
     ) -> None:
         monkeypatch.setenv("SCRAPPER_TOOL_RENDER_TIER", value)
         assert http_server._render_tier_enabled() is expected
+
+
+# --- B4: E2 is gated behind interactive=true --------------------------------
+
+
+class TestE2InteractiveGate:
+    """B4 — a blocked E1 no longer auto-escalates into the agent loop.
+
+    E2 (browser-use) is the priciest tier by a wide margin, and running it on
+    every blocked E1 spends a multi-step agent loop to hit the same wall more
+    slowly. It earns its cost only on genuinely interactive flows, so the caller
+    has to say so.
+    """
+
+    @staticmethod
+    def _blocked_e1_cascade(monkeypatch: pytest.MonkeyPatch) -> Any:
+        from scrapper_tool.errors import BlockedError
+
+        async def fake_ladder(method: str, url: str, **kwargs: Any) -> Any:
+            raise BlockedError("blocked")
+
+        monkeypatch.setattr("scrapper_tool.ladder.request_with_ladder", fake_ladder)
+        monkeypatch.setattr(http_server, "_hostile_available", lambda: False)
+        blocked = _fake_agent_result("extract", blocked=True)
+        blocked.error = "hit a captcha"
+        blocked.final_url = "https://protected.com/p"
+        return blocked
+
+    @pytest.mark.asyncio
+    async def test_blocked_e1_stops_without_interactive(
+        self, app_no_auth: Any, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        blocked = self._blocked_e1_cascade(monkeypatch)
+        _mock_agent_module(
+            monkeypatch,
+            extract_result=blocked,
+            browse_side_effect=AssertionError("E2 must not run without interactive=true"),
+        )
+
+        async with _client(app_no_auth) as client:
+            resp = await client.post("/scrape", json={"url": "https://protected.com/p"})
+
+        body = resp.json()
+        assert body["pattern_attempts"] == ["a_b_c", "e1"]
+        assert body["blocked"] is True
+        gate = [r for r in body["escalation_log"] if r["step"] == "e2"]
+        assert gate[0]["outcome"] == "skipped"
+        assert "interactive=false" in gate[0]["detail"]
+
+    @pytest.mark.asyncio
+    async def test_blocked_e1_escalates_with_interactive(
+        self, app_no_auth: Any, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        blocked = self._blocked_e1_cascade(monkeypatch)
+        _mock_agent_module(
+            monkeypatch, extract_result=blocked, browse_result=_fake_agent_result("browse")
+        )
+
+        async with _client(app_no_auth) as client:
+            resp = await client.post(
+                "/scrape", json={"url": "https://protected.com/p", "interactive": True}
+            )
+
+        body = resp.json()
+        assert body["pattern_used"] == "e2"
+        assert body["pattern_attempts"] == ["a_b_c", "e1", "e2"]
+
+    @pytest.mark.asyncio
+    async def test_gated_response_keeps_e1s_partial_result(
+        self, app_no_auth: Any, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Returning E1's blocked result beats a bare error — the caller still
+        gets the escalation log and whatever E1 did see."""
+        blocked = self._blocked_e1_cascade(monkeypatch)
+        _mock_agent_module(monkeypatch, extract_result=blocked)
+
+        async with _client(app_no_auth) as client:
+            resp = await client.post("/scrape", json={"url": "https://protected.com/p"})
+
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["pattern_used"] == "e1"
+        assert body["error"] == "hit a captcha"
+
+    @pytest.mark.asyncio
+    async def test_mode_browse_is_never_gated(
+        self, app_no_auth: Any, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """An explicit mode=browse IS the request for E2."""
+        _mock_agent_module(monkeypatch, browse_result=_fake_agent_result("browse"))
+
+        async with _client(app_no_auth) as client:
+            resp = await client.post(
+                "/scrape",
+                json={
+                    "url": "https://example.com/p",
+                    "mode": "browse",
+                    "instruction": "log in and read the table",
+                },
+            )
+
+        assert resp.status_code == 200
+        assert resp.json()["pattern_used"] == "e2"
+
+    @pytest.mark.asyncio
+    async def test_raising_e1_still_surfaces_the_error_when_gated(
+        self, app_no_auth: Any, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """No partial result to hand back — the blocked error must not be swallowed."""
+        from scrapper_tool.errors import AgentBlockedError, BlockedError
+
+        async def fake_ladder(method: str, url: str, **kwargs: Any) -> Any:
+            raise BlockedError("blocked")
+
+        monkeypatch.setattr("scrapper_tool.ladder.request_with_ladder", fake_ladder)
+        monkeypatch.setattr(http_server, "_hostile_available", lambda: False)
+        _mock_agent_module(monkeypatch, extract_side_effect=AgentBlockedError("e1 blocked"))
+
+        async with _client(app_no_auth) as client:
+            resp = await client.post("/scrape", json={"url": "https://protected.com/p"})
+
+        assert resp.status_code == 422
+        assert resp.json()["error"] == "blocked"
 
 
 # --- B3: challenge detection drives escalation ------------------------------

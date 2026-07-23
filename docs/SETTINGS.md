@@ -162,7 +162,7 @@ A/B/C  curl_cffi TLS impersonation  ->  cheapest
 D      Scrapling (hostile fetcher)
 render stealth browser + deterministic extractors   <- NO LLM
 E1     Crawl4AI + LLM
-E2     browser-use agent                            -> priciest
+E2     browser-use agent            -> priciest, interactive=true only
 ```
 
 | Env var | Default | Purpose |
@@ -193,6 +193,20 @@ steers escalation:
 
 Detection is content-first: a 403 carrying a large real DOM is *not* treated as
 a wall (`store.mopar.com` does exactly this), while a bot-walled HTTP 200 is.
+
+### The E2 gate — `interactive`
+
+E2 (browser-use) is the most expensive tier by a wide margin. From v1.6.0 a
+blocked E1 no longer auto-escalates into it: pass `interactive: true` (REST) /
+`interactive=True` (MCP `auto_scrape`) when the target genuinely needs a
+multi-step agent — login, pagination, dynamic forms. Otherwise the cascade stops
+at E1 and returns E1's blocked result, which carries the escalation log and
+whatever partial content E1 saw.
+
+Rationale: a page that is simply *walled* will wall the agent too, just slower
+and for many more tokens. Interaction is the only thing E2 can do that the
+render tier can't. An explicit REST `mode="browse"` is a direct request for E2
+and is never gated.
 
 ## Install extras
 
