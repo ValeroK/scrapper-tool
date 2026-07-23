@@ -234,6 +234,75 @@ class BrowseRequest(BaseModel):
     headful: bool = False
 
 
+class MapRequest(BaseModel):
+    """Body of POST /map — URL discovery."""
+
+    url: str = Field(..., description="Seed URL; its site is what gets mapped")
+    max_urls: int = Field(
+        200,
+        ge=1,
+        le=10_000,
+        description=(
+            "Cap on returned URLs. Truncation is reported via `truncated` and "
+            "`dropped_by_limit` rather than silently applied."
+        ),
+    )
+    same_domain: bool = Field(
+        True,
+        description=(
+            "Restrict to the seed's host and its subdomains. False follows links "
+            "anywhere, which on a page with outbound links means the whole web."
+        ),
+    )
+    include_sitemap: bool = Field(
+        True, description="Read sitemaps declared in robots.txt (and /sitemap.xml)"
+    )
+    fetch_seed: bool = Field(
+        True,
+        description=(
+            "Fetch the seed page through the impersonation ladder to extract its "
+            "links. False makes this sitemap-only — no page request at all."
+        ),
+    )
+    timeout_s: float | None = Field(None, description="Per-request timeout for the seed fetch")
+
+
+class CrawlRequest(BaseModel):
+    """Body of POST /crawl — recursive traversal running the cascade per page."""
+
+    model_config = ConfigDict(protected_namespaces=())
+
+    url: str = Field(..., description="Seed URL")
+    schema_json: dict[str, Any] | list[Any] | str | None = Field(  # type: ignore[assignment]
+        None, description="Passed to each page's cascade run, exactly as /scrape takes it"
+    )
+    depth: int = Field(2, ge=0, le=10, description="Link-following depth; 0 visits only the seed")
+    max_pages: int = Field(
+        50, ge=1, le=1_000, description="Hard cap on pages visited. Reported when hit."
+    )
+    concurrency: int = Field(4, ge=1, le=32, description="Pages fetched in parallel")
+    same_domain: bool = Field(True, description="Stay on the seed's host and its subdomains")
+    respect_robots: bool = Field(
+        True,
+        description=(
+            "Honour robots.txt, including Crawl-delay. Only set False for sites "
+            "you own or are authorised to crawl — a crawler visits pages nobody "
+            "asked for, which is exactly what robots.txt governs."
+        ),
+    )
+    interactive: bool = Field(
+        False, description="Allow per-page escalation to E2 (see /scrape's interactive)"
+    )
+    include_html: bool = Field(
+        False,
+        description=(
+            "Include each page's raw HTML in the response. Off by default because "
+            "a 50-page crawl of rendered pages is tens of megabytes of JSON."
+        ),
+    )
+    timeout_s: float | None = Field(None, description="Per-page timeout")
+
+
 _logger = get_logger(__name__)
 
 _HTTP_OK = 200
@@ -697,6 +766,39 @@ def _build_app(
         req: BrowseRequest, _: None = Depends(_check_api_key)
     ) -> dict[str, Any]:
         return await _do_browse(req)
+
+    @app.post(
+        "/map",
+        operation_id="map",
+        tags=["scraping"],
+        summary="Discover URLs on a site",
+        description=(
+            "Combines sitemap discovery (via robots.txt Sitemap: directives, "
+            "falling back to /sitemap.xml) with links extracted from the seed "
+            "page fetched through the impersonation ladder. Cheap — no browser, "
+            "no LLM. Reports truncation explicitly rather than silently capping."
+        ),
+    )
+    async def map_endpoint(req: MapRequest, _: None = Depends(_check_api_key)) -> dict[str, Any]:
+        return await _do_map(req)
+
+    @app.post(
+        "/crawl",
+        operation_id="crawl",
+        tags=["scraping"],
+        summary="Crawl a site, running the full cascade per page",
+        description=(
+            "Breadth-first traversal from a seed URL. Each page runs the same "
+            "auto cascade as /scrape, so every page benefits from recipe replay, "
+            "the render tier, and proxy rotation. robots.txt is honoured by "
+            "default (including Crawl-delay). Bounded by depth, max_pages, and "
+            "concurrency; the response reports what the bounds left unvisited."
+        ),
+    )
+    async def crawl_endpoint(
+        req: CrawlRequest, _: None = Depends(_check_api_key)
+    ) -> dict[str, Any]:
+        return await _do_crawl(req)
 
     return app
 
@@ -1976,7 +2078,14 @@ async def _do_scrape_inner(req: Any, attempts: list[str], start: float) -> dict[
             # Kept for the recipe learner: if a later tier's selectors also
             # match this raw body, its recipe can replay without a browser.
             req.__dict__["_a_b_c_html"] = text
-            product, json_ld, microdata_price = _extract_b_c(text, str(response.url))
+            # Same extractor pipeline as D and render, which crucially includes
+            # the CSS extractor when the caller supplied a CSS-shaped schema.
+            # Running only B/C here meant every CSS-schema request escalated past
+            # the cheapest tier — paying for Scrapling's browser at minimum —
+            # even when the raw HTML already had everything the selectors need.
+            css_data, product, json_ld, microdata_price = _run_d_extractors(
+                req, text, str(response.url)
+            )
 
             success = _classify_extraction_success(
                 req,
@@ -1985,6 +2094,7 @@ async def _do_scrape_inner(req: Any, attempts: list[str], start: float) -> dict[
                 product=product,
                 microdata_price=microdata_price,
                 json_ld=json_ld,
+                css_data=css_data,
             )
 
             a_b_c_duration = time.perf_counter() - a_b_c_start
@@ -1999,7 +2109,7 @@ async def _do_scrape_inner(req: Any, attempts: list[str], start: float) -> dict[
                     "pattern_attempts": attempts,
                     "escalation_log": list(log),
                     "product": product,
-                    "data": None,
+                    "data": css_data,
                     "raw_text": text,
                     "intermediate_raw_text": None,
                     "json_ld": json_ld,
@@ -2112,6 +2222,88 @@ async def _do_deterministic_tiers(
     if r_error is not None:
         last_error = r_error
     return None, last_error, hostile_skipped
+
+
+async def _do_map(req: MapRequest) -> dict[str, Any]:
+    """POST /map — discover URLs on the seed's site."""
+    from scrapper_tool.crawl.map import make_ladder_fetch, map_site  # noqa: PLC0415
+
+    start = time.perf_counter()
+    result = await map_site(
+        req.url,
+        max_urls=req.max_urls,
+        same_domain=req.same_domain,
+        include_sitemap=req.include_sitemap,
+        fetch=make_ladder_fetch(req.timeout_s or 30.0) if req.fetch_seed else None,
+    )
+    return {
+        "seed": result.seed,
+        "urls": result.urls,
+        "count": len(result.urls),
+        "from_sitemap": result.from_sitemap,
+        "from_links": result.from_links,
+        "truncated": result.truncated,
+        "dropped_by_limit": result.dropped_by_limit,
+        "sitemaps_read": list(result.sitemaps_read),
+        "duration_s": round(time.perf_counter() - start, 3),
+    }
+
+
+async def _do_crawl(req: CrawlRequest) -> dict[str, Any]:
+    """POST /crawl — traverse the site, running the full cascade per page.
+
+    Each page goes through ``_do_scrape``, so a crawl inherits recipe replay,
+    the render tier, challenge detection, and proxy rotation for free — and the
+    recipe learned on page one makes the rest of the crawl cheap.
+    """
+    from scrapper_tool.crawl.crawl import crawl_to_list  # noqa: PLC0415
+
+    start = time.perf_counter()
+
+    async def scrape_one(url: str) -> dict[str, Any]:
+        page_req = ScrapeRequest(
+            url=url,
+            schema_json=req.schema_json,
+            interactive=req.interactive,
+            timeout_s=req.timeout_s,
+        )
+        return await _do_scrape(page_req)
+
+    pages, stats = await crawl_to_list(
+        req.url,
+        scrape=scrape_one,
+        depth=req.depth,
+        max_pages=req.max_pages,
+        concurrency=req.concurrency,
+        same_domain=req.same_domain,
+        respect_robots=req.respect_robots,
+    )
+
+    results: list[dict[str, Any]] = []
+    for page in pages:
+        payload = dict(page.payload or {})
+        if not req.include_html:
+            # A 50-page crawl of rendered pages is tens of MB of HTML; the
+            # extracted data is what a crawl is for.
+            payload.pop("raw_text", None)
+            payload.pop("intermediate_raw_text", None)
+        results.append(
+            {
+                "url": page.url,
+                "depth": page.depth,
+                "ok": page.ok,
+                "error": page.error,
+                "skipped_reason": page.skipped_reason,
+                "result": payload or None,
+            }
+        )
+
+    return {
+        "seed": req.url,
+        "pages": results,
+        "stats": stats.as_dict(),
+        "duration_s": round(time.perf_counter() - start, 3),
+    }
 
 
 def _scrape_response_from_agent(

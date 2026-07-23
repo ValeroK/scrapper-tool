@@ -226,6 +226,49 @@ steers escalation:
 Detection is content-first: a 403 carrying a large real DOM is *not* treated as
 a wall (`store.mopar.com` does exactly this), while a bot-walled HTTP 200 is.
 
+### Site-level scraping — `/map` and `/crawl`
+
+`/map` (MCP: `map_site`) discovers URLs: sitemaps declared in robots.txt, then
+`/sitemap.xml` as a fallback, plus links from the seed page fetched through the
+impersonation ladder. No browser, no LLM. Truncation is always reported via
+`truncated` / `dropped_by_limit` — "200 URLs" and "200 of 40,000" are different
+answers to plan a crawl on.
+
+`/crawl` (MCP: `crawl_site`) walks a site breadth-first, running the **full auto
+cascade on each page**. That means a crawl inherits recipe replay, the render
+tier, challenge detection, and proxy rotation for free, and the recipe learned on
+page one makes the rest of the crawl cheap. Bounded by `depth`, `max_pages`, and
+`concurrency`; the response's `stats` reports `hit_page_limit`, `hit_depth_limit`,
+and `queued_but_unvisited` so a bounded crawl is never mistaken for a complete
+one. Page HTML is omitted unless you pass `include_html: true` — a 50-page crawl
+of rendered pages is tens of megabytes of JSON.
+
+`same_domain` (default true) keeps the crawl on the seed's host **and its
+subdomains**, matched at a label boundary against the seed's own hostname. That
+deliberately avoids computing a "registrable domain" without a public-suffix
+list, which would reduce `yad2.co.il` to `co.il` and treat every Israeli
+commercial site as one site.
+
+### robots.txt
+
+`respect_robots` (default true, `SCRAPPER_TOOL_AGENT_RESPECT_ROBOTS`) is now
+enforced — previously it was configuration that nothing read. It applies to the
+crawler, which is where it matters: a single scrape is a user asking for one page
+they could have opened themselves, while a crawler visits pages nobody asked for.
+
+- `Crawl-delay` is honoured, including fractional values. Python's
+  `RobotFileParser` parses this directive with `int()` and silently discards
+  `Crawl-delay: 0.5`, so it's parsed separately. A delay is capped at 10s of
+  actual waiting — honouring a hostile `Crawl-delay: 86400` literally is
+  indistinguishable from hanging.
+- Status handling follows RFC 9309: 4xx (including the 403 anti-bot systems often
+  serve for robots.txt) means no rules published and everything is allowed; 5xx or
+  unreachable is treated as a full disallow.
+- robots.txt is fetched once per origin per hour, not once per URL.
+
+Set `respect_robots: false` only for sites you own or are authorised to crawl. It
+logs a warning when disabled.
+
 ### The E2 gate — `interactive`
 
 E2 (browser-use) is the most expensive tier by a wide margin. From v1.6.0 a

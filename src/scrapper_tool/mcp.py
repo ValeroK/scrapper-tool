@@ -1283,6 +1283,115 @@ def _build_server(  # noqa: PLR0915 — single-place tool registration
 
                 shutil.rmtree(cleanup_dir, ignore_errors=True)
 
+    # ---- Tool: map_site (NEW v1.6.0) --------------------------------------
+
+    @server.tool(
+        name="map_site",
+        description=(
+            "Discover URLs on a site. Combines sitemaps (found via robots.txt "
+            "Sitemap: directives, falling back to /sitemap.xml) with links from "
+            "the seed page. Cheap — no browser, no LLM. Use before crawl_site to "
+            "see how big a job it is; truncation is reported, never silent."
+        ),
+    )
+    async def map_site_tool(
+        url: str,
+        max_urls: int = 200,
+        same_domain: bool = True,
+        include_sitemap: bool = True,
+        fetch_seed: bool = True,
+        timeout_s: float = 30.0,
+    ) -> dict[str, Any]:
+        """Discover URLs on the seed's site."""
+        from scrapper_tool.crawl.map import make_ladder_fetch, map_site  # noqa: PLC0415
+
+        result = await map_site(
+            url,
+            max_urls=max_urls,
+            same_domain=same_domain,
+            include_sitemap=include_sitemap,
+            fetch=make_ladder_fetch(timeout_s) if fetch_seed else None,
+        )
+        return {
+            "seed": result.seed,
+            "urls": result.urls,
+            "count": len(result.urls),
+            "from_sitemap": result.from_sitemap,
+            "from_links": result.from_links,
+            "truncated": result.truncated,
+            "dropped_by_limit": result.dropped_by_limit,
+            "sitemaps_read": list(result.sitemaps_read),
+        }
+
+    # ---- Tool: crawl_site (NEW v1.6.0) -----------------------------------
+
+    @server.tool(
+        name="crawl_site",
+        description=(
+            "Crawl a site breadth-first, running the full auto_scrape cascade on "
+            "each page — so every page benefits from recipe replay, the render "
+            "tier, and proxy rotation, and the recipe learned on page one makes "
+            "the rest cheap. robots.txt is honoured by default, including "
+            "Crawl-delay. Bounded by depth / max_pages / concurrency, and the "
+            "response reports what the bounds left unvisited. Page HTML is "
+            "omitted by default: a 50-page crawl of rendered pages is tens of MB "
+            "and would swamp the agent's context."
+        ),
+    )
+    async def crawl_site_tool(
+        url: str,
+        schema_json: dict[str, Any] | None = None,
+        depth: int = 2,
+        max_pages: int = 25,
+        concurrency: int = 4,
+        same_domain: bool = True,
+        respect_robots: bool = True,
+        interactive: bool = False,
+        timeout_s: float = 120.0,
+    ) -> dict[str, Any]:
+        """Crawl from ``url``, running the auto cascade per page."""
+        from scrapper_tool.crawl.crawl import crawl_to_list  # noqa: PLC0415
+
+        async def scrape_one(target: str) -> dict[str, Any]:
+            return await _auto_scrape_inner(
+                url=target,
+                schema_json=schema_json,
+                instruction=None,
+                model=None,
+                browser=None,
+                timeout_s=timeout_s,
+                hostile_only=False,
+                hostile_fallback=True,
+                pattern_d_network_idle=False,
+                user_data_dir=None,
+                interactive=interactive,
+            )
+
+        pages, stats = await crawl_to_list(
+            url,
+            scrape=scrape_one,
+            depth=depth,
+            max_pages=max_pages,
+            concurrency=concurrency,
+            same_domain=same_domain,
+            respect_robots=respect_robots,
+        )
+        results: list[dict[str, Any]] = []
+        for page in pages:
+            payload = dict(page.payload or {})
+            payload.pop("body", None)  # the bulky field; extracted data is the point
+            results.append(
+                {
+                    "url": page.url,
+                    "depth": page.depth,
+                    "ok": page.ok,
+                    "error": page.error,
+                    "skipped_reason": page.skipped_reason,
+                    "result": payload or None,
+                }
+            )
+        return {"seed": url, "pages": results, "stats": stats.as_dict()}
+
     # ---- Tool: canary -----------------------------------------------------
 
     @server.tool(

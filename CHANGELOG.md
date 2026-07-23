@@ -18,6 +18,24 @@ All notable changes to `scrapper-tool` are recorded here. Format follows [Keep a
   real rendered DOM is a win. The cascade-resolved profile directory is shared
   with the browser, carrying clearance cookies forward from earlier rungs, and
   the rendered DOM becomes `intermediate_raw_text` when the LLM tier still runs.
+- **Site-level scraping: `/map` + `/crawl` (REST), `map_site` + `crawl_site`
+  (MCP).** `map` discovers URLs from sitemaps (via robots.txt `Sitemap:`
+  directives, falling back to `/sitemap.xml`) plus links on the seed page —
+  no browser, no LLM. `crawl` walks a site breadth-first running the **full auto
+  cascade per page**, so every page inherits recipe replay, the render tier,
+  challenge detection, and proxy rotation, and the recipe learned on page one
+  makes the rest of the crawl cheap. Bounded by depth / max_pages / concurrency,
+  with `hit_page_limit`, `hit_depth_limit`, and `queued_but_unvisited` reported so
+  a bounded crawl is never mistaken for a complete one. Page HTML is omitted
+  unless requested (a 50-page crawl of rendered pages is tens of MB of JSON).
+- **`respect_robots` is now actually enforced.** The setting has existed since
+  v1.0 and defaulted to True, but nothing read it beyond a startup log line. The
+  crawler honours robots.txt by default, including `Crawl-delay` — fractional
+  values included, which Python's own `RobotFileParser` silently discards because
+  it parses that directive with `int()`. Status handling follows RFC 9309: 4xx
+  (including the 403 anti-bot systems often serve for robots.txt) means no rules
+  published; 5xx or unreachable is a full disallow. Fetched once per origin per
+  hour. A hostile `Crawl-delay` is capped at 10s of real waiting.
 - **Learn-once / replay (`pattern_used="replay"`).** When an expensive tier
   succeeds, the cascade derives the CSS selectors that would have produced the
   same data for free, verifies them against that page, and caches the recipe per
@@ -54,6 +72,14 @@ All notable changes to `scrapper-tool` are recorded here. Format follows [Keep a
   `ws://127.0.0.1:9222`). Non-default and benchmark-gated — measure its real
   detection rate via the `canary` CLI before trusting it on protected sites. A
   profile-gated `obscura` service is included in `docker-compose.yml`.
+
+### Fixed
+- **A CSS-shaped `schema_json` now wins at tier 1.** The A/B/C tier ran only the
+  JSON-LD and microdata extractors, so a caller supplying a CSS schema always fell
+  through to Pattern D and paid for Scrapling's browser at minimum — even on a
+  plain server-rendered listing whose raw markup had everything the selectors
+  needed. Tier 1 now runs the same extractor pipeline as the tiers below it, and
+  its response carries the extracted rows in `data`.
 
 ### Changed
 - **BREAKING (cascade behaviour): E2 no longer runs automatically.** A blocked

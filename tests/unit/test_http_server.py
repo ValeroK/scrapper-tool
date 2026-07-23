@@ -1771,43 +1771,38 @@ class TestRecipeLearnAndReplay:
         assert len(renders) == 2
 
     @pytest.mark.asyncio
-    async def test_recipe_downgrades_to_a_plain_fetch_when_the_raw_body_has_it(
+    async def test_a_css_schema_wins_at_tier_one_when_the_raw_body_has_it(
         self, app_no_auth: Any, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """The best case: the render won, but JS wasn't why.
+        """No tier above A/B/C should run when the raw HTML already answers.
 
-        A render can win for reasons unrelated to JS — it cleared a bot wall, or
-        the page only looked unhydrated. Then the selectors work fine on the raw
-        HTTP body, and pinning the recipe to "render" would make every future
-        replay pay for a browser it doesn't need. The downgrade is *proved*, not
-        guessed: the derived schema is run against the body A/B/C already had.
+        The A/B/C tier used to run only the JSON-LD and microdata extractors, so a
+        caller supplying a CSS schema always fell through to Pattern D and paid
+        for a browser — even on a plain server-rendered listing whose markup had
+        everything the selectors needed. Tier 1 now runs the same extractor
+        pipeline as the tiers below it.
         """
-        from scrapper_tool.recipe.store import get_store
+        renders: list[dict[str, Any]] = []
+        _install_fake_render(monkeypatch, html=_RECIPE_LISTING_HTML, calls=renders)
 
-        # A/B/C returns the real markup but the classifier rejects it (no
-        # structured signal without the caller's schema), so render still runs.
         async def fake_ladder(method: str, url: str, **kwargs: Any) -> Any:
             return _make_response(text=_RECIPE_LISTING_HTML, url=url), "chrome133a"
 
         monkeypatch.setattr("scrapper_tool.ladder.request_with_ladder", fake_ladder)
         monkeypatch.setattr(http_server, "_hostile_available", lambda: False)
-        renders: list[dict[str, Any]] = []
-        _install_fake_render(monkeypatch, html=_RECIPE_LISTING_HTML, calls=renders)
-        body = {"url": "https://cars.test/list", "schema_json": _RECIPE_SCHEMA}
 
         async with _client(app_no_auth) as client:
-            first = (await client.post("/scrape", json=body)).json()
-            assert first["pattern_used"] == "render"
-            learned = get_store().get(cache_key(body["url"], _RECIPE_SCHEMA))
-            assert learned is not None
-            assert learned.source_tier == "a_b_c", "provably fetch-replayable"
-            assert learned.needs_render is False
+            body = (
+                await client.post(
+                    "/scrape",
+                    json={"url": "https://cars.test/list", "schema_json": _RECIPE_SCHEMA},
+                )
+            ).json()
 
-            second = (await client.post("/scrape", json=body)).json()
-
-        assert second["pattern_used"] == "replay"
-        assert second["data"] == _RECIPE_ROWS
-        assert len(renders) == 1, "the replay must not launch a browser"
+        assert body["pattern_used"] == "a_b_c"
+        assert body["pattern_attempts"] == ["a_b_c"]
+        assert body["data"] == _RECIPE_ROWS
+        assert renders == [], "no browser should be launched for this page at all"
 
     @pytest.mark.asyncio
     async def test_replay_reruns_the_cascade_and_reheals_when_the_site_changes(
