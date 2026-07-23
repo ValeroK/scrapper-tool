@@ -62,6 +62,9 @@ from scrapper_tool.ladder import (
     IMPERSONATE_LADDER,
     request_with_ladder,
 )
+from scrapper_tool.proxy import (
+    ProxyPool,
+)
 
 __version__ = "1.4.5"
 
@@ -110,6 +113,7 @@ __all__ = [
     "CaptchaSolveError",
     "ConfigurationError",
     "ParseError",
+    "ProxyPool",
     "ScrapingError",
     "VendorHTTPClient",
     "VendorHTTPError",

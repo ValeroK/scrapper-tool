@@ -175,3 +175,92 @@ class TestLadderHeaderMerging:
         assert all(s.headers.get("X-Custom") == "hello" for s in fake_curl.INSTANCES)
         # And the default UA is present too.
         assert all("scrapper-tool" in s.headers["User-Agent"] for s in fake_curl.INSTANCES)
+
+
+class TestLadderProxyRotation:
+    """v1.6.0 — the ladder rotates the IP alongside the TLS fingerprint.
+
+    TLS-profile rotation cannot recover a burned IP, so walking every profile
+    from one flagged egress address is wasted work. With a pool configured each
+    rung must vary both dimensions.
+    """
+
+    @pytest.mark.asyncio
+    async def test_each_rung_uses_a_different_proxy(self, fake_curl: type[FakeCurlSession]) -> None:
+        from scrapper_tool.proxy import ProxyPool
+
+        # First two profiles blocked, third wins.
+        fake_curl.STATUS_FOR_PROFILE = {
+            "chrome133a": 403,
+            "chrome124": 403,
+            "safari18_0": 200,
+        }
+        pool = ProxyPool.from_urls(["http://p1:1", "http://p2:2", "http://p3:3"])
+
+        resp, profile = await request_with_ladder("GET", "https://example.test/p", proxy_pool=pool)
+        assert resp.status_code == 200
+        assert profile == "safari18_0"
+
+        used = [inst.proxy for inst in fake_curl.INSTANCES]
+        assert used == ["http://p1:1", "http://p2:2", "http://p3:3"], (
+            "each ladder rung must get a fresh IP, not reuse the burned one"
+        )
+
+    @pytest.mark.asyncio
+    async def test_blocked_proxies_are_penalised_and_winner_marked_ok(
+        self, fake_curl: type[FakeCurlSession]
+    ) -> None:
+        from scrapper_tool.proxy import ProxyPool
+
+        fake_curl.STATUS_FOR_PROFILE = {"chrome133a": 403, "chrome124": 200}
+        pool = ProxyPool.from_urls(["http://p1:1", "http://p2:2"])
+
+        await request_with_ladder("GET", "https://example.test/p", proxy_pool=pool)
+
+        by_url = {e.url: e for e in pool.entries}
+        assert by_url["http://p1:1"].failures == 1  # blocked -> cooling down
+        assert by_url["http://p1:1"].cooldown_until > 0
+        assert by_url["http://p2:2"].successes == 1  # winner stays hot
+        assert by_url["http://p2:2"].failures == 0
+
+    @pytest.mark.asyncio
+    async def test_explicit_proxy_overrides_pool_and_is_not_penalised(
+        self, fake_curl: type[FakeCurlSession]
+    ) -> None:
+        from scrapper_tool.proxy import ProxyPool
+
+        fake_curl.STATUS_FOR_PROFILE = dict.fromkeys(IMPERSONATE_LADDER, 403)
+        pool = ProxyPool.from_urls(["http://pool:1"])
+
+        with pytest.raises(BlockedError):
+            await request_with_ladder(
+                "GET", "https://example.test/p", proxy="http://pinned:1", proxy_pool=pool
+            )
+
+        assert {i.proxy for i in fake_curl.INSTANCES} == {"http://pinned:1"}
+        # A caller-pinned proxy isn't pool-managed, so its health is untouched.
+        assert pool.entries[0].failures == 0
+
+    @pytest.mark.asyncio
+    async def test_exhausted_pool_falls_back_to_direct(
+        self, fake_curl: type[FakeCurlSession]
+    ) -> None:
+        from scrapper_tool.proxy import ProxyPool
+
+        fake_curl.STATUS_FOR_PROFILE = {"chrome133a": 200}
+        pool = ProxyPool.from_urls(["http://p1:1"])
+        pool.mark_blocked("http://p1:1")  # everything cooling down
+
+        resp, _ = await request_with_ladder("GET", "https://example.test/p", proxy_pool=pool)
+        assert resp.status_code == 200
+        # No proxy available -> direct connection rather than failing outright.
+        assert fake_curl.INSTANCES[0].proxy is None
+
+    @pytest.mark.asyncio
+    async def test_no_pool_preserves_previous_behaviour(
+        self, fake_curl: type[FakeCurlSession]
+    ) -> None:
+        fake_curl.STATUS_FOR_PROFILE = {"chrome133a": 200}
+        resp, _ = await request_with_ladder("GET", "https://example.test/p")
+        assert resp.status_code == 200
+        assert fake_curl.INSTANCES[0].proxy is None

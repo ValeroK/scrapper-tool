@@ -48,11 +48,14 @@ from curl_cffi.requests import AsyncSession as _CurlCffiAsyncSession
 from scrapper_tool._logging import get_logger
 from scrapper_tool.errors import BlockedError
 from scrapper_tool.http import _DEFAULT_USER_AGENT, request_with_retry
+from scrapper_tool.proxy import resolve_proxy
 
 if TYPE_CHECKING:
     from collections.abc import AsyncIterator
 
     import httpx
+
+    from scrapper_tool.proxy import ProxyPool
 
 # The fallback ladder. Walked top-to-bottom on 403; first ≠403 wins.
 #
@@ -124,6 +127,7 @@ async def request_with_ladder(
     ladder: tuple[str, ...] = IMPERSONATE_LADDER,
     timeout: float = 10.0,  # noqa: ASYNC109 — passed through to curl_cffi, not asyncio.timeout
     proxy: str | None = None,
+    proxy_pool: ProxyPool | None = None,
     extra_headers: dict[str, str] | None = None,
     max_attempts_per_profile: int = 3,
     **kwargs: Any,
@@ -131,12 +135,20 @@ async def request_with_ladder(
     """Issue ``method`` to ``url``, walking the impersonation ``ladder``.
 
     For each profile in ``ladder`` (top-to-bottom):
-      1. Open a fresh curl_cffi session with that ``impersonate`` value.
-      2. Call :func:`request_with_retry` (handles transport + 5xx retries
+      1. Pick a proxy — the explicit ``proxy`` argument if given, else the next
+         healthy entry from ``proxy_pool`` (a fresh IP per rung).
+      2. Open a fresh curl_cffi session with that ``impersonate`` value.
+      3. Call :func:`request_with_retry` (handles transport + 5xx retries
          within the profile).
-      3. If response status ∈ ``{403, 503}``, close session, advance to
-         the next profile.
-      4. Otherwise: log the winning profile, return ``(response, profile)``.
+      4. If response status ∈ ``{403, 503}``, mark the proxy blocked, close the
+         session, and advance to the next profile.
+      5. Otherwise: mark the proxy healthy, log the winner, return
+         ``(response, profile)``.
+
+    Rotating the **proxy alongside the profile** matters: TLS-fingerprint
+    rotation cannot recover a burned IP, so walking all four profiles from one
+    flagged egress address is wasted work. With a pool configured, each rung
+    varies both dimensions at once.
 
     If every profile returns 403/503, raises :class:`BlockedError`. The
     caller should escalate to Pattern D (Scrapling) at that point.
@@ -163,10 +175,12 @@ async def request_with_ladder(
 
     last_status: int | None = None
     for profile in ladder:
+        # Fresh IP per rung when a pool is configured; an explicit proxy wins.
+        attempt_proxy, managed_pool = resolve_proxy(proxy_pool, proxy)
         async with _curl_cffi_session(
             profile,
             timeout=timeout,
-            proxy=proxy,
+            proxy=attempt_proxy,
             extra_headers=extra_headers,
         ) as session:
             resp = await request_with_retry(
@@ -178,21 +192,30 @@ async def request_with_ladder(
             )
         last_status = resp.status_code
         if resp.status_code in _ROTATE_STATUS_CODES:
+            # The block could be the fingerprint OR the IP — we can't tell which,
+            # so penalise the proxy and move on. Cooldown keeps a burned IP out
+            # of rotation instead of re-burning it on the next rung.
+            if managed_pool is not None:
+                managed_pool.mark_blocked(attempt_proxy)
             _logger.warning(
                 "ladder.profile_blocked",
                 profile=profile,
                 method=method,
                 url=url,
                 status_code=resp.status_code,
+                proxied=attempt_proxy is not None,
             )
             continue
 
+        if managed_pool is not None:
+            managed_pool.mark_ok(attempt_proxy)
         _logger.info(
             "ladder.profile_won",
             profile=profile,
             method=method,
             url=url,
             status_code=resp.status_code,
+            proxied=attempt_proxy is not None,
         )
         return resp, profile
 

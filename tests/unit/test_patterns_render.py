@@ -143,3 +143,52 @@ async def test_scrapling_backend_delegates_to_pattern_d(monkeypatch: pytest.Monk
     # the persistent profile dir is forwarded so clearance cookies carry over
     assert seen["kwargs"]["user_data_dir"] == "/tmp/p"
     assert seen["kwargs"]["solve_cloudflare"] is True
+
+
+# --- proxy rotation (D1) --------------------------------------------------
+
+
+async def test_render_uses_pool_proxy_when_none_pinned(
+    fake_render_backend: dict[str, Any],
+) -> None:
+    """A stealth browser on a burned IP still gets walled — the browser tier
+    needs the IP dimension too, not just the HTTP ladder."""
+    from scrapper_tool.proxy import ProxyPool
+
+    pool = ProxyPool.from_urls(["http://p1:1"])
+    await render_mod.render_html("https://x.example", settle_s=0, proxy_pool=pool)
+    assert fake_render_backend["captured"]["options"].proxy == "http://p1:1"
+    # 203 is not a block status, so the proxy stays healthy.
+    assert pool.entries[0].successes == 1
+
+
+async def test_render_marks_proxy_blocked_on_403(
+    fake_render_backend: dict[str, Any], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from scrapper_tool.proxy import ProxyPool
+
+    class _Blocked:
+        status = 403
+
+    fake_render_backend["page"].goto = AsyncMock(return_value=_Blocked())
+    pool = ProxyPool.from_urls(["http://p1:1"])
+
+    result = await render_mod.render_html("https://x.example", settle_s=0, proxy_pool=pool)
+    assert result.status == 403
+    assert pool.entries[0].failures == 1
+    assert pool.available_count() == 0  # cooling down
+
+
+async def test_render_pinned_proxy_beats_pool(fake_render_backend: dict[str, Any]) -> None:
+    from scrapper_tool.agent.backends.browser import BrowserLaunchOptions as _Opts
+    from scrapper_tool.proxy import ProxyPool
+
+    pool = ProxyPool.from_urls(["http://pool:1"])
+    await render_mod.render_html(
+        "https://x.example",
+        settle_s=0,
+        options=_Opts(proxy="http://pinned:1"),
+        proxy_pool=pool,
+    )
+    assert fake_render_backend["captured"]["options"].proxy == "http://pinned:1"
+    assert pool.entries[0].successes == 0  # pinned choice isn't pool-managed

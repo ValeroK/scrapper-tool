@@ -26,7 +26,7 @@ Usage::
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from typing import TYPE_CHECKING, Any
 
 from scrapper_tool._logging import get_logger
@@ -35,9 +35,12 @@ from scrapper_tool.agent.backends.browser import (
     get_browser_backend,
     open_browser,
 )
+from scrapper_tool.proxy import resolve_proxy
 
 if TYPE_CHECKING:
     from collections.abc import Sequence
+
+    from scrapper_tool.proxy import ProxyPool
 
 _logger = get_logger(__name__)
 
@@ -45,6 +48,10 @@ _logger = get_logger(__name__)
 # late/lazy content arrive. This is what made a plain Camoufox navigation pass a
 # Radware wall where a bare fetch did not.
 _DEFAULT_SETTLE_S = 2.0
+
+# Statuses that indicate the egress IP / fingerprint was rejected, not that the
+# page is genuinely missing. Mirrors the ladder's rotate-on set.
+_BLOCKED_STATUS_CODES = frozenset({403, 429, 503})
 
 
 @dataclass(frozen=True)
@@ -72,6 +79,7 @@ async def render_html(
     cdp_url: str | None = None,
     fingerprint: str = "browserforge",
     behavior: str = "off",
+    proxy_pool: ProxyPool | None = None,
 ) -> RenderResult:
     """Render ``url`` with a stealth browser and return the HTML. No LLM.
 
@@ -97,6 +105,11 @@ async def render_html(
         If the chosen backend's dependency (or its browser binary) is missing.
     """
     opts = options or BrowserLaunchOptions()
+    # Browser tiers need the IP-reputation dimension too — a stealth browser on a
+    # burned IP still gets walled. Only consult the pool when no proxy was pinned.
+    attempt_proxy, managed_pool = resolve_proxy(proxy_pool, opts.proxy)
+    if attempt_proxy != opts.proxy:
+        opts = replace(opts, proxy=attempt_proxy)
     backend = get_browser_backend(browser, cdp_url=cdp_url)
 
     # Scrapling's fetcher is HTTP-shaped (no Playwright Browser), so it can't be
@@ -143,6 +156,14 @@ async def render_html(
             except Exception as exc:  # pragma: no cover — defensive
                 _logger.debug("patterns.render.cookies_failed", error=str(exc))
 
+        # Feed IP health back to the pool: a 403/503 on a render is as much an
+        # IP signal as it is on the HTTP ladder.
+        if managed_pool is not None:
+            if status in _BLOCKED_STATUS_CODES:
+                managed_pool.mark_blocked(attempt_proxy)
+            else:
+                managed_pool.mark_ok(attempt_proxy)
+
         _logger.info(
             "patterns.render.rendered",
             backend=handle.name,
@@ -150,6 +171,7 @@ async def render_html(
             final_url=final_url,
             status=status,
             bytes=len(html),
+            proxied=attempt_proxy is not None,
         )
         return RenderResult(html=html, status=status, final_url=final_url, cookies=cookies)
 
