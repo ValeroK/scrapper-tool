@@ -79,6 +79,7 @@ import sys
 from typing import Any
 
 from scrapper_tool import __version__
+from scrapper_tool._challenge import is_interstitial
 from scrapper_tool._classify import classify_extraction_success
 from scrapper_tool.canary import run_canary
 from scrapper_tool.errors import (
@@ -297,6 +298,7 @@ async def _auto_scrape_inner(
     hostile_fallback: bool,
     pattern_d_network_idle: bool,
     user_data_dir: str | None,
+    state: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Cascade body for the MCP auto_scrape tool.
 
@@ -304,7 +306,12 @@ async def _auto_scrape_inner(
     indenting the whole cascade one level. Owns the A/B/C → D → E1 → E2
     sequence; profile-dir lifecycle (mkdtemp + rmtree) lives in the
     enclosing auto_scrape.
+
+    ``state`` collects cascade-scoped facts (currently the detected bot vendor)
+    for the caller to fold into the payload — the MCP equivalent of what REST
+    stashes on ``req.__dict__``, since there's no request object here.
     """
+    cascade_state = state if state is not None else {}
     attempts: list[str] = []
     last_error: str | None = None
     hostile_skipped = False
@@ -381,6 +388,11 @@ async def _auto_scrape_inner(
                 "hostile_skipped": False,
                 "is_structured": True,
             }
+        # Not a signal, so we escalate either way — but knowing *which* vendor
+        # walled us decides whether Pattern D is worth attempting at all.
+        vendor = is_interstitial(text, resp.status_code)
+        if vendor is not None:
+            cascade_state["challenge_detected"] = vendor
     except BlockedError as exc:
         last_error = f"a_b_c: {exc}"
 
@@ -394,6 +406,7 @@ async def _auto_scrape_inner(
         browser=browser,
         user_data_dir=user_data_dir,
         last_error=last_error,
+        challenge=cascade_state.get("challenge_detected"),
     )
     if payload is not None:
         return payload
@@ -423,6 +436,7 @@ async def _run_deterministic_tiers(
     browser: str | None,
     user_data_dir: str | None,
     last_error: str | None,
+    challenge: str | None = None,
 ) -> tuple[dict[str, Any] | None, str | None, bool]:
     """Run the no-LLM tiers between the HTTP ladder and the agent tiers.
 
@@ -431,14 +445,22 @@ async def _run_deterministic_tiers(
     deterministically?" — and because either failing must still let the next one
     try. Returns ``(payload, last_error, hostile_skipped)``; a None payload means
     keep escalating to E1.
+
+    ``challenge`` is the bot vendor detected by the ladder, if any. Scrapling's
+    weapon is ``solve_cloudflare``, so a non-Cloudflare wall means D would burn
+    a browser launch re-fetching the same interstitial — skip straight to the
+    render tier. A Cloudflare wall is exactly what D is for, so it still runs.
     """
-    d_payload, d_error, hostile_skipped = await _try_pattern_d_for_auto_scrape(
-        url, schema_json, attempts, timeout_s, pattern_d_network_idle, user_data_dir
-    )
-    if d_payload is not None:
-        return d_payload, last_error, hostile_skipped
-    if d_error is not None:
-        last_error = d_error
+    hostile_skipped = False
+    skip_d = challenge is not None and challenge != "cloudflare"
+    if not skip_d:
+        d_payload, d_error, hostile_skipped = await _try_pattern_d_for_auto_scrape(
+            url, schema_json, attempts, timeout_s, pattern_d_network_idle, user_data_dir
+        )
+        if d_payload is not None:
+            return d_payload, last_error, hostile_skipped
+        if d_error is not None:
+            last_error = d_error
 
     r_payload, r_error = await _try_render_for_auto_scrape(
         url, schema_json, attempts, timeout_s, browser, user_data_dir
@@ -1034,8 +1056,9 @@ def _build_server(  # noqa: PLR0915 — single-place tool registration
         else:
             profile_dir = None
 
+        state: dict[str, Any] = {}
         try:
-            return await _auto_scrape_inner(
+            payload = await _auto_scrape_inner(
                 url=url,
                 schema_json=schema_json,
                 instruction=instruction,
@@ -1046,7 +1069,12 @@ def _build_server(  # noqa: PLR0915 — single-place tool registration
                 hostile_fallback=hostile_fallback,
                 pattern_d_network_idle=pattern_d_network_idle,
                 user_data_dir=profile_dir,
+                state=state,
             )
+            # Reported no matter which tier won: the vendor that walled us is
+            # the single most useful fact for tuning a target.
+            payload["challenge_detected"] = state.get("challenge_detected")
+            return payload
         finally:
             if cleanup_dir is not None:
                 import shutil  # noqa: PLC0415

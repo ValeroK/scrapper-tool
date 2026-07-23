@@ -177,6 +177,23 @@ Pattern B/C/CSS extractors then did the job with **zero tokens**. It uses the
 browser configured by `SCRAPPER_TOOL_AGENT_BROWSER` and skips itself cleanly
 when the `[llm-agent]` extra isn't installed (no entry in `pattern_attempts`).
 
+### Challenge detection
+
+When the ladder gets a bot-vendor interstitial instead of a page, the response
+carries `challenge_detected` — one of `cloudflare`, `radware`, `datadome`,
+`perimeterx`, `akamai`, `kasada`, `incapsula`, or `unknown` (null when nothing
+was detected). It is reported no matter which tier eventually wins, and it also
+steers escalation:
+
+| Detected | Pattern D | Why |
+|----------|-----------|-----|
+| `cloudflare` | **runs** | Scrapling's `solve_cloudflare` is exactly for this. |
+| anything else | **skipped** | Scrapling has no solver for it, so D would burn a browser launch re-fetching the same interstitial. Goes straight to render. |
+| nothing | runs | Unchanged behaviour. |
+
+Detection is content-first: a 403 carrying a large real DOM is *not* treated as
+a wall (`store.mopar.com` does exactly this), while a bot-walled HTTP 200 is.
+
 ## Install extras
 
 **Recommended SDK install** for all capabilities:

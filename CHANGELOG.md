@@ -18,6 +18,16 @@ All notable changes to `scrapper-tool` are recorded here. Format follows [Keep a
   real rendered DOM is a win. The cascade-resolved profile directory is shared
   with the browser, carrying clearance cookies forward from earlier rungs, and
   the rendered DOM becomes `intermediate_raw_text` when the LLM tier still runs.
+- **Challenge detection now steers escalation, and is reported.** Every
+  `/scrape` and `auto_scrape` response carries `challenge_detected` — the bot
+  vendor that walled us (`cloudflare`, `radware`, `datadome`, `perimeterx`,
+  `akamai`, `kasada`, `incapsula`, `unknown`) or null. Previously the
+  heuristics were private to `http_server`, Cloudflare-only, and used solely to
+  pick a Scrapling retry strategy; MCP had none at all. On a non-Cloudflare
+  wall the cascade now skips Pattern D and goes straight to the render tier,
+  because Scrapling's only anti-bot weapon (`solve_cloudflare`) doesn't apply
+  and D would spend a browser launch re-fetching the same interstitial. A
+  Cloudflare wall still runs D — that is what it is for.
 - **Obscura browser backend (experimental).** `browser="obscura"` connects to
   an external Obscura CDP server (`obscura serve`) via Playwright
   `connect_over_cdp`, returning a real Playwright browser that drives E2

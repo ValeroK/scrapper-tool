@@ -1688,6 +1688,138 @@ class TestScrapeRenderTier:
         assert http_server._render_tier_enabled() is expected
 
 
+# --- B3: challenge detection drives escalation ------------------------------
+
+
+# A Radware/ShieldSquare interstitial: HTTP 200, so nothing errors, but it's a
+# wall not a page. Scrapling has no solver for this vendor.
+_RADWARE_WALL = (
+    "<html><head><title>Loading</title></head><body>"
+    "<script>window.location='https://validate.perfdrive.com/xyz'</script>"
+    "</body></html>"
+)
+
+# Cloudflare's — the one vendor Pattern D actually has a weapon against.
+_CF_WALL = "<html><head><title>Just a moment...</title></head><body></body></html>"
+
+
+class TestChallengeDetectionEscalation:
+    """B3 — knowing *which* vendor walled us changes what we try next.
+
+    Pattern D's anti-bot weapon is Scrapling's ``solve_cloudflare``, which is
+    Cloudflare-specific. So a Cloudflare wall should still go through D, while
+    any other vendor should skip it — otherwise D burns a browser launch just to
+    re-fetch the same interstitial the ladder already got. The detected vendor
+    is reported either way, since it's the most useful fact for tuning a target.
+    """
+
+    @pytest.mark.asyncio
+    async def test_non_cloudflare_wall_skips_d_and_renders(
+        self, app_no_auth: Any, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        async def fake_ladder(method: str, url: str, **kwargs: Any) -> Any:
+            return _make_response(text=_RADWARE_WALL, url=url), "chrome133a"
+
+        monkeypatch.setattr("scrapper_tool.ladder.request_with_ladder", fake_ladder)
+        # D is installed and would happily run — the point is that it doesn't.
+        _install_fake_hostile_client(
+            monkeypatch, response=_FakeScraplingResponse(html=_RADWARE_WALL)
+        )
+        _install_fake_render(monkeypatch)
+
+        async with _client(app_no_auth) as client:
+            resp = await client.post("/scrape", json={"url": "https://walled.com/p"})
+
+        body = resp.json()
+        assert body["challenge_detected"] == "radware"
+        assert body["pattern_used"] == "render"
+        assert body["pattern_attempts"] == ["a_b_c", "render"], (
+            "Scrapling can't solve Radware — D must be skipped, not attempted"
+        )
+        skipped = [r for r in body["escalation_log"] if r["step"] == "d"]
+        assert skipped[0]["outcome"] == "skipped"
+        assert "Cloudflare" in skipped[0]["detail"]
+
+    @pytest.mark.asyncio
+    async def test_cloudflare_wall_still_runs_d(
+        self, app_no_auth: Any, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The one case where D has a real solver — don't skip it."""
+
+        async def fake_ladder(method: str, url: str, **kwargs: Any) -> Any:
+            return _make_response(text=_CF_WALL, url=url), "chrome133a"
+
+        monkeypatch.setattr("scrapper_tool.ladder.request_with_ladder", fake_ladder)
+        _install_fake_hostile_client(
+            monkeypatch, response=_FakeScraplingResponse(html=_PRODUCT_HTML)
+        )
+
+        async with _client(app_no_auth) as client:
+            resp = await client.post("/scrape", json={"url": "https://cf.com/p"})
+
+        body = resp.json()
+        assert body["challenge_detected"] == "cloudflare"
+        assert body["pattern_used"] == "d"
+        assert body["pattern_attempts"] == ["a_b_c", "d"]
+
+    @pytest.mark.asyncio
+    async def test_challenge_reported_even_when_a_later_tier_wins(
+        self, app_no_auth: Any, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        async def fake_ladder(method: str, url: str, **kwargs: Any) -> Any:
+            return _make_response(text=_RADWARE_WALL, url=url), "chrome133a"
+
+        monkeypatch.setattr("scrapper_tool.ladder.request_with_ladder", fake_ladder)
+        monkeypatch.setattr(http_server, "_hostile_available", lambda: False)
+        _install_fake_render(monkeypatch)
+
+        async with _client(app_no_auth) as client:
+            resp = await client.post("/scrape", json={"url": "https://walled.com/p"})
+
+        body = resp.json()
+        assert body["pattern_used"] == "render"
+        assert body["challenge_detected"] == "radware"
+
+    @pytest.mark.asyncio
+    async def test_no_challenge_leaves_the_cascade_unchanged(
+        self, app_no_auth: Any, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """An ordinary no-signal page must not trip detection or skip D."""
+
+        async def fake_ladder(method: str, url: str, **kwargs: Any) -> Any:
+            return _make_response(
+                text="<html><body>plain page</body></html>", url=url
+            ), "chrome133a"
+
+        monkeypatch.setattr("scrapper_tool.ladder.request_with_ladder", fake_ladder)
+        _install_fake_hostile_client(
+            monkeypatch, response=_FakeScraplingResponse(html=_PRODUCT_HTML)
+        )
+
+        async with _client(app_no_auth) as client:
+            resp = await client.post("/scrape", json={"url": "https://plain.com/p"})
+
+        body = resp.json()
+        assert body["challenge_detected"] is None
+        assert body["pattern_attempts"] == ["a_b_c", "d"]
+
+    @pytest.mark.asyncio
+    async def test_challenge_is_null_on_a_clean_win(
+        self, app_no_auth: Any, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        async def fake_ladder(method: str, url: str, **kwargs: Any) -> Any:
+            return _make_response(text=_PRODUCT_HTML, url=url), "chrome133a"
+
+        monkeypatch.setattr("scrapper_tool.ladder.request_with_ladder", fake_ladder)
+
+        async with _client(app_no_auth) as client:
+            resp = await client.post("/scrape", json={"url": "https://plain.com/p"})
+
+        body = resp.json()
+        assert body["pattern_used"] == "a_b_c"
+        assert body["challenge_detected"] is None
+
+
 # --- v1.2.0: is_structured response field ----------------------------------
 
 

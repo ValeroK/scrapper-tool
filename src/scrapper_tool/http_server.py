@@ -1274,6 +1274,50 @@ async def _d_fetch_with_smart_defaults(req: Any) -> tuple[str, int, str]:
     return html, status_code, final_url
 
 
+def _note_challenge(req: Any, log: list[dict[str, Any]], html: str, status_code: int) -> str | None:
+    """Record which bot vendor walled us, if any. Returns the vendor name.
+
+    Stashed on the request so the final payload can surface
+    ``challenge_detected`` regardless of which tier ends up winning — knowing a
+    page was walled is the single most useful thing for tuning a target, and it
+    was previously invisible.
+    """
+    from scrapper_tool._challenge import is_interstitial  # noqa: PLC0415
+
+    vendor = is_interstitial(html, status_code)
+    if vendor is None:
+        return None
+    req.__dict__["_challenge_detected"] = vendor
+    _logger.info("scrape.challenge_detected", url=req.url, vendor=vendor)
+    log.append(
+        _build_log_entry(
+            "challenge",
+            outcome="rejected",
+            reason="blocked",
+            duration_s=0.0,
+            detail=f"{vendor} interstitial (status={status_code})",
+        )
+    )
+    return vendor
+
+
+def _should_skip_d_for_challenge(req: Any) -> bool:
+    """Whether a detected challenge makes Pattern D a waste of ~30 s.
+
+    Not a blanket skip. Scrapling's anti-bot weapon is ``solve_cloudflare``,
+    which is Cloudflare-specific, so:
+
+    * Cloudflare wall -> **run D**. That's precisely what it's for.
+    * Any other vendor (Radware, DataDome, PerimeterX, Akamai, Kasada,
+      Incapsula) -> **skip D** and go straight to the render tier. Scrapling has
+      no solver for these, so D would burn a browser launch to re-fetch the same
+      interstitial the ladder already got.
+    * Nothing detected -> run D as before (unchanged behaviour).
+    """
+    vendor = req.__dict__.get("_challenge_detected")
+    return bool(vendor) and vendor != "cloudflare"
+
+
 def _render_tier_enabled() -> bool:
     """Render tier is on by default; ``SCRAPPER_TOOL_RENDER_TIER=0`` disables it."""
     raw = os.environ.get("SCRAPPER_TOOL_RENDER_TIER")
@@ -1693,6 +1737,9 @@ async def _do_scrape(req: Any) -> dict[str, Any]:
     raised = False
     try:
         payload = await _do_scrape_inner(req, attempts, start)
+        # Surfaced here rather than in each tier's return: the vendor that
+        # walled us is worth reporting no matter which tier eventually won.
+        payload["challenge_detected"] = req.__dict__.get("_challenge_detected")
         return payload
     except BaseException:
         raised = True
@@ -1769,13 +1816,17 @@ async def _do_scrape_inner(req: Any, attempts: list[str], start: float) -> dict[
                     "is_structured": True,
                     "duration_s": time.perf_counter() - start,
                 }
+            vendor = _note_challenge(req, log, text, response.status_code)
             log.append(
                 _build_log_entry(
                     "a_b_c",
                     outcome="rejected",
                     reason="no_signal",
                     duration_s=a_b_c_duration,
-                    detail=f"status={response.status_code}; classifier rejected",
+                    detail=(
+                        f"status={response.status_code}; "
+                        + (f"{vendor} challenge page" if vendor else "classifier rejected")
+                    ),
                 )
             )
         except BlockedError as exc:
@@ -1807,27 +1858,62 @@ async def _do_scrape_inner(req: Any, attempts: list[str], start: float) -> dict[
             raise last_error
         raise ScrapingError("/scrape mode=fetch failed without an exception (unreachable)")
 
-    # ----- D (Pattern D — Scrapling) ------------------------------------
+    # ----- Deterministic tiers: Pattern D, then stealth render (no LLM) -----
     if req.mode == "auto":
-        d_response, d_error, hostile_skipped = await _do_d_step(req, attempts, start)
-        if d_response is not None:
-            return d_response
-        if d_error is not None:
-            last_error = d_error
-
-        # ----- Render (stealth browser, NO LLM) -------------------------
-        # Deliberately between D and the LLM tiers: a plain stealth render plus
-        # the deterministic extractors beats an LLM on both cost and
-        # reliability, so the LLM stays the last resort rather than the first
-        # escalation.
-        r_response, r_error = await _do_render_step(req, attempts, start)
-        if r_response is not None:
-            return r_response
-        if r_error is not None:
-            last_error = r_error
+        det_response, last_error, hostile_skipped = await _do_deterministic_tiers(
+            req, attempts, start, last_error
+        )
+        if det_response is not None:
+            return det_response
 
     # ----- E1 → E2 escalation -----
     return await _do_scrape_e_tier(req, attempts, start, hostile_skipped, last_error)
+
+
+async def _do_deterministic_tiers(
+    req: Any,
+    attempts: list[str],
+    start: float,
+    last_error: BaseException | None,
+) -> tuple[dict[str, Any] | None, BaseException | None, bool]:
+    """Run the no-LLM tiers between the HTTP ladder and the agent tiers.
+
+    Pattern D (Scrapling) then the stealth render, in cost order. Grouped
+    because they answer the same question — "can we get this
+    deterministically?" — and because either failing must still let the next one
+    try. Returns ``(response, last_error, hostile_skipped)``; a None response
+    means keep escalating to E1.
+    """
+    log: list[dict[str, Any]] = req.__dict__.setdefault("_escalation_log", [])
+    hostile_skipped = False
+
+    if _should_skip_d_for_challenge(req):
+        # A wall Scrapling can't solve — don't spend ~30 s proving it.
+        log.append(
+            _build_log_entry(
+                "d",
+                outcome="skipped",
+                reason="blocked",
+                duration_s=0.0,
+                detail=(
+                    f"{req.__dict__['_challenge_detected']} challenge; "
+                    "Scrapling only solves Cloudflare"
+                ),
+            )
+        )
+    else:
+        d_response, d_error, hostile_skipped = await _do_d_step(req, attempts, start)
+        if d_response is not None:
+            return d_response, last_error, hostile_skipped
+        if d_error is not None:
+            last_error = d_error
+
+    r_response, r_error = await _do_render_step(req, attempts, start)
+    if r_response is not None:
+        return r_response, last_error, hostile_skipped
+    if r_error is not None:
+        last_error = r_error
+    return None, last_error, hostile_skipped
 
 
 def _scrape_response_from_agent(

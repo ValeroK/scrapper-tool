@@ -650,6 +650,88 @@ def _fake_agent_module_for_e1() -> MagicMock:
     return agent_module
 
 
+# ---- B3: challenge detection drives escalation (MCP parity) ---------------
+
+
+_RADWARE_WALL = (
+    "<html><head><title>Loading</title></head><body>"
+    "<script>window.location='https://validate.perfdrive.com/xyz'</script>"
+    "</body></html>"
+)
+_CF_WALL = "<html><head><title>Just a moment...</title></head><body></body></html>"
+
+
+class TestAutoScrapeChallengeDetection:
+    """MCP had no challenge detection at all before B3 — REST's was private.
+
+    Same rule as REST: Cloudflare still goes through Pattern D (Scrapling can
+    solve it), every other vendor skips straight to the render tier.
+    """
+
+    @pytest.mark.asyncio
+    async def test_non_cloudflare_wall_skips_d_and_renders(
+        self,
+        server: object,
+        fake_curl: type[FakeCurlSession],
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        fake_curl.STATUS_FOR_PROFILE = {"chrome133a": 200}
+        fake_curl.RESPONSE_TEXT_FOR_PROFILE = {"chrome133a": _RADWARE_WALL}
+        # D is available and would run — the point is that it doesn't.
+        import scrapper_tool.patterns.d as d_mod
+
+        def fake_hostile_client(**_kwargs: object) -> _FakeMcpFetcher:
+            raise AssertionError("Pattern D must be skipped on a non-Cloudflare wall")
+
+        monkeypatch.setattr(d_mod, "hostile_client", fake_hostile_client)
+        _install_fake_render_mcp(monkeypatch)
+
+        tool = _get_tool(server, "auto_scrape")
+        result = await tool.fn(url="https://walled.com/p")  # type: ignore[attr-defined]
+
+        assert result["challenge_detected"] == "radware"
+        assert result["pattern_used"] == "render"
+        assert result["pattern_attempts"] == ["a_b_c", "render"]
+
+    @pytest.mark.asyncio
+    async def test_cloudflare_wall_still_runs_d(
+        self,
+        server: object,
+        fake_curl: type[FakeCurlSession],
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        fake_curl.STATUS_FOR_PROFILE = {"chrome133a": 200}
+        fake_curl.RESPONSE_TEXT_FOR_PROFILE = {"chrome133a": _CF_WALL}
+        import scrapper_tool.patterns.d as d_mod
+
+        def fake_hostile_client(**_kwargs: object) -> _FakeMcpFetcher:
+            return _FakeMcpFetcher(_FakeMcpScraplingResponse(html=_RENDER_PRODUCT_HTML))
+
+        monkeypatch.setattr(d_mod, "hostile_client", fake_hostile_client)
+
+        tool = _get_tool(server, "auto_scrape")
+        result = await tool.fn(url="https://cf.com/p")  # type: ignore[attr-defined]
+
+        assert result["challenge_detected"] == "cloudflare"
+        assert result["pattern_used"] == "d"
+        assert result["pattern_attempts"] == ["a_b_c", "d"]
+
+    @pytest.mark.asyncio
+    async def test_no_challenge_reports_null(
+        self,
+        server: object,
+        fake_curl: type[FakeCurlSession],
+    ) -> None:
+        fake_curl.STATUS_FOR_PROFILE = {"chrome133a": 200}
+        fake_curl.RESPONSE_TEXT_FOR_PROFILE = {"chrome133a": _RENDER_PRODUCT_HTML}
+
+        tool = _get_tool(server, "auto_scrape")
+        result = await tool.fn(url="https://plain.com/p")  # type: ignore[attr-defined]
+
+        assert result["pattern_used"] == "a_b_c"
+        assert result["challenge_detected"] is None
+
+
 # ---- Truncation -----------------------------------------------------------
 
 
