@@ -53,7 +53,7 @@ agent = ["mcp>=1.2"]
 # install. They stay inert unless SCRAPPER_TOOL_CAPTCHA_KEY is set.
 llm-agent = [
     "crawl4ai>=0.9",
-    "browser-use>=0.5,<0.6",  # TEMP pin — upgraded separately in the next commit
+    "browser-use>=0.13,<0.14",
     # Camoufox v0.4+ refuses to launch without ``geoip2`` because its
     # locale-matching layer queries a MaxMind GeoLite2 db at start.
     # The ``[geoip]`` extra pulls ``geoip2`` + ``maxminddb``. Bare
@@ -158,7 +158,17 @@ Changelog = "https://github.com/ValeroK/scrapper-tool/blob/main/CHANGELOG.md"
 # tests confirm both libraries function. If a future Crawl4AI release
 # starts depending on lxml-5-only API, install [hostile] and [llm-agent]
 # in separate environments instead of using [full].
-override-dependencies = ["lxml>=6.0.3", "pip>=26.1.2"]
+override-dependencies = [
+    "lxml>=6.0.3",
+    "pip>=26.1.2",
+    # browser-use 0.13 pins ``typing-extensions==4.15.0`` exactly. Honouring
+    # that exact pin drags scrapling 0.4.9 -> 0.4.6 and patchright 1.60 -> 1.58
+    # backwards, i.e. Pattern D and a browser backend regress so the E2 agent
+    # can have one specific typing-extensions build. typing-extensions is
+    # additive by design, so the override lets all three stay current; the
+    # backend launch-contract tests are the tripwire if that stops being true.
+    "typing-extensions>=4.16",
+]
 
 # When NOT using the [full] extra, ``[hostile]`` and ``[llm-agent]``
 # stay separate. Declaring the extras as conflicting tells uv to lock

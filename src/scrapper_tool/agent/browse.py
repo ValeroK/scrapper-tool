@@ -43,6 +43,7 @@ from scrapper_tool.errors import (
     AgentBlockedError,
     AgentError,
     AgentTimeoutError,
+    ConfigurationError,
 )
 
 _logger = get_logger(__name__)
@@ -52,6 +53,25 @@ _BROWSER_USE_NOT_INSTALLED = (
     "browser-use is required for agent_browse. Install the [llm-agent] extra:\n"
     "    pip install scrapper-tool[llm-agent]"
 )
+
+_NO_CDP_FOR_E2 = """E2 (agent_browse) cannot drive the {backend!r} backend.
+
+browser-use 0.13 attaches to a browser over CDP only — it dropped the Playwright
+context/page handoff earlier versions used. Camoufox is a Firefox fork, and
+Firefox removed CDP in favour of WebDriver BiDi, so there is no endpoint for
+browser-use to attach to.
+
+This raises instead of falling back because browser-use SILENTLY ignores unknown
+kwargs: proceeding would launch a plain unpatched Chromium and run the
+interactive agent with no stealth at all, with nothing in the logs to say so.
+
+For interactive flows (login / pagination / dynamic forms) pick a CDP-capable
+backend:
+    browser='patchright'   # Chromium with stealth patches, launched locally
+    browser='obscura'      # Chromium over an external CDP server
+
+Camoufox stays the default for the render tier and E1, where it has the highest
+measured bypass rate and needs no CDP."""
 
 _MAX_SCREENSHOTS = 3
 _TARGET_SCREENSHOT_WIDTH = 1024
@@ -134,8 +154,18 @@ async def _run_with_handle(
         )
         raise AgentError(msg)
 
+    if not handle.cdp_url:
+        # browser-use 0.13 attaches over CDP only, and it does so *silently*: the
+        # old `browser_context=` / `page=` kwargs are now ignored rather than
+        # rejected, so passing them builds a fresh unpatched Chromium and E2 runs
+        # with no stealth at all. That is the precise bug the v1.6.0 A1 work
+        # fixed, so failing here is deliberate — a silent stealth downgrade is
+        # worse than an error the operator can act on.
+        raise ConfigurationError(_NO_CDP_FOR_E2.format(backend=handle.name))
+
     try:
         from browser_use import Agent  # noqa: PLC0415
+        from browser_use.browser.session import BrowserSession  # noqa: PLC0415
     except ImportError as exc:  # pragma: no cover — covered by unit mock
         raise ImportError(_BROWSER_USE_NOT_INSTALLED) from exc
 
@@ -149,28 +179,24 @@ async def _run_with_handle(
 
     use_vision = is_vision_model(config.model)
 
-    # Hand browser-use the LIVE browser from our stealth backend so it drives
-    # THAT browser instead of launching its own default Chromium. browser-use
-    # 0.5.x ignores the old ``playwright_browser`` attribute injection (it builds
-    # a BrowserSession from an existing context/page), so we pass the running
-    # context + page directly. This is what makes the stealth backend
-    # (Camoufox / Patchright / Obscura) actually get used in E2.
-    bu_browser = handle.playwright_browser
-    context = bu_browser.contexts[0] if bu_browser.contexts else await bu_browser.new_context()
-    page = context.pages[0] if context.pages else await context.new_page()
+    # Attach browser-use to the LIVE browser our stealth backend launched, so it
+    # drives THAT one instead of starting its own default Chromium.
+    #
+    # The mechanism changed in browser-use 0.13: it no longer accepts a
+    # Playwright context/page and talks CDP directly. Passing `cdp_url` is what
+    # makes it treat the browser as external (it derives `is_local=False` from
+    # that), and `keep_alive=True` stops it tearing the browser down on finish —
+    # the lifecycle belongs to `handle.close()`, and letting both close it
+    # double-closes.
+    session = BrowserSession(cdp_url=handle.cdp_url, keep_alive=True)
 
-    try:
-        agent: Any = Agent(
-            task=full_task,
-            llm=llm_chat,
-            browser_context=context,
-            page=page,
-            use_vision=use_vision,
-            max_actions_per_step=4,
-        )
-    except TypeError:  # pragma: no cover — defensive against API drift
-        # Older browser-use signatures may take fewer kwargs.
-        agent = Agent(task=full_task, llm=llm_chat, browser_context=context, page=page)
+    agent: Any = Agent(
+        task=full_task,
+        llm=llm_chat,
+        browser_session=session,
+        use_vision=use_vision,
+        max_actions_per_step=4,
+    )
 
     # Captcha + behavior ride an on_step_end hook: after every agent step
     # the live page is checked for a challenge (mechanism-aware solve) and

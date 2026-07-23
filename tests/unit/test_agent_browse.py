@@ -116,11 +116,34 @@ def fake_browser_use(monkeypatch: pytest.MonkeyPatch) -> dict[str, Any]:
                 raise type(self).next_exception
             return type(self).next_history
 
+    class _BrowserSession:
+        """Mirrors browser-use 0.13's CDP-attach session.
+
+        The real class silently ignores unknown kwargs, which is exactly how the
+        old ``browser_context=``/``page=`` handoff broke without erroring — so
+        this fake records what it was given and the tests assert on it.
+        """
+
+        last_kwargs: dict[str, Any] = {}
+
+        def __init__(self, **kwargs: Any) -> None:
+            type(self).last_kwargs = kwargs
+            self.cdp_url = kwargs.get("cdp_url")
+
     mod.Agent = _Agent  # type: ignore[attr-defined]
     mod.Browser = _BUBrowser  # type: ignore[attr-defined]
     mod.BrowserConfig = _BrowserConfig  # type: ignore[attr-defined]
     monkeypatch.setitem(sys.modules, "browser_use", mod)
-    return {"agent_cls": _Agent, "browser_cls": _BUBrowser}
+
+    # browse.py imports `from browser_use.browser.session import BrowserSession`,
+    # so the submodule path has to exist for the import to resolve.
+    browser_pkg = types.ModuleType("browser_use.browser")
+    session_mod = types.ModuleType("browser_use.browser.session")
+    session_mod.BrowserSession = _BrowserSession  # type: ignore[attr-defined]
+    browser_pkg.session = session_mod  # type: ignore[attr-defined]
+    monkeypatch.setitem(sys.modules, "browser_use.browser", browser_pkg)
+    monkeypatch.setitem(sys.modules, "browser_use.browser.session", session_mod)
+    return {"agent_cls": _Agent, "browser_cls": _BUBrowser, "session_cls": _BrowserSession}
 
 
 @pytest.fixture
@@ -131,8 +154,9 @@ def fake_handle(monkeypatch: pytest.MonkeyPatch) -> BrowserHandle:
     async def shutdown() -> None:
         closed["flag"] = True
 
-    # browse.py now hands browser-use the live context/page from the backend,
-    # so playwright_browser must expose contexts[0].pages[0].
+    # browse.py hands browser-use a CDP url (0.13 dropped the context/page
+    # handoff), but still requires playwright_browser to be present, so the
+    # fake exposes both shapes.
     class _PWPage:
         pass
 
@@ -149,6 +173,7 @@ def fake_handle(monkeypatch: pytest.MonkeyPatch) -> BrowserHandle:
         playwright_browser=_PWBrowser(),
         raw=object(),
         shutdown=shutdown,
+        cdp_url="http://127.0.0.1:31337",
     )
 
     # Wire every backend's launch() to return this handle.
@@ -565,3 +590,127 @@ class TestCaptchaBehaviorWiring:
         solve.assert_awaited_once()
         assert solve.await_args.args[0] == "turnstile"
         assert solve.await_args.args[1] == "0xSITEKEY"
+
+
+# --- browser-use 0.13 port: contract + the capability it costs ---------------
+
+
+class TestBrowserUseCdpAttach:
+    """E2 attaches over CDP since browser-use 0.13. These pin *why* and *how*.
+
+    The upgrade is the most dangerous kind: 0.13 removed ``browser_context=`` and
+    ``page=`` but **silently ignores unknown kwargs** rather than raising. Passing
+    the old arguments therefore builds a fresh unpatched Chromium and runs the
+    agent with no stealth — no exception, no log line, and the entire mocked test
+    suite stays green. So the attach mechanism is asserted directly.
+    """
+
+    async def test_session_is_built_from_the_handles_cdp_url(
+        self,
+        fake_browser_use: dict[str, Any],
+        fake_handle: BrowserHandle,
+        history_fixture: _FakeAgentHistoryList,
+    ) -> None:
+        fake_browser_use["agent_cls"].next_history = history_fixture
+        cfg = AgentConfig(browser="patchright", captcha_solver="none", behavior="off")
+
+        await browse_mod.run_browse("https://e.example", "do", config=cfg)
+
+        session_kwargs = fake_browser_use["session_cls"].last_kwargs
+        assert session_kwargs["cdp_url"] == "http://127.0.0.1:31337", (
+            "E2 must attach to OUR browser's CDP endpoint, not launch its own"
+        )
+        assert session_kwargs["keep_alive"] is True, (
+            "the browser's lifecycle belongs to handle.close(); both closing it double-closes"
+        )
+
+    async def test_agent_receives_the_session_not_a_context(
+        self,
+        fake_browser_use: dict[str, Any],
+        fake_handle: BrowserHandle,
+        history_fixture: _FakeAgentHistoryList,
+    ) -> None:
+        fake_browser_use["agent_cls"].next_history = history_fixture
+        cfg = AgentConfig(browser="patchright", captcha_solver="none", behavior="off")
+
+        await browse_mod.run_browse("https://e.example", "do", config=cfg)
+
+        kwargs = fake_browser_use["agent_cls"].last_kwargs
+        assert "browser_session" in kwargs
+        # The 0.5 kwargs are gone. Still passing them would be silently ignored,
+        # which is the failure mode this whole class exists to prevent.
+        assert "browser_context" not in kwargs
+        assert "page" not in kwargs
+
+    async def test_a_backend_without_cdp_fails_loudly(
+        self,
+        fake_browser_use: dict[str, Any],
+        monkeypatch: pytest.MonkeyPatch,
+        history_fixture: _FakeAgentHistoryList,
+    ) -> None:
+        """Camoufox is Firefox, and Firefox has no CDP. E2 must refuse.
+
+        Falling back would mean running the interactive agent on an unpatched
+        Chromium while the caller believes they're on the stealthiest backend
+        available — strictly worse than an error naming the fix.
+        """
+        from scrapper_tool.errors import ConfigurationError
+
+        async def shutdown() -> None:
+            return None
+
+        class _PWBrowser:
+            contexts: list[Any] = []
+
+        camoufox_handle = BrowserHandle(
+            name="camoufox",
+            playwright_browser=_PWBrowser(),
+            raw=object(),
+            shutdown=shutdown,
+            cdp_url=None,  # exactly what CamoufoxBackend returns
+        )
+
+        async def fake_launch(
+            self: Any, *, options: Any, fingerprint: Any, behavior: Any
+        ) -> BrowserHandle:
+            return camoufox_handle
+
+        for backend_cls in browse_mod.get_browser_backend("camoufox").__class__.__mro__[:1]:
+            monkeypatch.setattr(backend_cls, "launch", fake_launch, raising=False)
+
+        fake_browser_use["agent_cls"].next_history = history_fixture
+        cfg = AgentConfig(browser="camoufox", captcha_solver="none", behavior="off")
+
+        with pytest.raises(ConfigurationError, match="cannot drive"):
+            await browse_mod.run_browse("https://e.example", "do", config=cfg)
+
+    def test_the_real_browser_use_still_accepts_what_we_pass(self) -> None:
+        """Assert against the INSTALLED library, not the fake.
+
+        This is the only test here that would have caught the 0.5 -> 0.13 break:
+        every mocked test passed against an Agent that no longer existed.
+        """
+        pytest.importorskip("browser_use")
+        import inspect
+
+        from browser_use import Agent
+
+        params = set(inspect.signature(Agent.__init__).parameters)
+        assert "browser_session" in params, "the 0.13 attach kwarg vanished"
+        assert {"browser_context", "page"}.isdisjoint(params), (
+            "browser_context/page are back — re-check whether the CDP detour is still needed"
+        )
+        run_params = set(inspect.signature(Agent.run).parameters)
+        assert "on_step_end" in run_params, (
+            "the captcha + behavior hook rides on_step_end; without it both go dead silently"
+        )
+
+    def test_the_real_browser_session_accepts_cdp_url_and_keep_alive(self) -> None:
+        pytest.importorskip("browser_use")
+        from browser_use.browser.session import BrowserSession
+
+        session = BrowserSession(cdp_url="http://127.0.0.1:9222", keep_alive=True)
+        assert session.cdp_url == "http://127.0.0.1:9222"
+        # is_local is derived, and it's what stops browser-use adopting (and
+        # killing) a browser it didn't start.
+        assert session.is_local is False

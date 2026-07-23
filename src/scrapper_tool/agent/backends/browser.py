@@ -42,6 +42,20 @@ _logger = get_logger(__name__)
 # --- Public surface -------------------------------------------------------
 
 
+def _free_port() -> int:
+    """Ask the OS for an unused TCP port.
+
+    Racy in principle — the port is released before Chromium binds it — but a
+    fixed port breaks the moment two browsers run concurrently, which is the
+    normal case for a crawl.
+    """
+    import socket  # noqa: PLC0415
+
+    with socket.socket() as sock:
+        sock.bind(("127.0.0.1", 0))
+        return int(sock.getsockname()[1])
+
+
 @dataclass
 class BrowserHandle:
     """Opaque handle returned by :meth:`BrowserBackend.launch`.
@@ -54,12 +68,20 @@ class BrowserHandle:
     Callers that target a specific backend can downcast.
 
     ``shutdown`` is the async cleanup coroutine to ``await`` on close.
+
+    ``cdp_url`` is a Chrome-DevTools-Protocol endpoint for this browser, or None
+    when the backend can't offer one. It exists because browser-use 0.13 dropped
+    the ability to be handed a live Playwright context and now attaches over CDP
+    only — so this is what decides whether E2 can drive our stealth browser or
+    would silently launch its own. Camoufox leaves it None on purpose: it's
+    Firefox, and Firefox removed CDP in favour of WebDriver BiDi.
     """
 
     name: str
     playwright_browser: Any | None
     raw: Any
     shutdown: Any  # async callable, no args
+    cdp_url: str | None = None
 
     async def close(self) -> None:
         if self.shutdown is None:
@@ -217,6 +239,11 @@ class CamoufoxBackend:
             playwright_browser=browser,
             raw=browser,
             shutdown=shutdown,
+            # No cdp_url: Camoufox is Firefox, and Firefox dropped CDP in favour
+            # of WebDriver BiDi. That makes it undrivable by browser-use 0.13+
+            # (CDP-only) — see agent/browse.py, which fails loudly rather than
+            # letting E2 fall back to its own browser. Camoufox stays the backend
+            # for the render tier and E1, where it measurably wins.
         )
 
 
@@ -264,6 +291,11 @@ class PatchrightBackend:
         launch_kwargs: dict[str, Any] = {"headless": not options.headful}
         if options.proxy:
             launch_kwargs["proxy"] = {"server": options.proxy}
+        # Expose CDP on a free port. Playwright's own ws endpoint is not CDP, and
+        # browser-use 0.13 attaches over CDP only — without this, E2 would
+        # quietly launch its own unpatched Chromium instead of using this one.
+        debug_port = _free_port()
+        launch_kwargs["args"] = [f"--remote-debugging-port={debug_port}"]
         # Patchright recommends Chromium for the stealth patches.
         browser = await pw.chromium.launch(**launch_kwargs)
 
@@ -295,6 +327,7 @@ class PatchrightBackend:
             playwright_browser=browser,
             raw=browser,
             shutdown=shutdown,
+            cdp_url=f"http://127.0.0.1:{debug_port}",
         )
 
 
@@ -395,6 +428,9 @@ class ObscuraBackend:
             playwright_browser=browser,
             raw=browser,
             shutdown=shutdown,
+            # Obscura *is* a CDP server, so E2 can attach to the very browser we
+            # just connected to rather than launching a second one.
+            cdp_url=self._cdp_url,
         )
 
 

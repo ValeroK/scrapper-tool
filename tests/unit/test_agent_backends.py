@@ -822,3 +822,42 @@ class MockResponse:
 
 # Silence unused-imports — referenced via class inspection in TestCaptchaResolver.
 _ = (AsyncMock, MagicMock)
+
+
+class TestDependencyCoexistence:
+    """Pins that the browser-use 0.13 upgrade forced, asserted so a future
+    upgrade that changes them is a visible decision rather than a surprise.
+
+    browser-use 0.13 pins pydantic and (transitively) playwright exactly, and in
+    the [full] environment those win over scrapling[fetchers]'s newer exact pins.
+    These are deliberately accepted, not overridden: the pins guard browser-use's
+    LLM-tool-call validation and CDP attach, the two paths where a silent minor
+    bump has historically broken it. If these assertions fail after an upgrade,
+    re-read whether the coexistence still holds before loosening them.
+    """
+
+    def test_pydantic_matches_browser_uses_pin(self) -> None:
+        pytest.importorskip("browser_use")
+        import importlib.metadata as md
+
+        # browser-use 0.13.x pins pydantic==2.12.5 exactly. We honour it rather
+        # than override, so the resolved version must be in the 2.12 line.
+        assert md.version("pydantic").startswith("2.12."), (
+            "pydantic moved off browser-use's pin — confirm E2 tool-calls still "
+            "validate before accepting the new version"
+        )
+
+    def test_typing_extensions_override_holds(self) -> None:
+        """We DO override browser-use's exact typing-extensions pin.
+
+        typing-extensions is additive by contract, so pinning it back would drag
+        scrapling and patchright backwards for no benefit. This asserts the
+        override in pyproject's [tool.uv] actually took effect.
+        """
+        import importlib.metadata as md
+
+        major, minor, *_ = md.version("typing-extensions").split(".")
+        assert (int(major), int(minor)) >= (4, 16), (
+            "the typing-extensions override was lost; scrapling/patchright will "
+            "have regressed with it"
+        )
