@@ -81,6 +81,15 @@ lightly-protected sites where speed dominates, switch to **Patchright**.
 > Pattern E. `obscura` fills the lightweight/CDP niche and actually drives the
 > agent loop (real Playwright browser over `connect_over_cdp`).
 
+**Choosing an E2 (`agent_browse`) backend — stealth vs. actions:** browser-use is
+CDP/Chromium-oriented. Camoufox (Firefox) has the best stealth and browser-use can
+navigate it, but browser-use's CDP-only actions (e.g. scroll-gesture) fail on
+Firefox, so interaction degrades. A Chromium/CDP backend (obscura / patchright)
+gets full browser-use action support at the cost of weaker stealth. For a hard
+*and* interaction-heavy target, a deterministic Camoufox script often beats the E2
+agent loop. See `docs/research/2026-e2-agent-framework.md` for the details and
+evidence.
+
 Configure via env:
 
 ```bash

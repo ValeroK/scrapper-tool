@@ -21,6 +21,36 @@ Two issues:
    `browser-use>=0.5` and the E2 adapter is defensive (`getattr` everywhere,
    `try/except TypeError`) precisely because of that churn.
 
+## Known constraint — browser-use is CDP/Chromium-oriented (the stealth-vs-actions tension)
+
+Empirically confirmed against a real Radware/ShieldSquare-protected site (Yad2)
+with browser-use 0.5.9:
+
+- browser-use drives an injected **Camoufox (Firefox)** context for navigation
+  (`🎭 Connected to existing user-provided browser: firefox 152.0.4-beta`), but
+  some of its actions go through raw CDP and **fail on Firefox**:
+  `Scrolling via CDP Input.synthesizeScrollGesture failed: CDP session is only
+  available in Chromium`. So interaction (notably scrolling to lazy-load content)
+  degrades on Camoufox.
+- A **Chromium/CDP backend** (Obscura, or Patchright over CDP) gives browser-use
+  full action support — but Obscura's stealth is weaker (it failed Radware and
+  served the challenge page, while direct Camoufox passed it silently).
+
+Net: no single current backend gives *both* top-tier stealth *and* full
+browser-use action support. Practical guidance:
+
+- **E2 + Camoufox** — best stealth; use for nav-light interactive tasks (login,
+  a few clicks). CDP-only actions (scroll gestures) may not work.
+- **E2 + Obscura/Patchright (Chromium/CDP)** — full browser-use actions; use where
+  the site's protection is light enough for Chromium-class stealth.
+- For a hard site that *also* needs heavy interaction, prefer a **deterministic
+  Camoufox script** (single navigation + settle passes Radware cleanly, as the
+  direct-Camoufox test showed) over the browser-use agent loop.
+
+This tension is another argument for the Stagehand/deterministic-Playwright
+direction below: a Playwright-native agent avoids browser-use's CDP-Chromium
+assumption and can drive Firefox-class stealth browsers through the Playwright API.
+
 ## Options considered
 
 | Option | Model | Reliability | API stability | Fit with this stack |
