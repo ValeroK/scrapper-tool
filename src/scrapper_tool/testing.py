@@ -21,7 +21,7 @@ Usage with the impersonation ladder::
 
     def test_my_adapter(monkeypatch):
         FakeCurlSession.reset()
-        FakeCurlSession.STATUS_FOR_PROFILE = {"chrome133a": 200}
+        FakeCurlSession.STATUS_FOR_PROFILE = {"chrome146": 200}
         monkeypatch.setattr(
             ladder_module, "_CurlCffiAsyncSession", FakeCurlSession
         )

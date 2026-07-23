@@ -18,7 +18,8 @@ would otherwise re-implement:
 4. **TLS fingerprinting via curl_cffi.** Setting ``use_curl_cffi=True``
    swaps the httpx backend for :class:`curl_cffi.requests.AsyncSession`
    with Chrome impersonation enabled. M2 promotes the single-profile
-   pin into a fallback ladder; M1 ships with the ``chrome124`` baseline
+   pin into a fallback ladder; the single-shot path impersonates the
+   ladder's leading profile
    that affiliate-service shipped against, to keep migration trivial.
 
 Both backends expose a duck-typed ``.request(method, url, headers=,
@@ -93,10 +94,12 @@ _TRANSPORT_ERRORS: tuple[type[Exception], ...] = (
     _CurlCffiRequestException,
 )
 
-# Chrome build we impersonate when ``use_curl_cffi=True``. M1 baseline;
-# M2 promotes this to a fallback ladder with safari/firefox diversification.
-# Picked for broad JA3/Akamai-H2 coverage at the time of writing.
-_CURL_CFFI_IMPERSONATE: Literal["chrome124"] = "chrome124"
+# Chrome build impersonated on the single-shot path (``use_curl_cffi=True``
+# without the ladder). Kept in step with the ladder's leading profile: this used
+# to sit on chrome124 long after the ladder moved on, which meant every
+# non-ladder request advertised a Chrome build no real user runs — a fingerprint
+# in itself. See IMPERSONATE_LADDER in ladder.py for the full chain.
+_CURL_CFFI_IMPERSONATE: Literal["chrome146"] = "chrome146"
 
 
 def _compute_backoff(attempt: int) -> float:
@@ -132,8 +135,9 @@ async def vendor_client(
     use_curl_cffi:
         When ``True``, back the client with
         :class:`curl_cffi.requests.AsyncSession` for Chrome TLS-
-        fingerprint mimicry (``impersonate="chrome124"`` in M1; M2 wires
-        the chrome133a → chrome124 → safari → firefox fallback ladder).
+        fingerprint mimicry. The single-shot path pins one profile
+        (:data:`_CURL_CFFI_IMPERSONATE`); ``request_with_ladder`` walks the
+        full chrome → safari → firefox chain.
         Use only for vendors that reject the default httpx stack
         (hard JA3 / Akamai H2 checks).
     extra_headers:

@@ -65,6 +65,7 @@ from scrapper_tool.errors import (  # noqa: E402
     ScrapingError,
     VendorHTTPError,
 )
+from scrapper_tool.ladder import IMPERSONATE_LADDER  # noqa: E402
 
 if TYPE_CHECKING:
     from collections.abc import Awaitable, Callable, Sequence
@@ -711,8 +712,9 @@ def _build_app(
         tags=["scraping"],
         summary="Pattern A/B/C — TLS-impersonation ladder fetch",
         description=(
-            "Walks the impersonation ladder (chrome133a / chrome124 / safari18_0 / firefox135) "
-            "until a profile returns non-403/503. With extract_structured=true (default), "
+            "Walks the impersonation ladder ("
+            + " / ".join(IMPERSONATE_LADDER)
+            + ") until a profile returns non-403/503. With extract_structured=true (default), "
             "also runs Pattern B (extruct JSON-LD / microdata) and Pattern C (microdata price)."
         ),
     )

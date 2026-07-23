@@ -1,6 +1,6 @@
 # Live-canary URL set — append-only.
 #
-# When `chrome133a` (or whichever profile is at the head of
+# When `chrome146` (or whichever profile is at the head of
 # IMPERSONATE_LADDER) starts 403'ing on >5% of these URLs, that's the
 # signal to bump the primary impersonation profile.
 #

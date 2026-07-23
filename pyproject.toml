@@ -53,7 +53,7 @@ agent = ["mcp>=1.2"]
 # install. They stay inert unless SCRAPPER_TOOL_CAPTCHA_KEY is set.
 llm-agent = [
     "crawl4ai>=0.9",
-    "browser-use>=0.5",
+    "browser-use>=0.5,<0.6",  # TEMP pin — upgraded separately in the next commit
     # Camoufox v0.4+ refuses to launch without ``geoip2`` because its
     # locale-matching layer queries a MaxMind GeoLite2 db at start.
     # The ``[geoip]`` extra pulls ``geoip2`` + ``maxminddb``. Bare
@@ -143,9 +143,12 @@ Issues = "https://github.com/ValeroK/scrapper-tool/issues"
 Changelog = "https://github.com/ValeroK/scrapper-tool/blob/main/CHANGELOG.md"
 
 [tool.uv]
-# Crawl4AI's latest line is in pre-release; allow it during resolution
-# so the [llm-agent] extra resolves cleanly.
-prerelease = "allow"
+# NOTE: `prerelease = "allow"` used to live here, added when Crawl4AI's latest
+# line was pre-release only. Crawl4AI has shipped stable releases since, and the
+# global allow had become actively harmful: a `uv lock --upgrade` quietly dragged
+# the whole tree onto alphas (lxml 7.0.0a3, pydantic 2.14.0a1, curl-cffi 0.16.0b1,
+# mcp 2.0.0b2). If a single dependency ever genuinely needs a pre-release again,
+# name that version in its own requirement rather than reopening this globally.
 
 # Override transitive lxml constraints so [hostile] and [llm-agent] can
 # coexist via the [full] extra. Crawl4AI declares ``lxml~=5.3`` and

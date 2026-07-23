@@ -948,7 +948,7 @@ def _build_server(  # noqa: PLR0915 — single-place tool registration
         name="fetch_with_ladder",
         description=(
             "Issue an HTTP request through the four-profile TLS-impersonation "
-            "ladder (chrome133a -> chrome124 -> safari18_0 -> firefox135) "
+            "ladder (" + " -> ".join(IMPERSONATE_LADDER) + ") "
             "until a profile returns non-403/503. Returns status, body "
             "(truncated to 64 KB), and which profile won. Use for sites "
             "that fingerprint the default httpx stack."

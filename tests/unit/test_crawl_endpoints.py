@@ -71,7 +71,7 @@ def _serve_site(monkeypatch: pytest.MonkeyPatch, site: dict[str, str] | None = N
         response.text = pages.get(url, "")
         response.url = url
         response.headers = {"content-type": "text/html"}
-        return response, "chrome133a"
+        return response, "chrome146"
 
     monkeypatch.setattr("scrapper_tool.ladder.request_with_ladder", fake_ladder)
     # mcp.py imports the symbol directly, so patching the ladder module alone

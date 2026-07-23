@@ -13,7 +13,7 @@ End-to-end transport tests live in
 Tools exercised
 ---------------
 
-- ``fetch_with_ladder`` — happy path (chrome133a wins) + blocked path
+- ``fetch_with_ladder`` — happy path (chrome146 wins) + blocked path
   (all-403 → BlockedError → returns ``blocked: True``).
 - ``extract_product`` — JSON-LD Product → ProductOffer dict; no
   Product block → returns null.
@@ -48,6 +48,7 @@ pytest.importorskip(
 
 from scrapper_tool import ladder as ladder_module
 from scrapper_tool import mcp as mcp_module
+from scrapper_tool.ladder import IMPERSONATE_LADDER
 from scrapper_tool.testing import FakeCurlSession
 
 # ---- Fixtures -------------------------------------------------------------
@@ -93,18 +94,18 @@ def _get_tool(server: object, name: str) -> object:
 
 class TestFetchWithLadder:
     @pytest.mark.asyncio
-    async def test_happy_path_chrome133a_wins(
+    async def test_happy_path_chrome146_wins(
         self,
         server: object,
         fake_curl: type[FakeCurlSession],
     ) -> None:
-        fake_curl.STATUS_FOR_PROFILE = {"chrome133a": 200}
-        fake_curl.RESPONSE_TEXT_FOR_PROFILE = {"chrome133a": "<html>ok</html>"}
+        fake_curl.STATUS_FOR_PROFILE = {"chrome146": 200}
+        fake_curl.RESPONSE_TEXT_FOR_PROFILE = {"chrome146": "<html>ok</html>"}
         tool = _get_tool(server, "fetch_with_ladder")
 
         result = await tool.fn(url="https://example.test/x")  # type: ignore[attr-defined]
         assert result["status"] == 200
-        assert result["winning_profile"] == "chrome133a"
+        assert result["winning_profile"] == "chrome146"
         assert result["blocked"] is False
         assert "<html>ok</html>" in result["body"]
         assert result["truncated"] is False
@@ -115,12 +116,7 @@ class TestFetchWithLadder:
         server: object,
         fake_curl: type[FakeCurlSession],
     ) -> None:
-        fake_curl.STATUS_FOR_PROFILE = {
-            "chrome133a": 403,
-            "chrome124": 403,
-            "safari18_0": 403,
-            "firefox135": 403,
-        }
+        fake_curl.STATUS_FOR_PROFILE = dict.fromkeys(IMPERSONATE_LADDER, 403)
         tool = _get_tool(server, "fetch_with_ladder")
 
         result = await tool.fn(url="https://example.test/blocked")  # type: ignore[attr-defined]
@@ -194,10 +190,10 @@ class TestCanaryTool:
         server: object,
         fake_curl: type[FakeCurlSession],
     ) -> None:
-        fake_curl.STATUS_FOR_PROFILE = {"chrome133a": 200}
+        fake_curl.STATUS_FOR_PROFILE = {"chrome146": 200}
         tool = _get_tool(server, "canary")
         result = await tool.fn(url="https://example.test/x")  # type: ignore[attr-defined]
-        assert result["winning_profile"] == "chrome133a"
+        assert result["winning_profile"] == "chrome146"
         assert result["exit_code"] == 0
 
     @pytest.mark.asyncio
@@ -231,8 +227,8 @@ class TestFetchWithLadderStructured:
             '"sku":"X1","offers":{"@type":"Offer","price":"19.99","priceCurrency":"USD"}}'
             "</script></head><body></body></html>"
         )
-        fake_curl.STATUS_FOR_PROFILE = {"chrome133a": 200}
-        fake_curl.RESPONSE_TEXT_FOR_PROFILE = {"chrome133a": product_html}
+        fake_curl.STATUS_FOR_PROFILE = {"chrome146": 200}
+        fake_curl.RESPONSE_TEXT_FOR_PROFILE = {"chrome146": product_html}
 
         tool = _get_tool(server, "fetch_with_ladder")
         result = await tool.fn(  # type: ignore[attr-defined]
@@ -250,8 +246,8 @@ class TestFetchWithLadderStructured:
         server: object,
         fake_curl: type[FakeCurlSession],
     ) -> None:
-        fake_curl.STATUS_FOR_PROFILE = {"chrome133a": 200}
-        fake_curl.RESPONSE_TEXT_FOR_PROFILE = {"chrome133a": "<html>plain</html>"}
+        fake_curl.STATUS_FOR_PROFILE = {"chrome146": 200}
+        fake_curl.RESPONSE_TEXT_FOR_PROFILE = {"chrome146": "<html>plain</html>"}
 
         tool = _get_tool(server, "fetch_with_ladder")
         result = await tool.fn(url="https://example.test/p")  # type: ignore[attr-defined]
@@ -272,8 +268,8 @@ class TestAutoScrape:
             '"sku":"Y1","offers":{"@type":"Offer","price":"29.99","priceCurrency":"USD"}}'
             "</script></head><body></body></html>"
         )
-        fake_curl.STATUS_FOR_PROFILE = {"chrome133a": 200}
-        fake_curl.RESPONSE_TEXT_FOR_PROFILE = {"chrome133a": product_html}
+        fake_curl.STATUS_FOR_PROFILE = {"chrome146": 200}
+        fake_curl.RESPONSE_TEXT_FOR_PROFILE = {"chrome146": product_html}
 
         tool = _get_tool(server, "auto_scrape")
         result = await tool.fn(url="https://example.test/p")  # type: ignore[attr-defined]
@@ -299,8 +295,8 @@ class TestAutoScrape:
             '"sku":"Z1","offers":{"@type":"Offer","price":"9.99","priceCurrency":"USD"}}'
             "</script></head><body></body></html>"
         )
-        fake_curl.STATUS_FOR_PROFILE = {"chrome133a": 200}
-        fake_curl.RESPONSE_TEXT_FOR_PROFILE = {"chrome133a": product_html}
+        fake_curl.STATUS_FOR_PROFILE = {"chrome146": 200}
+        fake_curl.RESPONSE_TEXT_FOR_PROFILE = {"chrome146": product_html}
 
         tool = _get_tool(server, "auto_scrape")
         result = await tool.fn(  # type: ignore[attr-defined]
@@ -359,12 +355,7 @@ class TestAutoScrapeWithPatternD:
     ) -> None:
         # All A/B/C profiles return 403 -> raises BlockedError -> cascade
         # advances to D. Mock D to return a readable product page.
-        fake_curl.STATUS_FOR_PROFILE = {
-            "chrome133a": 403,
-            "chrome124": 403,
-            "safari18_0": 403,
-            "firefox135": 403,
-        }
+        fake_curl.STATUS_FOR_PROFILE = dict.fromkeys(IMPERSONATE_LADDER, 403)
         product_html = (
             '<html><head><script type="application/ld+json">'
             '{"@context":"https://schema.org","@type":"Product","name":"Widget Z",'
@@ -422,12 +413,7 @@ class TestAutoScrapeWithPatternD:
         monkeypatch.setattr(builtins, "__import__", patched_import)
 
         # A/B/C blocked → cascade tries D (skipped) → E1.
-        fake_curl.STATUS_FOR_PROFILE = {
-            "chrome133a": 403,
-            "chrome124": 403,
-            "safari18_0": 403,
-            "firefox135": 403,
-        }
+        fake_curl.STATUS_FOR_PROFILE = dict.fromkeys(IMPERSONATE_LADDER, 403)
 
         # Mock the agent layer so E1 returns a result.
         from unittest.mock import AsyncMock
@@ -509,9 +495,7 @@ class TestAutoScrapeRenderTier:
         fake_curl: type[FakeCurlSession],
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
-        fake_curl.STATUS_FOR_PROFILE = dict.fromkeys(
-            ("chrome133a", "chrome124", "safari18_0", "firefox135"), 403
-        )
+        fake_curl.STATUS_FOR_PROFILE = dict.fromkeys(IMPERSONATE_LADDER, 403)
         monkeypatch.setattr(mcp_module, "_try_pattern_d_for_auto_scrape", _skip_d_for_auto_scrape)
         _install_fake_render_mcp(monkeypatch)
 
@@ -532,9 +516,7 @@ class TestAutoScrapeRenderTier:
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
         """Same store.mopar.com case the REST tier pins — content, not status."""
-        fake_curl.STATUS_FOR_PROFILE = dict.fromkeys(
-            ("chrome133a", "chrome124", "safari18_0", "firefox135"), 403
-        )
+        fake_curl.STATUS_FOR_PROFILE = dict.fromkeys(IMPERSONATE_LADDER, 403)
         monkeypatch.setattr(mcp_module, "_try_pattern_d_for_auto_scrape", _skip_d_for_auto_scrape)
         _install_fake_render_mcp(monkeypatch, status=403)
 
@@ -553,9 +535,7 @@ class TestAutoScrapeRenderTier:
     ) -> None:
         import sys
 
-        fake_curl.STATUS_FOR_PROFILE = dict.fromkeys(
-            ("chrome133a", "chrome124", "safari18_0", "firefox135"), 403
-        )
+        fake_curl.STATUS_FOR_PROFILE = dict.fromkeys(IMPERSONATE_LADDER, 403)
         monkeypatch.setattr(mcp_module, "_try_pattern_d_for_auto_scrape", _skip_d_for_auto_scrape)
         _install_fake_render_mcp(monkeypatch, html="<html><body>nothing</body></html>")
 
@@ -577,9 +557,7 @@ class TestAutoScrapeRenderTier:
     ) -> None:
         import sys
 
-        fake_curl.STATUS_FOR_PROFILE = dict.fromkeys(
-            ("chrome133a", "chrome124", "safari18_0", "firefox135"), 403
-        )
+        fake_curl.STATUS_FOR_PROFILE = dict.fromkeys(IMPERSONATE_LADDER, 403)
         monkeypatch.setattr(mcp_module, "_try_pattern_d_for_auto_scrape", _skip_d_for_auto_scrape)
         _install_fake_render_mcp(monkeypatch, error=RuntimeError("camoufox crashed"))
 
@@ -601,9 +579,7 @@ class TestAutoScrapeRenderTier:
     ) -> None:
         import sys
 
-        fake_curl.STATUS_FOR_PROFILE = dict.fromkeys(
-            ("chrome133a", "chrome124", "safari18_0", "firefox135"), 403
-        )
+        fake_curl.STATUS_FOR_PROFILE = dict.fromkeys(IMPERSONATE_LADDER, 403)
         monkeypatch.setattr(mcp_module, "_try_pattern_d_for_auto_scrape", _skip_d_for_auto_scrape)
         _install_fake_render_mcp(monkeypatch)
         monkeypatch.setenv("SCRAPPER_TOOL_RENDER_TIER", "0")
@@ -675,8 +651,8 @@ class TestAutoScrapeChallengeDetection:
         fake_curl: type[FakeCurlSession],
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
-        fake_curl.STATUS_FOR_PROFILE = {"chrome133a": 200}
-        fake_curl.RESPONSE_TEXT_FOR_PROFILE = {"chrome133a": _RADWARE_WALL}
+        fake_curl.STATUS_FOR_PROFILE = {"chrome146": 200}
+        fake_curl.RESPONSE_TEXT_FOR_PROFILE = {"chrome146": _RADWARE_WALL}
         # D is available and would run — the point is that it doesn't.
         import scrapper_tool.patterns.d as d_mod
 
@@ -700,8 +676,8 @@ class TestAutoScrapeChallengeDetection:
         fake_curl: type[FakeCurlSession],
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
-        fake_curl.STATUS_FOR_PROFILE = {"chrome133a": 200}
-        fake_curl.RESPONSE_TEXT_FOR_PROFILE = {"chrome133a": _CF_WALL}
+        fake_curl.STATUS_FOR_PROFILE = {"chrome146": 200}
+        fake_curl.RESPONSE_TEXT_FOR_PROFILE = {"chrome146": _CF_WALL}
         import scrapper_tool.patterns.d as d_mod
 
         def fake_hostile_client(**_kwargs: object) -> _FakeMcpFetcher:
@@ -722,8 +698,8 @@ class TestAutoScrapeChallengeDetection:
         server: object,
         fake_curl: type[FakeCurlSession],
     ) -> None:
-        fake_curl.STATUS_FOR_PROFILE = {"chrome133a": 200}
-        fake_curl.RESPONSE_TEXT_FOR_PROFILE = {"chrome133a": _RENDER_PRODUCT_HTML}
+        fake_curl.STATUS_FOR_PROFILE = {"chrome146": 200}
+        fake_curl.RESPONSE_TEXT_FOR_PROFILE = {"chrome146": _RENDER_PRODUCT_HTML}
 
         tool = _get_tool(server, "auto_scrape")
         result = await tool.fn(url="https://plain.com/p")  # type: ignore[attr-defined]
@@ -772,9 +748,7 @@ class TestAutoScrapeE2Gate:
 
     @staticmethod
     def _all_blocked(fake_curl: type[FakeCurlSession], monkeypatch: pytest.MonkeyPatch) -> None:
-        fake_curl.STATUS_FOR_PROFILE = dict.fromkeys(
-            ("chrome133a", "chrome124", "safari18_0", "firefox135"), 403
-        )
+        fake_curl.STATUS_FOR_PROFILE = dict.fromkeys(IMPERSONATE_LADDER, 403)
         monkeypatch.setattr(mcp_module, "_try_pattern_d_for_auto_scrape", _skip_d_for_auto_scrape)
         monkeypatch.setenv("SCRAPPER_TOOL_RENDER_TIER", "0")
 
@@ -875,8 +849,8 @@ class TestAutoScrapeIsStructured:
             '"sku":"Y1","offers":{"@type":"Offer","price":"29.99","priceCurrency":"USD"}}'
             "</script></head><body></body></html>"
         )
-        fake_curl.STATUS_FOR_PROFILE = {"chrome133a": 200}
-        fake_curl.RESPONSE_TEXT_FOR_PROFILE = {"chrome133a": product_html}
+        fake_curl.STATUS_FOR_PROFILE = {"chrome146": 200}
+        fake_curl.RESPONSE_TEXT_FOR_PROFILE = {"chrome146": product_html}
 
         tool = _get_tool(server, "auto_scrape")
         result = await tool.fn(url="https://example.test/p")  # type: ignore[attr-defined]
@@ -891,12 +865,7 @@ class TestAutoScrapeIsStructured:
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
         # All A/B/C profiles 403 -> BlockedError -> D step.
-        fake_curl.STATUS_FOR_PROFILE = {
-            "chrome133a": 403,
-            "chrome124": 403,
-            "safari18_0": 403,
-            "firefox135": 403,
-        }
+        fake_curl.STATUS_FOR_PROFILE = dict.fromkeys(IMPERSONATE_LADDER, 403)
         product_html = (
             '<html><head><script type="application/ld+json">'
             '{"@context":"https://schema.org","@type":"Product","name":"Widget Z",'
@@ -1214,12 +1183,7 @@ class TestAutoScrapeSharedProfileDir:
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
         # All A/B/C profiles 403 -> BlockedError -> D step.
-        fake_curl.STATUS_FOR_PROFILE = {
-            "chrome133a": 403,
-            "chrome124": 403,
-            "safari18_0": 403,
-            "firefox135": 403,
-        }
+        fake_curl.STATUS_FOR_PROFILE = dict.fromkeys(IMPERSONATE_LADDER, 403)
         captured_kwargs: dict[str, object] = {}
         product_html = (
             '<html><head><script type="application/ld+json">'
@@ -1262,12 +1226,7 @@ class TestAutoScrapeSharedProfileDir:
         monkeypatch: pytest.MonkeyPatch,
         tmp_path: Any,
     ) -> None:
-        fake_curl.STATUS_FOR_PROFILE = {
-            "chrome133a": 403,
-            "chrome124": 403,
-            "safari18_0": 403,
-            "firefox135": 403,
-        }
+        fake_curl.STATUS_FOR_PROFILE = dict.fromkeys(IMPERSONATE_LADDER, 403)
         captured_kwargs: dict[str, object] = {}
         caller_dir = str(tmp_path / "vendor-tasca-profile")
         product_html = (

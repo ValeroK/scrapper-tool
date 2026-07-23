@@ -70,11 +70,26 @@ if TYPE_CHECKING:
 #
 # When promoting/demoting a profile, update the CHANGELOG with the
 # evidence (canary 403/200 rates, vendor probe results).
+#
+# Refreshed 2026-07 for curl_cffi 0.15. A stale ladder is itself a detection
+# signal — impersonating a Chrome build that no real user runs any more is a
+# fingerprint, so the freshest target of each family goes first:
+#
+# - chrome146 — freshest stable Chrome in curl_cffi 0.15.
+# - chrome142 — recent but settled; diversity inside the Chrome family.
+# - safari260 — freshest Safari; the escape hatch when Chrome is burned.
+# - firefox147 — freshest Firefox.
+# - chrome133a — the previously-validated primary, kept as the tail rung. Its
+#   only cost is one extra request on a path where all four fresher profiles
+#   already 403'd (i.e. we were heading to Pattern D regardless), and it keeps a
+#   known-good profile reachable for consumers whose adapters were shipped
+#   against it.
 IMPERSONATE_LADDER: tuple[str, ...] = (
+    "chrome146",
+    "chrome142",
+    "safari260",
+    "firefox147",
     "chrome133a",
-    "chrome124",
-    "safari18_0",
-    "firefox135",
 )
 
 _logger = get_logger(__name__)
