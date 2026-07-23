@@ -57,7 +57,8 @@ These settings drive `agent_extract`, `agent_browse`, and `agent_session`.
 
 | Field | Env var | Default | Choices | Notes |
 |-------|---------|---------|---------|-------|
-| `browser` | `SCRAPPER_TOOL_AGENT_BROWSER` | `camoufox` | `camoufox` / `patchright` / `zendriver` / `scrapling` / `botasaurus` | Camoufox = best stealth, ~200 MB RAM, ~42 s/bypass. Patchright = fast mode, weaker stealth. |
+| `browser` | `SCRAPPER_TOOL_AGENT_BROWSER` | `camoufox` | `camoufox` / `patchright` / `scrapling` / `obscura` | Camoufox = best stealth, ~200 MB RAM, ~42 s/bypass. Patchright = fast mode, weaker stealth. Obscura = experimental lightweight CDP sidecar (see below). |
+| `obscura_cdp_url` | `SCRAPPER_TOOL_AGENT_OBSCURA_CDP_URL` | `http://127.0.0.1:9222` | http URL | CDP endpoint for `browser=obscura`. Requires a running `obscura serve --host 0.0.0.0` process (Playwright discovers the ws endpoint from the http URL). |
 | `fingerprint` | `SCRAPPER_TOOL_AGENT_FINGERPRINT` | `browserforge` | `browserforge` / `none` | Per-session UA/Accept/Canvas/WebGL randomization. Camoufox ignores this (has its own). |
 | `behavior` | `SCRAPPER_TOOL_AGENT_BEHAVIOR` | `humanlike` | `humanlike` / `fast` / `off` | Mouse-path bezier + jittered keystroke timing. Defeats DataDome behavior detection. |
 | `headful` | `SCRAPPER_TOOL_AGENT_HEADFUL` | `0` (false) | `0`/`1`/`true`/`false`/`yes`/`no`/`on`/`off` | Show the browser window. Useful for debugging. |
@@ -69,9 +70,8 @@ These settings drive `agent_extract`, `agent_browse`, and `agent_session`.
 |--------|-----|
 | Cloudflare Enterprise / DataDome / Akamai Bot Manager v4 / Imperva | `camoufox` (default) |
 | Lightly-protected SPAs, batch throughput, CI runs | `patchright` |
-| Sites that detect Playwright API itself | `zendriver` (CDP-direct, requires `[zendriver-backend]` extra) |
 | You already installed `[hostile]` and don't want another browser | `scrapling` |
-| Decorator-style workflow with humanlike behavior emulation | `botasaurus` (requires `[botasaurus-backend]` extra) |
+| High-volume/parallel batch where RAM per instance is the bottleneck (Linux/Docker) | `obscura` (experimental — run `obscura serve` sidecar, benchmark first) |
 
 ### LLM backend
 
@@ -160,9 +160,12 @@ is also the full one — every pattern wired up.
 | `[llm-agent]` | Pattern E — Camoufox, Patchright, browser-use, Crawl4AI, Browserforge, langchain-ollama, Pillow. Pins `lxml~=5.3`. | `[hostile]` (when installed via plain pip) |
 | `[turnstile-solver]` | Captcha cascade Tier 1 (Theyka). Compatible with `[llm-agent]`. | — |
 | **`[full]`** ⭐ | All five patterns: A/B/C/D/E in one environment via uv's `override-dependencies` declaration. | — (uv-only) |
-| `[zendriver-backend]` | Adds Zendriver as an alternative Pattern E browser. | — |
-| `[botasaurus-backend]` | Adds Botasaurus as an alternative Pattern E browser. | — |
 | `[skyvern-backend]` | Reserved for a future Skyvern E2 backend. | — |
+
+The `obscura` browser needs no extra — it reuses the Playwright client from
+`[llm-agent]` and connects to an external `obscura serve` process. The removed
+`[zendriver-backend]` / `[botasaurus-backend]` extras (v1.5.0) are no longer
+available; use `obscura` for a lightweight CDP-driven backend.
 
 `[full]` is a uv-only install path — it relies on `[tool.uv] override-dependencies`
 in `pyproject.toml` to coerce both Scrapling and Crawl4AI onto a single

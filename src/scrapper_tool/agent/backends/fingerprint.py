@@ -1,8 +1,8 @@
 """Per-session fingerprint generation for non-Camoufox browser backends.
 
 Camoufox patches the Firefox engine at the C++ level and brings its own
-fingerprint surface. Patchright / Zendriver / Botasaurus drive a
-stock-ish Chromium and need an injected fingerprint (UA, Accept-*,
+fingerprint surface. Patchright (and other Chromium-class backends) drive
+a stock-ish Chromium and need an injected fingerprint (UA, Accept-*,
 Sec-CH-UA, viewport, screen, fonts, Canvas/WebGL/AudioContext noise) to
 look like a real browser.
 
@@ -24,8 +24,8 @@ class GeneratedFingerprint:
     """Bundled output of a fingerprint generator.
 
     Backend-agnostic — backends pick the bits they understand:
-    Patchright applies ``user_agent`` / ``viewport`` / ``locale`` to a
-    Playwright context, Zendriver applies them via CDP overrides, etc.
+    Patchright / Obscura apply ``user_agent`` / ``viewport`` / ``locale``
+    to a Playwright context, etc.
     """
 
     __slots__ = ("headers", "init_scripts", "locale", "user_agent", "viewport")

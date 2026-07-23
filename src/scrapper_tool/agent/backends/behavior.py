@@ -166,6 +166,46 @@ def get_behavior_policy(name: str, *, rng: random.Random | None = None) -> Behav
 # --- Helpers used by browser backends -------------------------------------
 
 
+_SCROLL_JS = "() => { window.scrollBy(0, 120 + Math.floor(Math.random() * 400)); }"
+
+
+def make_behavior_consumer(policy: BehaviorPolicy, *, full: bool = True) -> Any:
+    """Build a page-hook consumer that applies ``policy`` shaping to a page.
+
+    Shape matches :mod:`scrapper_tool.agent.backends.page_hooks` consumers:
+    ``async def (page, *, url) -> None``.
+
+    ``full=True`` (E2, multi-step loop): a "reading" settle plus a jittered
+    scroll between steps. ``full=False`` (E1, single render): settle only —
+    humanlike mouse/scroll after a one-shot render buys ~no anti-bot value
+    and only adds latency. Per-keystroke shaping is out of scope here
+    (browser-use owns its own typing actions).
+
+    ``off``/``fast`` policies produce a true no-op consumer.
+    """
+    if getattr(policy, "name", "") in ("off", "fast"):
+
+        async def noop_consumer(page: Any, *, url: str) -> None:
+            return None
+
+        return noop_consumer
+
+    async def behavior_consumer(page: Any, *, url: str) -> None:
+        _ = url
+        await policy.post_navigate()
+        if not full:
+            return
+        evaluate = getattr(page, "evaluate", None)
+        if callable(evaluate):
+            try:
+                await evaluate(_SCROLL_JS)
+            except Exception as exc:
+                _logger.debug("agent.behavior.scroll_failed", error=str(exc))
+        await asyncio.sleep(await policy.shape_scroll())
+
+    return behavior_consumer
+
+
 async def humanlike_type(page: Any, selector: str, text: str, policy: BehaviorPolicy) -> None:
     """Type ``text`` into ``selector`` with humanlike per-key delays.
 
@@ -186,4 +226,5 @@ __all__ = [
     "OffPolicy",
     "get_behavior_policy",
     "humanlike_type",
+    "make_behavior_consumer",
 ]

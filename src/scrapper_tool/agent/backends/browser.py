@@ -9,12 +9,11 @@ Alternatives:
 - :class:`PatchrightBackend` — Patchright (Python drop-in for Playwright,
   C++ Chromium patches, ~67% detection reduction, 5-10x faster than
   Camoufox). "Fast mode" for unprotected/lightly-protected sites.
-- :class:`ZendriverBackend` — CDP-direct fork of nodriver (75% bypass on
-  CF/DataDome/Akamai/CloudFront vs nodriver's 25%). Lightest. Useful
-  when Playwright API itself is the giveaway.
-- :class:`BotasaurusBackend` — decorator-paradigm scraper with
-  humanlike-behavior emulation. Wraps a different driver model entirely.
 - :class:`ScraplingBackend` — reuses the existing ``[hostile]`` extra.
+
+Both expose a Playwright ``Browser`` so browser-use / Crawl4AI can drive
+them. A lightweight CDP-direct option (Obscura) can be added as a
+connect-over-CDP backend without breaking this contract.
 
 All backends lazy-import their dependencies. The package still imports
 without ``[llm-agent]`` installed; ``launch()`` raises a helpful
@@ -23,6 +22,7 @@ without ``[llm-agent]`` installed; ``launch()`` raises a helpful
 
 from __future__ import annotations
 
+import os
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Protocol
@@ -47,11 +47,10 @@ class BrowserHandle:
 
     ``playwright_browser`` is the Playwright/Patchright/Camoufox
     ``Browser`` instance — None for backends that don't expose one
-    (Zendriver uses raw CDP).
+    (e.g. Scrapling's fetcher is HTTP-shaped).
 
-    ``raw`` is the backend-native object (Scrapling fetcher, Zendriver
-    Browser, Botasaurus driver). Callers that target a specific backend
-    can downcast.
+    ``raw`` is the backend-native object (e.g. the Scrapling fetcher).
+    Callers that target a specific backend can downcast.
 
     ``shutdown`` is the async cleanup coroutine to ``await`` on close.
     """
@@ -236,97 +235,46 @@ class PatchrightBackend:
         )
 
 
-# --- Zendriver (CDP-direct) ----------------------------------------------
+# --- Obscura (connect-over-CDP, experimental) -----------------------------
 
 
-_ZENDRIVER_NOT_INSTALLED = (
-    "Zendriver browser backend requires the [zendriver-backend] extra.\n"
-    "Install with: pip install scrapper-tool[llm-agent,zendriver-backend]"
+# Playwright's connect_over_cdp discovers the browser ws endpoint from the
+# HTTP CDP endpoint, so the http:// form is what works against an Obscura
+# server (the bare ws:// form drops during the handshake).
+_OBSCURA_DEFAULT_CDP_URL = "http://127.0.0.1:9222"
+
+_OBSCURA_NOT_INSTALLED = (
+    "Obscura backend connects to a running Obscura CDP server via Playwright.\n"
+    "Install the [llm-agent] extra (brings Playwright): pip install scrapper-tool[llm-agent]\n"
+    "Then run the server, e.g.: docker run -p 9222:9222 h4ckf0r0day/obscura serve --stealth\n"
+    "and point SCRAPPER_TOOL_AGENT_OBSCURA_CDP_URL at it (default http://127.0.0.1:9222)."
 )
 
 
-class ZendriverBackend:
-    """Zendriver — CDP-direct fork of nodriver.
+class ObscuraBackend:
+    """Obscura — Rust CDP-server headless browser, driven over ``connect_over_cdp``.
 
-    Bypasses Playwright entirely; drives Chrome via raw CDP. Lightest
-    backend (~80 MB RAM) and the highest reported bypass rate among
-    Chromium-class drivers (~75% on CF + DataDome + Akamai +
-    CloudFront). Trade-off: not a Playwright API, so Crawl4AI and
-    browser-use can't drive it directly — Pattern E uses Zendriver
-    only via its own session loop in browse mode.
+    **Experimental / benchmark-gated.** Obscura (``obscura serve``) exposes
+    a Chrome DevTools Protocol WebSocket; Playwright ``connect_over_cdp``
+    yields a real ``Browser``, so — unlike the removed Zendriver/Botasaurus —
+    it drives browser-use / Crawl4AI directly. It is lightweight (~30 MB
+    RAM, ~85 ms loads) but its stealth is unproven next to Camoufox. Keep
+    Camoufox the default; measure Obscura's real detection rate via the
+    ``canary`` CLI before trusting it on protected targets.
+
+    The server is external (run as a sidecar) — ``shutdown`` closes the
+    Playwright connection but does NOT stop the Obscura process.
     """
 
-    name = "zendriver"
+    name = "obscura"
 
-    async def launch(  # pragma: no cover — requires real Zendriver install
-        self,
-        *,
-        headful: bool,
-        proxy: str | None,
-        fingerprint: FingerprintGenerator,
-        behavior: BehaviorPolicy,
-    ) -> BrowserHandle:
-        try:
-            import zendriver  # noqa: PLC0415
-        except ImportError as exc:
-            raise ImportError(_ZENDRIVER_NOT_INSTALLED) from exc
-
-        _ = behavior  # per-action
-
-        config_kwargs: dict[str, Any] = {"headless": not headful}
-        if proxy:
-            config_kwargs["browser_args"] = [f"--proxy-server={proxy}"]
-        fp = fingerprint.generate()
-        if fp.user_agent:
-            existing = config_kwargs.get("browser_args", [])
-            config_kwargs["browser_args"] = [
-                *existing,
-                f"--user-agent={fp.user_agent}",
-            ]
-
-        # Zendriver's API is `start(**kwargs)` returning a Browser.
-        browser = await zendriver.start(**config_kwargs)
-
-        async def shutdown() -> None:
-            close = getattr(browser, "stop", None) or getattr(browser, "close", None)
-            if close is None:
-                return
-            try:
-                result = close()
-                if hasattr(result, "__await__"):
-                    await result
-            except Exception as exc:
-                _logger.warning("agent.browser.zendriver.close_failed", error=str(exc))
-
-        _logger.info("agent.browser.zendriver.launched", headful=headful)
-        return BrowserHandle(
-            name="zendriver",
-            playwright_browser=None,
-            raw=browser,
-            shutdown=shutdown,
+    def __init__(self, *, cdp_url: str | None = None) -> None:
+        # Resolution order: explicit arg -> env -> conventional default.
+        self._cdp_url = cdp_url or os.environ.get(
+            "SCRAPPER_TOOL_AGENT_OBSCURA_CDP_URL", _OBSCURA_DEFAULT_CDP_URL
         )
 
-
-# --- Botasaurus -----------------------------------------------------------
-
-
-_BOTASAURUS_NOT_INSTALLED = (
-    "Botasaurus browser backend requires the [botasaurus-backend] extra.\n"
-    "Install with: pip install scrapper-tool[llm-agent,botasaurus-backend]"
-)
-
-
-class BotasaurusBackend:
-    """Botasaurus — humanlike-behavior-first decorator framework.
-
-    Different paradigm from the other backends — wraps user functions in
-    decorators that handle anti-bot mitigations. Pattern E uses its
-    underlying ``Driver`` object so the agent loop can drive it directly.
-    """
-
-    name = "botasaurus"
-
-    async def launch(  # pragma: no cover — requires real Botasaurus install
+    async def launch(
         self,
         *,
         headful: bool,
@@ -335,31 +283,55 @@ class BotasaurusBackend:
         behavior: BehaviorPolicy,
     ) -> BrowserHandle:
         try:
-            from botasaurus_driver import Driver  # noqa: PLC0415
+            from playwright.async_api import async_playwright  # noqa: PLC0415
         except ImportError as exc:
-            raise ImportError(_BOTASAURUS_NOT_INSTALLED) from exc
+            raise ImportError(_OBSCURA_NOT_INSTALLED) from exc
 
-        _ = behavior
-        _ = fingerprint
+        _ = behavior  # applied per-action via the page-hook layer
+        # ``headful`` / ``proxy`` are properties of the external Obscura
+        # server (``obscura serve --proxy ...``), not the CDP client, so we
+        # can only connect to whatever the server was started with.
+        _ = (headful, proxy)
 
-        driver_kwargs: dict[str, Any] = {"headless": not headful}
-        if proxy:
-            driver_kwargs["proxy"] = proxy
-        driver = Driver(**driver_kwargs)
+        pw_ctx = async_playwright()
+        pw = await pw_ctx.__aenter__()
+        try:
+            browser = await pw.chromium.connect_over_cdp(self._cdp_url)
+        except Exception as exc:
+            await pw_ctx.__aexit__(None, None, None)
+            msg = f"Obscura CDP connect failed at {self._cdp_url!r}: {exc}"
+            raise ImportError(msg) from exc
+
+        # Apply the injected fingerprint to a default context, mirroring
+        # Patchright (Obscura is Chromium-class over CDP).
+        fp = fingerprint.generate()
+        context_kwargs: dict[str, Any] = {}
+        if fp.user_agent:
+            context_kwargs["user_agent"] = fp.user_agent
+        if fp.viewport:
+            context_kwargs["viewport"] = {"width": fp.viewport[0], "height": fp.viewport[1]}
+        if fp.locale:
+            context_kwargs["locale"] = fp.locale
+        if fp.headers:
+            context_kwargs["extra_http_headers"] = fp.headers
+        if context_kwargs:
+            await browser.new_context(**context_kwargs)
 
         async def shutdown() -> None:
             try:
-                close = getattr(driver, "close", None) or getattr(driver, "quit", None)
-                if close is not None:
-                    close()
+                await browser.close()
             except Exception as exc:
-                _logger.warning("agent.browser.botasaurus.close_failed", error=str(exc))
+                _logger.warning("agent.browser.obscura.close_failed", error=str(exc))
+            try:
+                await pw_ctx.__aexit__(None, None, None)
+            except Exception as exc:  # pragma: no cover — defensive
+                _logger.warning("agent.browser.obscura.pw_stop_failed", error=str(exc))
 
-        _logger.info("agent.browser.botasaurus.launched", headful=headful)
+        _logger.info("agent.browser.obscura.launched", cdp_url=self._cdp_url)
         return BrowserHandle(
-            name="botasaurus",
-            playwright_browser=None,
-            raw=driver,
+            name="obscura",
+            playwright_browser=browser,
+            raw=browser,
             shutdown=shutdown,
         )
 
@@ -424,18 +396,24 @@ class ScraplingBackend:
 # --- Resolver -------------------------------------------------------------
 
 
-def get_browser_backend(name: str) -> BrowserBackend:
-    """Build a browser backend by name."""
+def get_browser_backend(name: str, *, cdp_url: str | None = None) -> BrowserBackend:
+    """Build a browser backend by name.
+
+    ``cdp_url`` is forwarded to backends that connect to an external server
+    (currently only Obscura). It's ignored by the in-process backends, which
+    have no URL to connect to.
+    """
     table: dict[str, type[BrowserBackend]] = {
         "camoufox": CamoufoxBackend,
         "patchright": PatchrightBackend,
-        "zendriver": ZendriverBackend,
-        "botasaurus": BotasaurusBackend,
         "scrapling": ScraplingBackend,
+        "obscura": ObscuraBackend,
     }
     if name not in table:
         msg = f"Unknown browser backend: {name!r}. Choices: {sorted(table)}."
         raise ValueError(msg)
+    if name == "obscura":
+        return ObscuraBackend(cdp_url=cdp_url)
     return table[name]()
 
 
@@ -459,13 +437,12 @@ async def open_browser(
 
 
 __all__ = [
-    "BotasaurusBackend",
     "BrowserBackend",
     "BrowserHandle",
     "CamoufoxBackend",
+    "ObscuraBackend",
     "PatchrightBackend",
     "ScraplingBackend",
-    "ZendriverBackend",
     "get_browser_backend",
     "open_browser",
 ]

@@ -340,9 +340,36 @@ def _browser_binary_present(browser: str) -> bool:  # noqa: PLR0911
             return False
         return False
 
+    if browser == "obscura":
+        # Obscura is an external CDP server (sidecar), not a local binary.
+        # Probe the configured endpoint with a short TCP connect.
+        return _obscura_endpoint_reachable()
+
     # Unknown browser — be conservative and report False so /ready
     # surfaces the configuration mistake rather than silently passing.
     return False
+
+
+def _obscura_endpoint_reachable(timeout_s: float = 0.5) -> bool:
+    """Best-effort TCP reachability probe for the Obscura CDP endpoint.
+
+    Reads ``SCRAPPER_TOOL_AGENT_OBSCURA_CDP_URL`` (default
+    ``http://127.0.0.1:9222``) and attempts a short blocking connect. Returns
+    False on any failure so ``/ready`` reports ``degraded`` rather than
+    crashing.
+    """
+    import socket  # noqa: PLC0415
+    from urllib.parse import urlparse  # noqa: PLC0415
+
+    url = os.environ.get("SCRAPPER_TOOL_AGENT_OBSCURA_CDP_URL", "http://127.0.0.1:9222")
+    parsed = urlparse(url)
+    host = parsed.hostname or "127.0.0.1"
+    port = parsed.port or 9222
+    try:
+        with socket.create_connection((host, port), timeout=timeout_s):
+            return True
+    except OSError:
+        return False
 
 
 def _agent_runnable(browser: str) -> bool:
@@ -1005,26 +1032,22 @@ def _classify_extraction_success(
     non-empty dict) counts as a structured signal, regardless of
     whether B/C also matched.
     """
-    page_readable = _is_http_ok(status_code) and bool(text)
-    css_has_signal = bool(css_data) if css_data is not None else False
-    has_any_signal = (
-        product is not None or microdata_price is not None or bool(json_ld) or css_has_signal
+    # v1.5.0: logic moved verbatim to the shared classifier so REST and the
+    # MCP auto_scrape cascade use one identical accept rule. REST behavior is
+    # unchanged — this is a pure delegation.
+    from scrapper_tool._classify import classify_extraction_success  # noqa: PLC0415
+
+    return classify_extraction_success(
+        mode=req.mode,
+        schema_json=req.schema_json,
+        force_llm_extract=getattr(req, "force_llm_extract", False),
+        status_code=status_code,
+        text=text,
+        product=product,
+        microdata_price=microdata_price,
+        json_ld=json_ld,
+        css_data=css_data,
     )
-
-    if req.mode == "fetch":
-        return True
-    if getattr(req, "force_llm_extract", False) and req.schema_json is not None:
-        return False
-    # v1.4.0: when caller supplied a CSS-shaped schema, the CSS
-    # extractor's success is the canonical signal. CSS rows alone are
-    # enough; B/C fallback is bonus.
-    from scrapper_tool._extractors.css import looks_like_css_schema  # noqa: PLC0415
-
-    if looks_like_css_schema(req.schema_json):
-        return css_has_signal or (page_readable and has_any_signal)
-    if req.schema_json is None:
-        return product is not None or microdata_price is not None or css_has_signal
-    return page_readable and has_any_signal
 
 
 def _is_e_tier_structured(data: object | None, blocked: bool) -> bool:
@@ -1820,6 +1843,15 @@ def _check_browser_module(browser: str) -> str:  # noqa: PLR0911 — one return 
     if browser == "scrapling":
         try:
             import scrapling  # noqa: F401, PLC0415
+
+            return "ok"
+        except ImportError:
+            return "missing"
+    if browser == "obscura":
+        # Obscura needs Playwright (to connect over CDP) plus a reachable
+        # external server. The module check just verifies the client lib.
+        try:
+            import playwright  # noqa: F401, PLC0415
 
             return "ok"
         except ImportError:

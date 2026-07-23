@@ -284,6 +284,33 @@ class TestAutoScrape:
         assert result["blocked"] is False
         assert result["hostile_skipped"] is False
 
+    @pytest.mark.asyncio
+    async def test_auto_scrape_accepts_a_b_c_with_schema(
+        self,
+        server: object,
+        fake_curl: type[FakeCurlSession],
+    ) -> None:
+        # v1.5.0 parity fix: with a schema supplied AND a B/C signal present,
+        # MCP must accept A/B/C (like REST /scrape) instead of always burning
+        # an LLM call (E1). Regression guard for the MCP/REST divergence.
+        product_html = (
+            '<html><head><script type="application/ld+json">'
+            '{"@context":"https://schema.org","@type":"Product","name":"Widget Z",'
+            '"sku":"Z1","offers":{"@type":"Offer","price":"9.99","priceCurrency":"USD"}}'
+            "</script></head><body></body></html>"
+        )
+        fake_curl.STATUS_FOR_PROFILE = {"chrome133a": 200}
+        fake_curl.RESPONSE_TEXT_FOR_PROFILE = {"chrome133a": product_html}
+
+        tool = _get_tool(server, "auto_scrape")
+        result = await tool.fn(  # type: ignore[attr-defined]
+            url="https://example.test/p",
+            schema_json={"type": "object", "properties": {"name": {"type": "string"}}},
+        )
+        # No LLM call — accepted at A/B/C, not escalated to E1.
+        assert result["pattern_used"] == "a_b_c"
+        assert result["product"]["name"] == "Widget Z"
+
 
 # ---- v1.1.3: auto_scrape now invokes Pattern D between A/B/C and E1 ------
 
@@ -375,7 +402,10 @@ class TestAutoScrapeWithPatternD:
         import builtins
         import sys
 
-        sys.modules.pop("scrapper_tool.patterns.d", None)
+        # Use monkeypatch so pytest restores sys.modules after the test —
+        # a raw pop/assign here leaks a fake ``scrapper_tool.agent`` into
+        # later tests (breaks test_http_server when it runs after this file).
+        monkeypatch.delitem(sys.modules, "scrapper_tool.patterns.d", raising=False)
         real_import = builtins.__import__
 
         def patched_import(
@@ -422,7 +452,7 @@ class TestAutoScrapeWithPatternD:
         )
         agent_module.agent_extract = AsyncMock(return_value=fake_result)
         agent_module.agent_browse = AsyncMock(return_value=fake_result)
-        sys.modules["scrapper_tool.agent"] = agent_module
+        monkeypatch.setitem(sys.modules, "scrapper_tool.agent", agent_module)
 
         tool = _get_tool(server, "auto_scrape")
         result = await tool.fn(url="https://protected.com/p")  # type: ignore[attr-defined]
@@ -771,7 +801,8 @@ class TestAutoScrapeHostileOnly:
         import builtins
         import sys
 
-        sys.modules.pop("scrapper_tool.patterns.d", None)
+        # monkeypatch.delitem so pytest restores the real module afterwards.
+        monkeypatch.delitem(sys.modules, "scrapper_tool.patterns.d", raising=False)
         real_import = builtins.__import__
 
         def patched_import(

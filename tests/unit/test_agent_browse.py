@@ -91,12 +91,27 @@ def fake_browser_use(monkeypatch: pytest.MonkeyPatch) -> dict[str, Any]:
         last_kwargs: dict[str, Any] = {}
         next_history: Any = None
         next_exception: Exception | None = None
+        # When set, run() attaches it as ``browser_session`` and fires the
+        # on_step_end hook once — simulating one agent step so captcha/behavior
+        # wiring can be asserted end-to-end.
+        step_browser_session: Any = None
 
         def __init__(self, **kwargs: Any) -> None:
             type(self).last_kwargs = kwargs
+            self.browser_session: Any = None
 
-        async def run(self, *, max_steps: int | None = None) -> Any:
+        async def run(
+            self,
+            *,
+            max_steps: int | None = None,
+            on_step_end: Any = None,
+            on_step_start: Any = None,
+        ) -> Any:
             type(self).last_kwargs["max_steps"] = max_steps
+            type(self).last_kwargs["on_step_end"] = on_step_end
+            if on_step_end is not None and type(self).step_browser_session is not None:
+                self.browser_session = type(self).step_browser_session
+                await on_step_end(self)
             if type(self).next_exception is not None:
                 raise type(self).next_exception
             return type(self).next_history
@@ -116,9 +131,22 @@ def fake_handle(monkeypatch: pytest.MonkeyPatch) -> BrowserHandle:
     async def shutdown() -> None:
         closed["flag"] = True
 
+    # browse.py now hands browser-use the live context/page from the backend,
+    # so playwright_browser must expose contexts[0].pages[0].
+    class _PWPage:
+        pass
+
+    class _PWContext:
+        def __init__(self) -> None:
+            self.pages = [_PWPage()]
+
+    class _PWBrowser:
+        def __init__(self) -> None:
+            self.contexts = [_PWContext()]
+
     handle = BrowserHandle(
         name="patchright",
-        playwright_browser=object(),
+        playwright_browser=_PWBrowser(),
         raw=object(),
         shutdown=shutdown,
     )
@@ -135,6 +163,7 @@ def fake_handle(monkeypatch: pytest.MonkeyPatch) -> BrowserHandle:
         browser_mod.CamoufoxBackend,
         browser_mod.PatchrightBackend,
         browser_mod.ScraplingBackend,
+        browser_mod.ObscuraBackend,
     ):
         monkeypatch.setattr(cls, "launch", fake_launch)
 
@@ -241,28 +270,30 @@ class TestRunBrowseFailures:
             await browse_mod.run_browse("https://e.com", "x", config=cfg)
 
     @pytest.mark.asyncio
-    async def test_zendriver_unsupported_for_browse(
+    async def test_none_browser_backend_unsupported_for_browse(
         self, fake_browser_use: dict[str, Any], monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        # Zendriver returns a handle with playwright_browser=None.
+        # A backend that yields playwright_browser=None (e.g. Scrapling's
+        # HTTP-shaped fetcher) can't drive browser-use — the guard must
+        # raise AgentError. Keeps the None-branch covered post-prune.
         async def shutdown() -> None:
             return None
 
         handle = BrowserHandle(
-            name="zendriver",
+            name="scrapling",
             playwright_browser=None,
             raw=object(),
             shutdown=shutdown,
         )
 
-        async def launch_zen(self: Any, **_: Any) -> BrowserHandle:
+        async def launch_none(self: Any, **_: Any) -> BrowserHandle:
             return handle
 
-        from scrapper_tool.agent.backends.browser import ZendriverBackend
+        from scrapper_tool.agent.backends.browser import ScraplingBackend
 
-        monkeypatch.setattr(ZendriverBackend, "launch", launch_zen)
+        monkeypatch.setattr(ScraplingBackend, "launch", launch_none)
 
-        cfg = AgentConfig(browser="zendriver", captcha_solver="none")
+        cfg = AgentConfig(browser="scrapling", captcha_solver="none")
         with pytest.raises(Exception, match="Playwright Browser"):
             await browse_mod.run_browse("https://e.com", "x", config=cfg)
 
@@ -403,3 +434,103 @@ class TestHistoryConversion:
         for png in result.screenshots:
             img = PILImage.open(_io.BytesIO(png))
             assert img.width <= 1024
+
+
+# ---------------------------------------------------------------------------
+# Captcha + behavior wiring (Stage 1/2) — proves the previously-dead solver
+# is now actually invoked during the browse loop.
+# ---------------------------------------------------------------------------
+
+
+class _ChallengePage:
+    """Fake page that always reports a Turnstile challenge."""
+
+    def __init__(self) -> None:
+        self.url = "https://challenge.example"
+        self.evaluate = AsyncMock(side_effect=self._evaluate)
+        self.wait_for_timeout = AsyncMock()
+        self.reload = AsyncMock()
+
+    async def _evaluate(self, js: str, arg: Any = None) -> Any:
+        if "querySelector" in js:
+            return {"kind": "turnstile", "site_key": "0xSITEKEY"}
+        return True
+
+
+class _ChallengeSession:
+    def __init__(self, page: Any) -> None:
+        self._page = page
+
+    async def get_current_page(self) -> Any:
+        return self._page
+
+
+class TestCaptchaBehaviorWiring:
+    async def test_run_browse_passes_on_step_end_hook(
+        self,
+        fake_browser_use: dict[str, Any],
+        fake_handle: BrowserHandle,
+        history_fixture: _FakeAgentHistoryList,
+    ) -> None:
+        # Regression: the old dead-code path called agent.run(max_steps=...)
+        # with NO hook. Wiring must now pass a non-None on_step_end.
+        fake_browser_use["agent_cls"].next_history = history_fixture
+        cfg = AgentConfig(
+            browser="patchright", captcha_solver="none", behavior="off", max_steps=5, timeout_s=30
+        )
+        await browse_mod.run_browse("https://e.example", "do", config=cfg)
+        assert fake_browser_use["agent_cls"].last_kwargs.get("on_step_end") is not None
+
+    async def test_obscura_browse_uses_playwright_path(
+        self,
+        fake_browser_use: dict[str, Any],
+        fake_handle: BrowserHandle,
+        history_fixture: _FakeAgentHistoryList,
+    ) -> None:
+        # Obscura returns a real Playwright browser, so browse must convert
+        # history normally (NOT the None-guard AgentError path).
+        fake_browser_use["agent_cls"].next_history = history_fixture
+        cfg = AgentConfig(
+            browser="obscura",
+            captcha_solver="none",
+            behavior="off",
+            max_steps=5,
+            timeout_s=30,
+            obscura_cdp_url="ws://obscura:9222",
+        )
+        result = await browse_mod.run_browse("https://e.example", "do", config=cfg)
+        assert result.mode == "browse"
+
+    async def test_captcha_solver_invoked_on_challenge(
+        self,
+        fake_browser_use: dict[str, Any],
+        fake_handle: BrowserHandle,
+        history_fixture: _FakeAgentHistoryList,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        solve = AsyncMock(return_value="tok")
+
+        class _Spy:
+            name = "spy"
+            requires_api_key = False
+
+            @property
+            def supported(self) -> frozenset[str]:
+                return frozenset({"turnstile"})
+
+        spy = _Spy()
+        spy.solve = solve  # type: ignore[attr-defined]
+        monkeypatch.setattr(browse_mod, "get_captcha_solver", lambda cfg: spy)
+
+        page = _ChallengePage()
+        fake_browser_use["agent_cls"].next_history = history_fixture
+        fake_browser_use["agent_cls"].step_browser_session = _ChallengeSession(page)
+
+        cfg = AgentConfig(
+            browser="patchright", captcha_solver="auto", behavior="off", max_steps=1, timeout_s=30
+        )
+        await browse_mod.run_browse("https://e.example", "do", config=cfg)
+
+        solve.assert_awaited_once()
+        assert solve.await_args.args[0] == "turnstile"
+        assert solve.await_args.args[1] == "0xSITEKEY"

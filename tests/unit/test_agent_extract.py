@@ -50,14 +50,25 @@ def fake_crawl4ai(monkeypatch: pytest.MonkeyPatch) -> MagicMock:
     class _CacheMode:
         BYPASS = "bypass"
 
+    class _CrawlerStrategy:
+        def __init__(self) -> None:
+            self.hooks: dict[str, Any] = {}
+
+        def set_hook(self, name: str, fn: Any) -> None:
+            self.hooks[name] = fn
+
     class _AsyncWebCrawler:
         instances: list[_AsyncWebCrawler] = []
         return_value: Any = None
         side_effect: Exception | None = None
         seen_url: str | None = None
+        # When set, arun() fires the registered after_goto hook against this
+        # page — simulating navigation so captcha/behavior wiring is exercised.
+        hook_page: Any = None
 
         def __init__(self, config: Any | None = None) -> None:
             self.config = config
+            self.crawler_strategy = _CrawlerStrategy()
             type(self).instances.append(self)
 
         async def __aenter__(self) -> _AsyncWebCrawler:
@@ -68,6 +79,9 @@ def fake_crawl4ai(monkeypatch: pytest.MonkeyPatch) -> MagicMock:
 
         async def arun(self, *, url: str, config: Any) -> Any:
             type(self).seen_url = url
+            hook = self.crawler_strategy.hooks.get("after_goto")
+            if hook is not None and type(self).hook_page is not None:
+                await hook(type(self).hook_page, url=url)
             if type(self).side_effect is not None:
                 raise type(self).side_effect
             return type(self).return_value
@@ -294,3 +308,61 @@ class TestValidateAgainstPydantic:
         assert model is None
         assert err is not None
         assert "price" in err.lower()
+
+
+# ---------------------------------------------------------------------------
+# Captcha wiring (Stage 1) — proves the previously-dead solver is registered
+# as an after_goto hook and actually invoked during E1 extraction.
+# ---------------------------------------------------------------------------
+
+
+class _ChallengePage:
+    def __init__(self) -> None:
+        self.url = "https://challenge.example"
+        self.evaluate = AsyncMock(side_effect=self._evaluate)
+        self.wait_for_timeout = AsyncMock()
+        self.reload = AsyncMock()
+
+    async def _evaluate(self, js: str, arg: Any = None) -> Any:
+        if "querySelector" in js:
+            return {"kind": "turnstile", "site_key": "0xSITEKEY"}
+        return True
+
+
+class TestCaptchaWiringE1:
+    async def test_after_goto_hook_registered(
+        self, fake_crawl4ai: MagicMock, _patch_llm_probe: AsyncMock
+    ) -> None:
+        crawler = fake_crawl4ai.crawler_cls
+        crawler.return_value = _CrawlResult(extracted={"title": "x"})
+        cfg = AgentConfig(captcha_solver="none", behavior="off", browser="patchright")
+        await extract_mod.run_extract("https://e.com", _Schema, config=cfg)
+        # The most recent crawler instance had after_goto wired.
+        assert "after_goto" in crawler.instances[-1].crawler_strategy.hooks
+
+    async def test_solver_invoked_on_challenge(
+        self, fake_crawl4ai: MagicMock, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        solve = AsyncMock(return_value="tok")
+
+        class _Spy:
+            name = "spy"
+            requires_api_key = False
+
+            @property
+            def supported(self) -> frozenset[str]:
+                return frozenset({"turnstile"})
+
+        spy = _Spy()
+        spy.solve = solve  # type: ignore[attr-defined]
+        monkeypatch.setattr(extract_mod, "get_captcha_solver", lambda cfg: spy)
+
+        crawler = fake_crawl4ai.crawler_cls
+        crawler.return_value = _CrawlResult(extracted={"title": "x"})
+        crawler.hook_page = _ChallengePage()
+
+        cfg = AgentConfig(captcha_solver="auto", behavior="off", browser="patchright")
+        await extract_mod.run_extract("https://e.com", _Schema, config=cfg)
+
+        solve.assert_awaited_once()
+        assert solve.await_args.args[0] == "turnstile"

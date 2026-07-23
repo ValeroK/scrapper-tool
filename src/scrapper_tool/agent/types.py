@@ -74,7 +74,7 @@ class AgentResult(BaseModel):
 CaptchaSolverName = Literal[
     "auto", "camoufox-auto", "theyka", "capsolver", "nopecha", "twocaptcha", "none"
 ]
-BrowserBackendName = Literal["camoufox", "patchright", "zendriver", "scrapling", "botasaurus"]
+BrowserBackendName = Literal["camoufox", "patchright", "scrapling", "obscura"]
 LLMBackendName = Literal["ollama", "llama_cpp", "vllm", "openai_compat"]
 BehaviorName = Literal["humanlike", "fast", "off"]
 FingerprintName = Literal["browserforge", "none"]
@@ -107,6 +107,11 @@ class AgentConfig(BaseModel):
     # callers of agent_extract / agent_browse can also pass it via
     # SCRAPPER_TOOL_AGENT_USER_DATA_DIR for cross-call session sharing.
     user_data_dir: str | None = None
+    # v1.5.0: CDP WebSocket URL for the Obscura backend (experimental Rust
+    # headless browser run as an external ``obscura serve`` sidecar). Only
+    # consulted when ``browser="obscura"``. Defaults to the conventional
+    # local endpoint when unset.
+    obscura_cdp_url: str | None = None
 
     # --- LLM backend
     llm: LLMBackendName = "ollama"
@@ -150,6 +155,7 @@ class AgentConfig(BaseModel):
                 "headful": _envbool(env.get("SCRAPPER_TOOL_AGENT_HEADFUL"), default=False),
                 "proxy": env.get("SCRAPPER_TOOL_AGENT_PROXY") or None,
                 "user_data_dir": env.get("SCRAPPER_TOOL_AGENT_USER_DATA_DIR") or None,
+                "obscura_cdp_url": env.get("SCRAPPER_TOOL_AGENT_OBSCURA_CDP_URL") or None,
                 "llm": env.get("SCRAPPER_TOOL_AGENT_LLM", "ollama"),
                 "model": env.get("SCRAPPER_TOOL_AGENT_MODEL", "qwen3-vl:8b"),
                 "ollama_url": env.get("SCRAPPER_TOOL_AGENT_OLLAMA_URL", "http://localhost:11434"),

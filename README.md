@@ -91,7 +91,7 @@ flowchart TD
     G -- C --> J[selectolax: microdata / CSS]
     G -- D --> K["Scrapling (Playwright + Turnstile)"]
     G -- "BlockedError + interactive" --> M["Pattern E: agent_extract / agent_browse"]
-    M --> M1["Stealth browser (Camoufox / Patchright / Zendriver)"]
+    M --> M1["Stealth browser (Camoufox / Patchright / Obscura)"]
     M1 --> M2["Local LLM (Ollama, qwen3-vl:8b)"]
     M2 --> M3["Captcha cascade (Camoufox auto → Theyka → paid)"]
     M3 --> L[Validated product data]
@@ -406,7 +406,7 @@ by default. Override in `.env` or environment to point elsewhere — see the
 | Browser: Patchright (Pattern E "fast mode") | ✅ pre-installed |
 | Browser: Playwright Chromium (Pattern D Scrapling) | ✅ pre-installed |
 | Browser: Camoufox (Pattern E best-stealth) | optional via `--build-arg INSTALL_CAMOUFOX=1` (+300 MB) |
-| Browser: Zendriver / Botasaurus | rebuild with the matching `--extra ...-backend` |
+| Browser: Obscura (experimental, lightweight CDP sidecar) | run `obscura serve` and set `SCRAPPER_TOOL_AGENT_OBSCURA_CDP_URL` (see `docker-compose.yml`) |
 | LLM: external Ollama / LM Studio / llama.cpp / vLLM | ✅ via `host.docker.internal` (see below). The image does NOT bundle an LLM. |
 | Captcha Tier 0 (Camoufox auto-pass) | ✅ when `INSTALL_CAMOUFOX=1` |
 | Captcha Tier 1 (Theyka) | ✅ pre-installed |

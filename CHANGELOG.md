@@ -4,6 +4,40 @@ All notable changes to `scrapper-tool` are recorded here. Format follows [Keep a
 
 ## [Unreleased]
 
+### Added
+- **Obscura browser backend (experimental).** `browser="obscura"` connects to
+  an external Obscura CDP server (`obscura serve`) via Playwright
+  `connect_over_cdp`, returning a real Playwright browser that drives E2
+  (`agent_browse`) directly. Lightweight (~30 MB RAM) alternative to Camoufox.
+  Configured via `SCRAPPER_TOOL_AGENT_OBSCURA_CDP_URL` (default
+  `ws://127.0.0.1:9222`). Non-default and benchmark-gated — measure its real
+  detection rate via the `canary` CLI before trusting it on protected sites. A
+  profile-gated `obscura` service is included in `docker-compose.yml`.
+
+### Changed
+- **Captcha solver cascade is now actually wired into Pattern E.** Previously
+  `get_captcha_solver(config)` was constructed and discarded (`_ =`) in both E1
+  and E2, so `.solve()` never ran — only Camoufox's built-in `humanize` defeated
+  Turnstile. The solver now runs on the live page via a browser-use
+  `on_step_end` hook (E2) and a Crawl4AI `after_goto` hook (E1), through a new
+  mechanism-aware DOM helper (`captcha_dom`): stealth auto-pass first, in-context
+  handling preferred for Turnstile, foreign-token injection only for
+  portable-token kinds (reCAPTCHA / hCaptcha).
+- **Behavior policy is now wired in** the same way (page-level settle/scroll
+  shaping in E2; a minimal pre-return settle in E1). Previously discarded.
+- **MCP `auto_scrape` now uses the same accept logic as REST `/scrape`.** The
+  two surfaces shared a cascade in name only — MCP always escalated to an LLM
+  call whenever a schema was supplied, even when Pattern B/C/D produced a valid
+  signal. Both now delegate to one shared `classify_extraction_success`
+  (extracted from REST's classifier; REST behavior is unchanged).
+
+### Removed
+- **Zendriver and Botasaurus browser backends** (and their `zendriver-backend` /
+  `botasaurus-backend` extras). Both returned `playwright_browser=None`, so
+  `agent_browse` raised `AgentError` at runtime for them — they were never
+  drivable via Pattern E. The lightweight/CDP niche they aimed at is now filled
+  by the Obscura backend.
+
 ## [1.4.2] - 2026-05-06
 
 Hotfix release. v1.4.0/v1.4.1's extractor registry bootstrap had a

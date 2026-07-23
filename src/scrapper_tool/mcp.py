@@ -78,6 +78,7 @@ import sys
 from typing import Any
 
 from scrapper_tool import __version__
+from scrapper_tool._classify import classify_extraction_success
 from scrapper_tool.canary import run_canary
 from scrapper_tool.errors import (
     AgentBlockedError,
@@ -132,6 +133,20 @@ def _structured_price(html: str) -> dict[str, Any] | None:
         return None
     price, currency = result
     return {"price": str(price), "currency": currency}
+
+
+def _structured_json_ld(html: str, base_url: str | None) -> list[Any] | None:
+    """Return raw JSON-LD blocks (for the shared classifier's signal check).
+
+    Mirrors the ``json_ld`` component of the REST ``_extract_b_c`` pipeline so
+    ``auto_scrape`` feeds the same signals to ``classify_extraction_success``.
+    """
+    from scrapper_tool._extractors import get as get_extractor  # noqa: PLC0415
+
+    result = get_extractor("json_ld_product").extract(html, base_url=base_url)
+    if result.has_signal and isinstance(result.data, dict):
+        return result.data.get("json_ld")
+    return None
 
 
 def _agent_error_payload(
@@ -333,7 +348,20 @@ async def _auto_scrape_inner(
         text = resp.text or ""
         product = _structured_product(text, str(resp.url))
         price = _structured_price(text)
-        success = schema_json is None and (product is not None or price is not None)
+        # v1.5.0: use the shared classifier so auto_scrape accepts A/B/C the
+        # same way REST /scrape does (previously MCP always escalated to an
+        # LLM call whenever a schema was supplied).
+        json_ld = _structured_json_ld(text, str(resp.url))
+        success = classify_extraction_success(
+            mode="auto",
+            schema_json=schema_json,
+            force_llm_extract=False,
+            status_code=resp.status_code,
+            text=text,
+            product=product,
+            microdata_price=price,
+            json_ld=json_ld,
+        )
         if success:
             truncated_text, truncated = _truncate(text)
             return {
@@ -427,7 +455,19 @@ async def _try_pattern_d_for_auto_scrape(
     d_url = str(getattr(d_resp, "url", url) or url)
     d_product = _structured_product(d_html, d_url)
     d_price = _structured_price(d_html)
-    if not (schema_json is None and (d_product is not None or d_price is not None)):
+    d_json_ld = _structured_json_ld(d_html, d_url)
+    # D returns rendered HTML on success — treat as a readable 200 page.
+    d_accepted = classify_extraction_success(
+        mode="auto",
+        schema_json=schema_json,
+        force_llm_extract=False,
+        status_code=200,
+        text=d_html,
+        product=d_product,
+        microdata_price=d_price,
+        json_ld=d_json_ld,
+    )
+    if not d_accepted:
         return None, None, False
 
     truncated_text, truncated = _truncate(d_html)

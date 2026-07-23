@@ -96,9 +96,11 @@ http = [
     "PyYAML>=6.0",                # used by scripts/dump_openapi.py for openapi.yaml
     "prometheus-client>=0.20",    # v1.4.0 — /metrics endpoint
 ]
-# Optional alternative browser backends.
-zendriver-backend = ["zendriver>=0.5"]
-botasaurus-backend = ["botasaurus-driver>=4.0"]
+# NOTE: zendriver-backend / botasaurus-backend extras removed in v1.5.0.
+# Both backends returned playwright_browser=None, so agent_browse raised
+# AgentError at runtime for them — they were never drivable via Pattern E.
+# The lightweight/CDP niche they aimed at is now filled by the Obscura
+# backend (connect-over-CDP, returns a real Playwright browser).
 # NOTE: skyvern-backend extra removed in v1.1.1.
 # skyvern's transitive litellm pin pulled three CVE-affected versions
 # (SQL injection / SSTI / RCE in /prompts/test, fixed in litellm 1.83.7),
@@ -247,9 +249,6 @@ module = [
     "browser_use.*",
     "patchright.*",
     "camoufox.*",
-    "zendriver.*",
-    "botasaurus.*",
-    "botasaurus_driver.*",
     "browserforge.*",
     "langchain_ollama.*",
     "langchain_openai.*",

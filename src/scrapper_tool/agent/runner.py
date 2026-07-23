@@ -86,7 +86,16 @@ async def agent_browse(
     config: AgentConfig | None = None,
     **overrides: Any,
 ) -> AgentResult:
-    """Multi-step LLM-driven agent loop. Use only when interaction is required.
+    """Multi-step LLM-driven agent loop. Reserve for genuinely interactive tasks.
+
+    **Last-resort / interactive-only.** Multi-step AI reliability compounds
+    (~95%/step over 10 steps ≈ 60% overall) and browser-use carries real API
+    churn, so E2 is the most expensive and least reliable tier. Prefer
+    :func:`agent_extract` (E1, one call) for "just get the data", and a direct
+    deterministic Playwright/Camoufox script for known/fixed flows. Reach for
+    E2 only when the task *needs* interaction the other tiers can't do: login,
+    "click load more" pagination, dynamic forms, conditional UI. See
+    ``docs/research/2026-e2-agent-framework.md`` for the framework analysis.
 
     Parameters
     ----------
