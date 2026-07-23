@@ -240,3 +240,73 @@ def test_obscura_available_reflects_path(monkeypatch: pytest.MonkeyPatch) -> Non
     assert obscura_available() is False
     monkeypatch.setattr("scrapper_tool.crawl.batch.shutil.which", lambda name: "/x/obscura")
     assert obscura_available() is True
+
+
+class TestObscuraFetch:
+    """E4 — the single-URL `obscura fetch --dump` path.
+
+    Unlike batch, one page has nothing to salvage, so a failure raises rather
+    than returning "" — feeding a silent empty string to an extractor is worse
+    than an error the caller can see.
+    """
+
+    @pytest.mark.asyncio
+    async def test_returns_dumped_content(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        from scrapper_tool.crawl.batch import obscura_fetch
+
+        _fake_exec(monkeypatch, _FakeProcess(stdout=b"# Rendered\n\nbody text"))
+        out = await obscura_fetch("https://a.test/p", dump="markdown")
+        assert out == "# Rendered\n\nbody text"
+
+    @pytest.mark.asyncio
+    async def test_builds_the_fetch_command(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        from scrapper_tool.crawl.batch import obscura_fetch
+
+        calls = _fake_exec(monkeypatch, _FakeProcess(stdout=b"x"))
+        await obscura_fetch(
+            "https://a.test/p", dump="markdown", proxy="http://p:8080", wait_until="networkidle0"
+        )
+        argv = calls[0]
+        assert argv[:3] == ["obscura", "fetch", "https://a.test/p"]
+        assert argv[argv.index("--dump") + 1] == "markdown"
+        assert "--stealth" in argv
+        assert argv[argv.index("--proxy") + 1] == "http://p:8080"
+        assert argv[argv.index("--wait-until") + 1] == "networkidle0"
+
+    @pytest.mark.asyncio
+    async def test_rejects_an_unknown_dump_format(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        from scrapper_tool.crawl.batch import obscura_fetch
+
+        _fake_exec(monkeypatch, _FakeProcess())
+        with pytest.raises(ValueError, match="unknown dump format"):
+            await obscura_fetch("https://a.test/p", dump="pdf")
+
+    @pytest.mark.asyncio
+    async def test_missing_cli_raises_configuration_error(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from scrapper_tool.crawl.batch import obscura_fetch
+        from scrapper_tool.errors import ConfigurationError
+
+        _fake_exec(monkeypatch, _FakeProcess(), on_path=False)
+        with pytest.raises(ConfigurationError, match="obscura"):
+            await obscura_fetch("https://a.test/p")
+
+    @pytest.mark.asyncio
+    async def test_nonzero_exit_raises(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """A single-page failure must not degrade to an empty string."""
+        from scrapper_tool.crawl.batch import obscura_fetch
+
+        _fake_exec(monkeypatch, _FakeProcess(stdout=b"", stderr=b"navigation failed", returncode=1))
+        with pytest.raises(RuntimeError, match="navigation failed"):
+            await obscura_fetch("https://a.test/p")
+
+    @pytest.mark.asyncio
+    async def test_timeout_kills_and_raises(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        from scrapper_tool.crawl.batch import obscura_fetch
+
+        proc = _FakeProcess(hang=True)
+        _fake_exec(monkeypatch, proc)
+        with pytest.raises(TimeoutError):
+            await obscura_fetch("https://a.test/p", timeout_s=0.01)
+        assert proc.killed is True

@@ -366,3 +366,109 @@ class TestCaptchaWiringE1:
 
         solve.assert_awaited_once()
         assert solve.await_args.args[0] == "turnstile"
+
+
+class TestE1BrowserConfig:
+    """E3 — how E1 configures the browser Crawl4AI drives.
+
+    The obscura case is the one that matters: without cdp_url + managed browser,
+    Crawl4AI launches its OWN Chromium and the Obscura server is never touched,
+    silently negating browser='obscura'. These assert the kwargs actually reach
+    BrowserConfig.
+    """
+
+    @pytest.mark.asyncio
+    async def test_obscura_renders_through_the_cdp_server(
+        self, fake_crawl4ai: MagicMock, _patch_llm_probe: AsyncMock
+    ) -> None:
+        crawler = fake_crawl4ai.crawler_cls
+        crawler.return_value = _CrawlResult(extracted={"x": 1})
+        cfg = AgentConfig(
+            captcha_solver="none",
+            browser="obscura",
+            obscura_cdp_url="http://obscura-host:9222",
+        )
+
+        await extract_mod.run_extract("https://e.com", _Schema, config=cfg)
+
+        bcfg = crawler.instances[-1].config
+        assert bcfg.kwargs["cdp_url"] == "http://obscura-host:9222"
+        assert bcfg.kwargs["use_managed_browser"] is True, (
+            "cdp_url without use_managed_browser is silently ignored by crawl4ai"
+        )
+
+    @pytest.mark.asyncio
+    async def test_obscura_falls_back_to_the_default_endpoint(
+        self, fake_crawl4ai: MagicMock, _patch_llm_probe: AsyncMock, monkeypatch: Any
+    ) -> None:
+        monkeypatch.delenv("SCRAPPER_TOOL_AGENT_OBSCURA_CDP_URL", raising=False)
+        crawler = fake_crawl4ai.crawler_cls
+        crawler.return_value = _CrawlResult(extracted={"x": 1})
+        cfg = AgentConfig(captcha_solver="none", browser="obscura")
+
+        await extract_mod.run_extract("https://e.com", _Schema, config=cfg)
+
+        assert crawler.instances[-1].config.kwargs["cdp_url"] == "http://127.0.0.1:9222"
+
+    @pytest.mark.asyncio
+    async def test_obscura_drops_the_persistent_profile(
+        self, fake_crawl4ai: MagicMock, _patch_llm_probe: AsyncMock
+    ) -> None:
+        """A CDP-attached external browser owns its own profile.
+
+        Passing user_data_dir alongside cdp_url makes crawl4ai try to launch a
+        persistent context AND attach to a remote one — mutually exclusive.
+        """
+        crawler = fake_crawl4ai.crawler_cls
+        crawler.return_value = _CrawlResult(extracted={"x": 1})
+        cfg = AgentConfig(captcha_solver="none", browser="obscura", user_data_dir="/tmp/profile")
+
+        await extract_mod.run_extract("https://e.com", _Schema, config=cfg)
+
+        kwargs = crawler.instances[-1].config.kwargs
+        assert "user_data_dir" not in kwargs
+        assert "use_persistent_context" not in kwargs
+
+    @pytest.mark.asyncio
+    async def test_non_obscura_does_not_set_cdp(
+        self, fake_crawl4ai: MagicMock, _patch_llm_probe: AsyncMock
+    ) -> None:
+        crawler = fake_crawl4ai.crawler_cls
+        crawler.return_value = _CrawlResult(extracted={"x": 1})
+        cfg = AgentConfig(captcha_solver="none", browser="patchright")
+
+        await extract_mod.run_extract("https://e.com", _Schema, config=cfg)
+
+        kwargs = crawler.instances[-1].config.kwargs
+        assert "cdp_url" not in kwargs
+        assert kwargs["browser_type"] == "chromium"
+
+    @pytest.mark.asyncio
+    async def test_patchright_keeps_its_persistent_profile(
+        self, fake_crawl4ai: MagicMock, _patch_llm_probe: AsyncMock
+    ) -> None:
+        crawler = fake_crawl4ai.crawler_cls
+        crawler.return_value = _CrawlResult(extracted={"x": 1})
+        cfg = AgentConfig(captcha_solver="none", browser="patchright", user_data_dir="/tmp/p")
+
+        await extract_mod.run_extract("https://e.com", _Schema, config=cfg)
+
+        kwargs = crawler.instances[-1].config.kwargs
+        assert kwargs["user_data_dir"] == "/tmp/p"
+        assert kwargs["use_persistent_context"] is True
+
+    def test_real_crawl4ai_browserconfig_accepts_the_cdp_kwargs(self) -> None:
+        """Against the INSTALLED crawl4ai, not the fake — the E2-style guard.
+
+        If a crawl4ai upgrade renames these, the mocked tests stay green while
+        E1-via-Obscura silently breaks. This is what catches that.
+        """
+        pytest.importorskip("crawl4ai")
+        import inspect
+
+        from crawl4ai import BrowserConfig
+
+        params = set(inspect.signature(BrowserConfig.__init__).parameters)
+        assert {"cdp_url", "use_managed_browser"} <= params, (
+            "crawl4ai renamed the CDP-attach kwargs; E1-via-Obscura needs re-wiring"
+        )

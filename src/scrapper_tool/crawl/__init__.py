@@ -19,6 +19,7 @@ from scrapper_tool.crawl.batch import (
     BatchResult,
     batch_fetch,
     obscura_available,
+    obscura_fetch,
 )
 from scrapper_tool.crawl.crawl import CrawlPage, CrawlStats, crawl, crawl_to_list
 from scrapper_tool.crawl.map import (
@@ -46,5 +47,6 @@ __all__ = [
     "map_site",
     "normalise_url",
     "obscura_available",
+    "obscura_fetch",
     "same_site",
 ]

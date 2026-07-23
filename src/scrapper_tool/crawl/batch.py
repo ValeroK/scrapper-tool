@@ -232,10 +232,71 @@ async def batch_fetch(
     return result
 
 
+_VALID_DUMPS = frozenset({"html", "text", "links", "markdown", "assets", "original"})
+
+
+async def obscura_fetch(
+    url: str,
+    *,
+    dump: str = "html",
+    stealth: bool = True,
+    proxy: str | None = None,
+    wait_until: str | None = None,
+    timeout_s: float = 60.0,
+    executable: str = "obscura",
+) -> str:
+    """One-shot render of a single URL via ``obscura fetch --dump``.
+
+    A dependency-light render path: no Playwright, no Camoufox binary — just the
+    ~30 MB Obscura process. ``dump="markdown"`` uses Obscura's built-in DOM→
+    markdown, which makes this an E1-lite for the case where you want clean text
+    for an LLM without paying for Crawl4AI's Chromium.
+
+    Returns the dumped content, or raises. Unlike :func:`batch_fetch` this is a
+    single page, so a non-zero exit *is* a failure — there are no other pages to
+    salvage — and it raises rather than returning empty, so a caller doesn't feed
+    a silent "" to an extractor.
+    """
+    if dump not in _VALID_DUMPS:
+        msg = f"unknown dump format {dump!r}; choose one of {sorted(_VALID_DUMPS)}"
+        raise ValueError(msg)
+    if shutil.which(executable) is None:
+        raise ConfigurationError(_OBSCURA_NOT_FOUND)
+
+    args = [executable, "fetch", url, "--dump", dump]
+    if stealth:
+        args.append("--stealth")
+    if proxy:
+        args.extend(["--proxy", proxy])
+    if wait_until:
+        args.extend(["--wait-until", wait_until])
+
+    process = await asyncio.create_subprocess_exec(
+        *args, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE
+    )
+    try:
+        stdout, stderr = await asyncio.wait_for(process.communicate(), timeout=timeout_s)
+    except TimeoutError:
+        process.kill()
+        await process.wait()
+        msg = f"obscura fetch timed out after {timeout_s}s for {url}"
+        raise TimeoutError(msg) from None
+
+    if process.returncode:
+        detail = (stderr or b"").decode("utf-8", errors="replace")[:300]
+        msg = f"obscura fetch exited {process.returncode} for {url}: {detail}"
+        raise RuntimeError(msg)
+
+    content = (stdout or b"")[:_MAX_OUTPUT_BYTES].decode("utf-8", errors="replace")
+    _logger.info("crawl.obscura_fetch.done", url=url, dump=dump, bytes=len(content))
+    return content
+
+
 __all__ = [
     "BatchPage",
     "BatchResult",
     "batch_fetch",
     "obscura_available",
+    "obscura_fetch",
     "parse_batch_output",
 ]

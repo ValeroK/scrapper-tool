@@ -339,6 +339,19 @@ class PatchrightBackend:
 # server (the bare ws:// form drops during the handshake).
 _OBSCURA_DEFAULT_CDP_URL = "http://127.0.0.1:9222"
 
+
+def resolve_obscura_cdp_url(explicit: str | None = None) -> str:
+    """Obscura CDP endpoint: explicit arg -> env -> conventional default.
+
+    Public so E1 (Crawl4AI, extract.py) and E2 (browser-use, browse.py) resolve
+    it identically — otherwise each would re-hardcode the default and they'd
+    drift the first time one changed.
+    """
+    return explicit or os.environ.get(
+        "SCRAPPER_TOOL_AGENT_OBSCURA_CDP_URL", _OBSCURA_DEFAULT_CDP_URL
+    )
+
+
 _OBSCURA_NOT_INSTALLED = (
     "Obscura backend connects to a running Obscura CDP server via Playwright.\n"
     "Install the [llm-agent] extra (brings Playwright): pip install scrapper-tool[llm-agent]\n"
@@ -365,10 +378,7 @@ class ObscuraBackend:
     name = "obscura"
 
     def __init__(self, *, cdp_url: str | None = None) -> None:
-        # Resolution order: explicit arg -> env -> conventional default.
-        self._cdp_url = cdp_url or os.environ.get(
-            "SCRAPPER_TOOL_AGENT_OBSCURA_CDP_URL", _OBSCURA_DEFAULT_CDP_URL
-        )
+        self._cdp_url = resolve_obscura_cdp_url(cdp_url)
 
     async def launch(
         self,

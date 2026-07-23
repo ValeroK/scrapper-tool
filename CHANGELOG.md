@@ -36,6 +36,19 @@ All notable changes to `scrapper-tool` are recorded here. Format follows [Keep a
   additive and only dragged other packages back.
 
 ### Added
+- **E1 renders through the Obscura CDP server when `browser="obscura"`.** Until
+  now that setting only validated the name — E1 still launched Crawl4AI's own
+  Chromium and the Obscura server was never touched. E1 now sets
+  `BrowserConfig(cdp_url=…, use_managed_browser=True)` (crawl4ai ignores `cdp_url`
+  without the managed flag) and drops the persistent profile, which is mutually
+  exclusive with a CDP attach. A contract test asserts the real crawl4ai
+  `BrowserConfig` still accepts these kwargs, so an upgrade that renames them
+  fails loudly instead of silently reverting to a local browser.
+- **`obscura_fetch` — dependency-light single-URL render** via
+  `obscura fetch --dump {html,text,links,markdown,…}`. No Playwright, no Camoufox
+  binary; `dump="markdown"` uses Obscura's built-in DOM→markdown as an E1-lite
+  for LLM-ready text. Single-page, so a non-zero exit raises rather than
+  returning an empty string an extractor would silently accept.
 - **Stealth-render cascade tier (no LLM).** `/scrape` and MCP `auto_scrape` now
   try a stealth-browser render plus the existing deterministic extractors
   between Pattern D and the LLM tiers, reported as `pattern_used="render"` with

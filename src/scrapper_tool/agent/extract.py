@@ -132,16 +132,7 @@ async def run_extract(
     # pass it to Crawl4AI's BrowserConfig so cookies (cf_clearance) persist
     # on disk between launches against the same dir. Crawl4AI honors
     # user_data_dir only when use_persistent_context=True — both must be set.
-    browser_cfg_kwargs: dict[str, Any] = {
-        "headless": not config.headful,
-        "browser_type": _crawl4ai_browser_type(config.browser),
-        "proxy": config.proxy,
-        "verbose": False,
-    }
-    if config.user_data_dir:
-        browser_cfg_kwargs["user_data_dir"] = config.user_data_dir
-        browser_cfg_kwargs["use_persistent_context"] = True
-    browser_cfg = BrowserConfig(**browser_cfg_kwargs)
+    browser_cfg = BrowserConfig(**_browser_cfg_kwargs(config))
     run_cfg = CrawlerRunConfig(
         cache_mode=CacheMode.BYPASS,
         extraction_strategy=extraction_strategy,
@@ -212,6 +203,41 @@ def _looks_like_css_schema(schema: dict[str, object]) -> bool:
     return "baseSelector" in schema and "fields" in schema
 
 
+def _browser_cfg_kwargs(config: AgentConfig) -> dict[str, Any]:
+    """Assemble Crawl4AI ``BrowserConfig`` kwargs for E1.
+
+    Two backend-specific branches:
+
+    * ``user_data_dir`` — a persistent on-disk profile so cf_clearance survives
+      between launches. Crawl4AI honours it only with ``use_persistent_context``.
+    * ``browser="obscura"`` — E3: render THROUGH the running Obscura server
+      rather than Crawl4AI's own Chromium. Crawl4AI honours ``cdp_url`` only with
+      ``use_managed_browser`` (otherwise it launches its own and the endpoint is
+      silently ignored), and that attach is mutually exclusive with a persistent
+      profile — the external browser owns its own — so the profile is dropped.
+    """
+    kwargs: dict[str, Any] = {
+        "headless": not config.headful,
+        "browser_type": _crawl4ai_browser_type(config.browser),
+        "proxy": config.proxy,
+        "verbose": False,
+    }
+    if config.user_data_dir:
+        kwargs["user_data_dir"] = config.user_data_dir
+        kwargs["use_persistent_context"] = True
+    if config.browser == "obscura":
+        from scrapper_tool.agent.backends.browser import (  # noqa: PLC0415
+            resolve_obscura_cdp_url,
+        )
+
+        kwargs["cdp_url"] = resolve_obscura_cdp_url(config.obscura_cdp_url)
+        kwargs["use_managed_browser"] = True
+        kwargs.pop("user_data_dir", None)
+        kwargs.pop("use_persistent_context", None)
+        _logger.info("agent.extract.obscura_cdp", cdp_url=kwargs["cdp_url"])
+    return kwargs
+
+
 def _crawl4ai_browser_type(name: str) -> str:
     """Map our backend name to Crawl4AI's ``browser_type`` argument.
 
@@ -225,9 +251,10 @@ def _crawl4ai_browser_type(name: str) -> str:
         "camoufox": "firefox",
         "patchright": "chromium",
         "scrapling": "chromium",
-        # Obscura is Chromium-class over CDP. NB: E1 launches Crawl4AI's own
-        # Chromium, not the Obscura server — real E1-via-CDP (BrowserConfig
-        # cdp_url) is a documented follow-up. Obscura's stealth applies in E2.
+        # Obscura is Chromium-class. E1 now renders THROUGH the running Obscura
+        # server via BrowserConfig(cdp_url=…, use_managed_browser=True) — see
+        # run_extract — so browser_type is only the fallback shape if that
+        # attach path is ever bypassed.
         "obscura": "chromium",
     }.get(name, "chromium")
 
