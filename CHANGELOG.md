@@ -4,6 +4,37 @@ All notable changes to `scrapper-tool` are recorded here. Format follows [Keep a
 
 ## [Unreleased]
 
+### Changed (dependencies)
+- **browser-use 0.5.9 → 0.13.6 (BREAKING for E2).** 0.13 dropped the
+  `browser_context=` / `page=` handoff our stealth fix used and attaches over CDP
+  only — while *silently ignoring* the old kwargs rather than raising, so an
+  un-ported upgrade would have run E2 on an unpatched Chromium with no stealth
+  and no error. E2 now attaches via `BrowserSession(cdp_url=…, keep_alive=True)`.
+  Patchright launches with a debug port and Obscura passes its own CDP endpoint;
+  Camoufox has no CDP (it's Firefox → WebDriver BiDi), so E2 on Camoufox now
+  raises `ConfigurationError` naming the fix rather than silently downgrading.
+  Camoufox stays the default for the render tier and E1. Contract tests assert
+  the *real* installed browser-use API, since every mocked test passed against
+  the removed one.
+- **TLS impersonation ladder refreshed** to `chrome146 / chrome142 / safari260 /
+  firefox147 / chrome133a` (was `chrome133a / chrome124 / safari18_0 /
+  firefox135`) for curl_cffi 0.15, and the single-shot path to `chrome146`. A
+  stale ladder is itself a fingerprint — impersonating a Chrome build no real
+  user runs is as identifying as a bot UA. Two drift guards added: every rung is
+  checked against curl_cffi's own target list, and the lead profile against the
+  newest Chrome it ships.
+- **Stopped resolving pre-releases.** `prerelease = "allow"` (left over from when
+  Crawl4AI was pre-release only) was dragging the tree onto alphas — lxml 7.0a3,
+  pydantic 2.14a1, curl-cffi 0.16b1, mcp 2.0b2. Removed.
+- **Upgraded** mypy 1.20→2.3, fastapi 0.135→0.139, uvicorn 0.46→0.51, crawl4ai
+  0.9.0→0.9.2, selectolax 0.4.7→0.4.11, lxml 6.1.0→6.1.1, pillow 12.2→12.3, mcp
+  1.27→1.28, pytest 9.0→9.1, ruff 0.15.12→0.15.22. In the `[full]` environment
+  browser-use's exact pins hold pydantic at 2.12.5 and scrapling at 0.4.6
+  (accepted, not overridden — they guard browser-use's LLM-tool-call and CDP
+  paths); a `[hostile]`-only install still gets scrapling 0.4.11. browser-use's
+  exact `typing-extensions==4.15.0` pin *is* overridden (→≥4.16), as it's
+  additive and only dragged other packages back.
+
 ### Added
 - **Stealth-render cascade tier (no LLM).** `/scrape` and MCP `auto_scrape` now
   try a stealth-browser render plus the existing deterministic extractors
