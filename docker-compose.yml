@@ -235,7 +235,14 @@ services:
   # SCRAPPER_TOOL_AGENT_OBSCURA_CDP_URL=http://obscura:9222 (compose network).
   obscura:
     profiles: ["obscura"]
-    image: h4ckf0r0day/obscura:latest
+    # Built from source WITH --features stealth (TLS impersonation + tracker
+    # blocking). The Hub image h4ckf0r0day/obscura:latest is NOT that build, so
+    # its --stealth flag only gives fingerprint consistency. Build with:
+    #   docker compose --profile obscura build
+    build:
+      context: .
+      dockerfile: Dockerfile.obscura
+    image: scrapper-tool-obscura:stealth
     container_name: obscura
     # --host 0.0.0.0 is REQUIRED: obscura defaults to 127.0.0.1 inside the
     # container, which the compose network / published port can't reach.
