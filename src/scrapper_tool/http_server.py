@@ -1274,6 +1274,147 @@ async def _d_fetch_with_smart_defaults(req: Any) -> tuple[str, int, str]:
     return html, status_code, final_url
 
 
+def _render_tier_enabled() -> bool:
+    """Render tier is on by default; ``SCRAPPER_TOOL_RENDER_TIER=0`` disables it."""
+    raw = os.environ.get("SCRAPPER_TOOL_RENDER_TIER")
+    if raw is None or not raw.strip():
+        return True
+    return raw.strip().lower() in {"1", "true", "yes", "on"}
+
+
+async def _do_render_step(
+    req: Any,
+    attempts: list[str],
+    start: float,
+) -> tuple[dict[str, Any] | None, BaseException | None]:
+    """Stealth-browser render tier — rendered HTML + deterministic extract, NO LLM.
+
+    Sits between Pattern D and the LLM tiers. Measured value: on a target where
+    the HTTP ladder got 403 on all four TLS profiles, a single Camoufox render
+    returned 1.35 MB of real content; on another, rendering turned 4 extractable
+    headlines into 212. Both without an LLM call, so this is strictly cheaper and
+    more reliable than escalating to E1/E2.
+
+    Returns ``(response, error)`` — response when the render produced an accepted
+    signal, else None so the cascade falls through to the LLM tiers.
+    """
+    log: list[dict[str, Any]] = req.__dict__.setdefault("_escalation_log", [])
+    if not _render_tier_enabled():
+        return None, None
+
+    # Resolve imports BEFORE claiming an attempt. Mirrors Pattern D's
+    # `hostile_skipped` convention: a tier that could not even start must not
+    # appear in `pattern_attempts`, or the log implies a render was tried.
+    try:
+        from scrapper_tool.agent import AgentConfig  # noqa: PLC0415
+        from scrapper_tool.agent.backends.browser import BrowserLaunchOptions  # noqa: PLC0415
+        from scrapper_tool.patterns.render import render_html  # noqa: PLC0415
+    except ImportError as exc:
+        _logger.info("scrape.render.skipped_no_extra", url=req.url, error=str(exc)[:160])
+        log.append(
+            _build_log_entry(
+                "render",
+                outcome="skipped",
+                reason="extra_missing",
+                duration_s=0.0,
+                detail="[llm-agent] extra not installed",
+            )
+        )
+        return None, None
+
+    attempts.append("render")
+    r_start = time.perf_counter()
+    try:
+        # Same config path as the E tiers, so `_build_overrides` carries the
+        # cascade-resolved profile dir (clearance cookies from earlier rungs)
+        # and per-request browser/timeout overrides through unchanged.
+        cfg = AgentConfig.from_env().merged(**_build_overrides(req))
+        options = BrowserLaunchOptions(
+            headful=cfg.headful,
+            proxy=cfg.proxy,
+            user_data_dir=cfg.user_data_dir,
+            headless_mode=cfg.camoufox_headless_mode,
+            block_images=cfg.block_images,
+            fingerprint_preset=cfg.fingerprint_preset,
+            os=cfg.camoufox_os,
+            locale=cfg.camoufox_locale,
+        )
+        result = await render_html(
+            req.url,
+            browser=cfg.browser,
+            timeout_s=cfg.timeout_s,
+            options=options,
+            cdp_url=cfg.obscura_cdp_url,
+        )
+    except Exception as exc:
+        _logger.warning("scrape.render.failed", url=req.url, error=str(exc)[:200])
+        log.append(
+            _build_log_entry(
+                "render",
+                outcome="failed",
+                reason="exception",
+                duration_s=time.perf_counter() - r_start,
+                detail=f"{type(exc).__name__}: {exc!s}"[:200],
+            )
+        )
+        return None, exc
+
+    html, status_code, final_url = result.html, result.status, result.final_url
+    req.__dict__["_render_intermediate_html"] = html
+
+    css_data, product, json_ld, microdata_price = _run_d_extractors(req, html, final_url)
+    success = _classify_extraction_success(
+        req,
+        status_code=status_code,
+        text=html,
+        product=product,
+        microdata_price=microdata_price,
+        json_ld=json_ld,
+        css_data=css_data,
+    )
+
+    duration = time.perf_counter() - r_start
+    if not success:
+        _logger.info("scrape.render.no_signal", url=req.url, status_code=status_code)
+        log.append(
+            _build_log_entry(
+                "render",
+                outcome="rejected",
+                reason="no_signal",
+                duration_s=duration,
+                detail=f"status={status_code}; rendered {len(html)} bytes, no signal",
+            )
+        )
+        return None, None
+
+    _logger.info("scrape.render.win", url=req.url, status_code=status_code, bytes=len(html))
+    log.append(_build_log_entry("render", outcome="won", reason="ok", duration_s=duration))
+    return (
+        {
+            "url": final_url,
+            "pattern_used": "render",
+            "pattern_attempts": attempts,
+            "escalation_log": list(log),
+            "product": product,
+            "data": css_data,
+            "raw_text": html,
+            "intermediate_raw_text": html,
+            "json_ld": json_ld,
+            "microdata_price": microdata_price,
+            "rendered_markdown": None,
+            "screenshots": None,
+            "tokens_used": 0,  # the point of this tier: zero LLM
+            "steps_used": 0,
+            "blocked": False,
+            "error": None,
+            "hostile_skipped": False,
+            "is_structured": True,
+            "duration_s": time.perf_counter() - start,
+        },
+        None,
+    )
+
+
 def _run_d_extractors(
     req: Any, html: str, final_url: str
 ) -> tuple[
@@ -1674,6 +1815,17 @@ async def _do_scrape_inner(req: Any, attempts: list[str], start: float) -> dict[
         if d_error is not None:
             last_error = d_error
 
+        # ----- Render (stealth browser, NO LLM) -------------------------
+        # Deliberately between D and the LLM tiers: a plain stealth render plus
+        # the deterministic extractors beats an LLM on both cost and
+        # reliability, so the LLM stays the last resort rather than the first
+        # escalation.
+        r_response, r_error = await _do_render_step(req, attempts, start)
+        if r_response is not None:
+            return r_response
+        if r_error is not None:
+            last_error = r_error
+
     # ----- E1 → E2 escalation -----
     return await _do_scrape_e_tier(req, attempts, start, hostile_skipped, last_error)
 
@@ -1690,9 +1842,9 @@ def _scrape_response_from_agent(
     """Convert an :class:`AgentResult` into the /scrape response shape.
 
     v1.4.0: ``req`` (optional, default None for back-compat) is read for
-    ``intermediate_raw_text`` (D's HTML when D ran prior) and the
-    ``escalation_log`` accumulator. Both default to None / empty when
-    no req is threaded.
+    ``intermediate_raw_text`` (the best pre-LLM HTML captured by an earlier
+    tier) and the ``escalation_log`` accumulator. Both default to None / empty
+    when no req is threaded.
     """
     import base64  # noqa: PLC0415
 
@@ -1700,7 +1852,14 @@ def _scrape_response_from_agent(
     if result.screenshots:
         screenshots = [base64.b64encode(s).decode("ascii") for s in result.screenshots[:3]]
 
-    intermediate = req.__dict__.get("_d_intermediate_html") if req is not None else None
+    # Prefer the render tier's HTML when it ran — it's strictly richer than D's
+    # (rendered DOM vs a possibly-unhydrated fetch), and it's the debugging
+    # artefact you want when the LLM tier is being asked why it was needed.
+    intermediate = None
+    if req is not None:
+        intermediate = req.__dict__.get("_render_intermediate_html") or req.__dict__.get(
+            "_d_intermediate_html"
+        )
     log: list[dict[str, Any]] = (
         list(req.__dict__.get("_escalation_log", [])) if req is not None else []
     )

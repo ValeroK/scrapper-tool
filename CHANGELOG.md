@@ -5,6 +5,19 @@ All notable changes to `scrapper-tool` are recorded here. Format follows [Keep a
 ## [Unreleased]
 
 ### Added
+- **Stealth-render cascade tier (no LLM).** `/scrape` and MCP `auto_scrape` now
+  try a stealth-browser render plus the existing deterministic extractors
+  between Pattern D and the LLM tiers, reported as `pattern_used="render"` with
+  `tokens_used=0`. On by default (`SCRAPPER_TOOL_RENDER_TIER=0` disables);
+  skipped without an entry in `pattern_attempts` when `[llm-agent]` is absent.
+  Measured motivation: one target returned 403 on all four TLS profiles while
+  rendering 1.35 MB of genuine content, and another went from 4 extractable
+  headlines to 212 once rendered — both then extractable with zero tokens, so
+  the LLM is now genuinely the last resort rather than the first escalation.
+  Success is judged on extracted content, not status code, so a 403 carrying a
+  real rendered DOM is a win. The cascade-resolved profile directory is shared
+  with the browser, carrying clearance cookies forward from earlier rungs, and
+  the rendered DOM becomes `intermediate_raw_text` when the LLM tier still runs.
 - **Obscura browser backend (experimental).** `browser="obscura"` connects to
   an external Obscura CDP server (`obscura serve`) via Playwright
   `connect_over_cdp`, returning a real Playwright browser that drives E2

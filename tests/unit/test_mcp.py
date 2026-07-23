@@ -463,6 +463,193 @@ class TestAutoScrapeWithPatternD:
         assert result["hostile_skipped"] is True
 
 
+# ---- B2: stealth-render tier (MCP parity with REST) -----------------------
+
+
+_RENDER_PRODUCT_HTML = (
+    '<html><head><script type="application/ld+json">'
+    '{"@context":"https://schema.org","@type":"Product","name":"Rendered Widget",'
+    '"sku":"R1","offers":{"@type":"Offer","price":"12.34","priceCurrency":"USD"}}'
+    "</script></head><body></body></html>"
+)
+
+
+def _install_fake_render_mcp(
+    monkeypatch: pytest.MonkeyPatch,
+    *,
+    html: str = _RENDER_PRODUCT_HTML,
+    status: int = 200,
+    error: BaseException | None = None,
+) -> None:
+    """Enable the render tier (off by default in tests) with a fake browser."""
+    import scrapper_tool.patterns.render as render_mod
+
+    monkeypatch.setenv("SCRAPPER_TOOL_RENDER_TIER", "1")
+
+    async def fake_render_html(url: str, **_kwargs: Any) -> Any:
+        if error is not None:
+            raise error
+        return render_mod.RenderResult(html=html, status=status, final_url=url)
+
+    monkeypatch.setattr(render_mod, "render_html", fake_render_html)
+
+
+class TestAutoScrapeRenderTier:
+    """The MCP cascade must have the same tiers as REST, in the same order.
+
+    REST and MCP have drifted before (Pattern D was reachable from one and not
+    the other for a whole release), so parity gets pinned explicitly rather than
+    assumed.
+    """
+
+    @pytest.mark.asyncio
+    async def test_render_wins_before_the_llm_tier(
+        self,
+        server: object,
+        fake_curl: type[FakeCurlSession],
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        fake_curl.STATUS_FOR_PROFILE = dict.fromkeys(
+            ("chrome133a", "chrome124", "safari18_0", "firefox135"), 403
+        )
+        monkeypatch.setattr(mcp_module, "_try_pattern_d_for_auto_scrape", _skip_d_for_auto_scrape)
+        _install_fake_render_mcp(monkeypatch)
+
+        tool = _get_tool(server, "auto_scrape")
+        result = await tool.fn(url="https://walled.com/p")  # type: ignore[attr-defined]
+
+        assert result["pattern_used"] == "render"
+        assert result["pattern_attempts"] == ["a_b_c", "render"]
+        assert result["product"]["name"] == "Rendered Widget"
+        assert result["blocked"] is False
+        assert result["is_structured"] is True
+
+    @pytest.mark.asyncio
+    async def test_render_accepts_a_403_carrying_real_content(
+        self,
+        server: object,
+        fake_curl: type[FakeCurlSession],
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """Same store.mopar.com case the REST tier pins — content, not status."""
+        fake_curl.STATUS_FOR_PROFILE = dict.fromkeys(
+            ("chrome133a", "chrome124", "safari18_0", "firefox135"), 403
+        )
+        monkeypatch.setattr(mcp_module, "_try_pattern_d_for_auto_scrape", _skip_d_for_auto_scrape)
+        _install_fake_render_mcp(monkeypatch, status=403)
+
+        tool = _get_tool(server, "auto_scrape")
+        result = await tool.fn(url="https://walled.com/p")  # type: ignore[attr-defined]
+
+        assert result["pattern_used"] == "render"
+        assert result["product"]["name"] == "Rendered Widget"
+
+    @pytest.mark.asyncio
+    async def test_render_without_signal_escalates_to_e1(
+        self,
+        server: object,
+        fake_curl: type[FakeCurlSession],
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        import sys
+
+        fake_curl.STATUS_FOR_PROFILE = dict.fromkeys(
+            ("chrome133a", "chrome124", "safari18_0", "firefox135"), 403
+        )
+        monkeypatch.setattr(mcp_module, "_try_pattern_d_for_auto_scrape", _skip_d_for_auto_scrape)
+        _install_fake_render_mcp(monkeypatch, html="<html><body>nothing</body></html>")
+
+        agent_module = _fake_agent_module_for_e1()
+        monkeypatch.setitem(sys.modules, "scrapper_tool.agent", agent_module)
+
+        tool = _get_tool(server, "auto_scrape")
+        result = await tool.fn(url="https://walled.com/p")  # type: ignore[attr-defined]
+
+        assert result["pattern_used"] == "e1"
+        assert result["pattern_attempts"] == ["a_b_c", "render", "e1"]
+
+    @pytest.mark.asyncio
+    async def test_render_failure_falls_through_to_e1(
+        self,
+        server: object,
+        fake_curl: type[FakeCurlSession],
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        import sys
+
+        fake_curl.STATUS_FOR_PROFILE = dict.fromkeys(
+            ("chrome133a", "chrome124", "safari18_0", "firefox135"), 403
+        )
+        monkeypatch.setattr(mcp_module, "_try_pattern_d_for_auto_scrape", _skip_d_for_auto_scrape)
+        _install_fake_render_mcp(monkeypatch, error=RuntimeError("camoufox crashed"))
+
+        agent_module = _fake_agent_module_for_e1()
+        monkeypatch.setitem(sys.modules, "scrapper_tool.agent", agent_module)
+
+        tool = _get_tool(server, "auto_scrape")
+        result = await tool.fn(url="https://walled.com/p")  # type: ignore[attr-defined]
+
+        assert result["pattern_used"] == "e1"
+        assert result["pattern_attempts"] == ["a_b_c", "render", "e1"]
+
+    @pytest.mark.asyncio
+    async def test_tier_can_be_disabled(
+        self,
+        server: object,
+        fake_curl: type[FakeCurlSession],
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        import sys
+
+        fake_curl.STATUS_FOR_PROFILE = dict.fromkeys(
+            ("chrome133a", "chrome124", "safari18_0", "firefox135"), 403
+        )
+        monkeypatch.setattr(mcp_module, "_try_pattern_d_for_auto_scrape", _skip_d_for_auto_scrape)
+        _install_fake_render_mcp(monkeypatch)
+        monkeypatch.setenv("SCRAPPER_TOOL_RENDER_TIER", "0")
+
+        agent_module = _fake_agent_module_for_e1()
+        monkeypatch.setitem(sys.modules, "scrapper_tool.agent", agent_module)
+
+        tool = _get_tool(server, "auto_scrape")
+        result = await tool.fn(url="https://walled.com/p")  # type: ignore[attr-defined]
+
+        assert result["pattern_attempts"] == ["a_b_c", "e1"]
+
+
+async def _skip_d_for_auto_scrape(*_args: Any, **_kwargs: Any) -> tuple[None, None, bool]:
+    """Stand in for a missing [hostile] extra: D contributes nothing."""
+    return None, None, True
+
+
+def _fake_agent_module_for_e1() -> MagicMock:
+    """A ``scrapper_tool.agent`` stand-in whose E1 extract always succeeds."""
+    fake_result = MagicMock()
+    fake_result.mode = "extract"
+    fake_result.data = {"name": "Salvaged"}
+    fake_result.final_url = "https://walled.com/p"
+    fake_result.rendered_markdown = "# Salvaged"
+    fake_result.screenshots = None
+    fake_result.actions = []
+    fake_result.tokens_used = 10
+    fake_result.steps_used = 1
+    fake_result.blocked = False
+    fake_result.error = None
+    fake_result.duration_s = 1.0
+
+    agent_module = MagicMock()
+    agent_module.AgentConfig = MagicMock()
+    agent_module.AgentConfig.from_env = MagicMock(
+        return_value=MagicMock(merged=lambda **_: MagicMock())
+    )
+
+    async def fake_extract(*_args: Any, **_kwargs: Any) -> Any:
+        return fake_result
+
+    agent_module.agent_extract = fake_extract
+    return agent_module
+
+
 # ---- Truncation -----------------------------------------------------------
 
 

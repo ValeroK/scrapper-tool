@@ -74,6 +74,7 @@ so a single fetch can't exhaust the agent's context window.
 from __future__ import annotations
 
 import base64
+import os
 import sys
 from typing import Any
 
@@ -383,14 +384,19 @@ async def _auto_scrape_inner(
     except BlockedError as exc:
         last_error = f"a_b_c: {exc}"
 
-    # ----- Pattern D -----
-    d_payload, d_error, hostile_skipped = await _try_pattern_d_for_auto_scrape(
-        url, schema_json, attempts, timeout_s, pattern_d_network_idle, user_data_dir
+    # ----- Deterministic tiers: Pattern D, then stealth render (no LLM) -----
+    payload, last_error, hostile_skipped = await _run_deterministic_tiers(
+        url=url,
+        schema_json=schema_json,
+        attempts=attempts,
+        timeout_s=timeout_s,
+        pattern_d_network_idle=pattern_d_network_idle,
+        browser=browser,
+        user_data_dir=user_data_dir,
+        last_error=last_error,
     )
-    if d_payload is not None:
-        return d_payload
-    if d_error is not None:
-        last_error = d_error
+    if payload is not None:
+        return payload
 
     # ----- E1 → E2 escalation -----
     return await _continue_to_e_tier(
@@ -405,6 +411,43 @@ async def _auto_scrape_inner(
         hostile_skipped,
         user_data_dir,
     )
+
+
+async def _run_deterministic_tiers(
+    *,
+    url: str,
+    schema_json: dict[str, Any] | None,
+    attempts: list[str],
+    timeout_s: float,
+    pattern_d_network_idle: bool,
+    browser: str | None,
+    user_data_dir: str | None,
+    last_error: str | None,
+) -> tuple[dict[str, Any] | None, str | None, bool]:
+    """Run the no-LLM tiers between the HTTP ladder and the agent tiers.
+
+    Pattern D (Scrapling) then the stealth render, in cost order. Grouped behind
+    one seam because they answer the same question — "can we get this
+    deterministically?" — and because either failing must still let the next one
+    try. Returns ``(payload, last_error, hostile_skipped)``; a None payload means
+    keep escalating to E1.
+    """
+    d_payload, d_error, hostile_skipped = await _try_pattern_d_for_auto_scrape(
+        url, schema_json, attempts, timeout_s, pattern_d_network_idle, user_data_dir
+    )
+    if d_payload is not None:
+        return d_payload, last_error, hostile_skipped
+    if d_error is not None:
+        last_error = d_error
+
+    r_payload, r_error = await _try_render_for_auto_scrape(
+        url, schema_json, attempts, timeout_s, browser, user_data_dir
+    )
+    if r_payload is not None:
+        return r_payload, last_error, hostile_skipped
+    if r_error is not None:
+        last_error = r_error
+    return None, last_error, hostile_skipped
 
 
 async def _try_pattern_d_for_auto_scrape(
@@ -490,6 +533,105 @@ async def _try_pattern_d_for_auto_scrape(
         },
         None,
         False,
+    )
+
+
+def _render_tier_enabled() -> bool:
+    """Render tier is on by default; ``SCRAPPER_TOOL_RENDER_TIER=0`` disables it."""
+    raw = os.environ.get("SCRAPPER_TOOL_RENDER_TIER")
+    if raw is None or not raw.strip():
+        return True
+    return raw.strip().lower() in {"1", "true", "yes", "on"}
+
+
+async def _try_render_for_auto_scrape(
+    url: str,
+    schema_json: dict[str, Any] | None,
+    attempts: list[str],
+    timeout_s: float,
+    browser: str | None = None,
+    user_data_dir: str | None = None,
+) -> tuple[dict[str, Any] | None, str | None]:
+    """Stealth-render step for the MCP ``auto_scrape`` tool — no LLM.
+
+    REST parity for :func:`scrapper_tool.http_server._do_render_step`. Returns
+    ``(success_payload, last_error)``; ``(None, None)`` means "no signal, keep
+    escalating".
+    """
+    if not _render_tier_enabled():
+        return None, None
+    try:
+        from scrapper_tool.agent import AgentConfig  # noqa: PLC0415
+        from scrapper_tool.agent.backends.browser import BrowserLaunchOptions  # noqa: PLC0415
+        from scrapper_tool.patterns.render import render_html  # noqa: PLC0415
+    except ImportError:
+        # [llm-agent] extra absent — skip without touching `attempts`.
+        return None, None
+
+    attempts.append("render")
+    overrides: dict[str, Any] = {"timeout_s": timeout_s}
+    if browser:
+        overrides["browser"] = browser
+    if user_data_dir:
+        overrides["user_data_dir"] = user_data_dir
+    cfg = AgentConfig.from_env().merged(**overrides)
+    options = BrowserLaunchOptions(
+        headful=cfg.headful,
+        proxy=cfg.proxy,
+        user_data_dir=cfg.user_data_dir,
+        headless_mode=cfg.camoufox_headless_mode,
+        block_images=cfg.block_images,
+        fingerprint_preset=cfg.fingerprint_preset,
+        os=cfg.camoufox_os,
+        locale=cfg.camoufox_locale,
+    )
+    try:
+        result = await render_html(
+            url,
+            browser=cfg.browser,
+            timeout_s=cfg.timeout_s,
+            options=options,
+            cdp_url=cfg.obscura_cdp_url,
+        )
+    except Exception as exc:  # broad: any browser failure falls through to E1
+        return None, f"render: {exc}"
+
+    html, status, final_url = result.html, result.status, result.final_url
+    product = _structured_product(html, final_url)
+    price = _structured_price(html)
+    json_ld = _structured_json_ld(html, final_url)
+    accepted = classify_extraction_success(
+        mode="auto",
+        schema_json=schema_json,
+        force_llm_extract=False,
+        status_code=status,
+        text=html,
+        product=product,
+        microdata_price=price,
+        json_ld=json_ld,
+    )
+    if not accepted:
+        return None, None
+
+    truncated_text, truncated = _truncate(html)
+    return (
+        {
+            "pattern_used": "render",
+            "pattern_attempts": attempts,
+            "url": final_url,
+            "winning_profile": cfg.browser,
+            "product": product,
+            "microdata_price": price,
+            "data": None,
+            "rendered_markdown": None,
+            "body": truncated_text,
+            "truncated": truncated,
+            "blocked": False,
+            "error": None,
+            "hostile_skipped": False,
+            "is_structured": True,
+        },
+        None,
     )
 
 

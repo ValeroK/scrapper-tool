@@ -1427,6 +1427,267 @@ class TestScrapeWithPatternD:
         assert not any("hostile_not_installed" in w for w in warnings)
 
 
+# --- B2: stealth-render cascade tier ---------------------------------------
+
+
+def _install_fake_render(
+    monkeypatch: pytest.MonkeyPatch,
+    *,
+    html: str = _PRODUCT_HTML,
+    status: int = 200,
+    final_url: str = "https://walled.com/p",
+    error: BaseException | None = None,
+    calls: list[dict[str, Any]] | None = None,
+) -> None:
+    """Enable the render tier and replace ``render_html`` with a fake.
+
+    The tier is off by default in tests (see ``tests/conftest.py``) so nothing
+    launches a real browser; each render test opts back in explicitly.
+    """
+    import scrapper_tool.patterns.render as render_mod
+
+    monkeypatch.setenv("SCRAPPER_TOOL_RENDER_TIER", "1")
+
+    async def fake_render_html(url: str, **kwargs: Any) -> Any:
+        if calls is not None:
+            calls.append({"url": url, **kwargs})
+        if error is not None:
+            raise error
+        return render_mod.RenderResult(html=html, status=status, final_url=final_url)
+
+    monkeypatch.setattr(render_mod, "render_html", fake_render_html)
+
+
+class TestScrapeRenderTier:
+    """B2 — a stealth render sits between Pattern D and the LLM tiers.
+
+    The whole point is cost: rendering plus the deterministic extractors is both
+    cheaper and more reliable than an LLM. Measured on real targets: one site
+    403'd all four TLS profiles yet rendered 1.35 MB of genuine content, and
+    another turned 4 extractable headlines into 212. So a render that yields a
+    signal must WIN outright, with zero tokens spent — that's what these pin.
+    """
+
+    @pytest.mark.asyncio
+    async def test_render_wins_before_any_llm_tier(
+        self, app_no_auth: Any, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from scrapper_tool.errors import BlockedError
+
+        async def fake_ladder(method: str, url: str, **kwargs: Any) -> Any:
+            raise BlockedError("all profiles 403")
+
+        monkeypatch.setattr("scrapper_tool.ladder.request_with_ladder", fake_ladder)
+        monkeypatch.setattr(http_server, "_hostile_available", lambda: False)
+        _install_fake_render(monkeypatch)
+        # If the cascade reaches E1 despite a good render, this blows up loudly.
+        _mock_agent_module(monkeypatch, extract_side_effect=AssertionError("E1 must not run"))
+
+        async with _client(app_no_auth) as client:
+            resp = await client.post("/scrape", json={"url": "https://walled.com/p"})
+
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["pattern_used"] == "render"
+        assert body["pattern_attempts"] == ["a_b_c", "render"]
+        assert body["product"]["name"] == "Widget"
+        assert body["tokens_used"] == 0, "the render tier must not spend LLM tokens"
+        assert body["is_structured"] is True
+
+    @pytest.mark.asyncio
+    async def test_render_runs_after_d_not_before(
+        self, app_no_auth: Any, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Ordering is deliberate: Scrapling is cheaper than a full browser."""
+        from scrapper_tool.errors import BlockedError
+
+        async def fake_ladder(method: str, url: str, **kwargs: Any) -> Any:
+            raise BlockedError("blocked")
+
+        monkeypatch.setattr("scrapper_tool.ladder.request_with_ladder", fake_ladder)
+        # D runs but finds nothing extractable.
+        _install_fake_hostile_client(
+            monkeypatch, response=_FakeScraplingResponse(html="<html><body>nope</body></html>")
+        )
+        _install_fake_render(monkeypatch)
+
+        async with _client(app_no_auth) as client:
+            resp = await client.post("/scrape", json={"url": "https://walled.com/p"})
+
+        body = resp.json()
+        assert body["pattern_used"] == "render"
+        assert body["pattern_attempts"] == ["a_b_c", "d", "render"]
+
+    @pytest.mark.asyncio
+    async def test_render_without_signal_escalates_to_e1(
+        self, app_no_auth: Any, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from scrapper_tool.errors import BlockedError
+
+        async def fake_ladder(method: str, url: str, **kwargs: Any) -> Any:
+            raise BlockedError("blocked")
+
+        monkeypatch.setattr("scrapper_tool.ladder.request_with_ladder", fake_ladder)
+        monkeypatch.setattr(http_server, "_hostile_available", lambda: False)
+        _install_fake_render(monkeypatch, html="<html><body>no product here</body></html>")
+
+        fake_result = _fake_agent_result()
+        fake_result.final_url = "https://walled.com/p"
+        _mock_agent_module(monkeypatch, extract_result=fake_result)
+
+        async with _client(app_no_auth) as client:
+            resp = await client.post("/scrape", json={"url": "https://walled.com/p"})
+
+        body = resp.json()
+        assert body["pattern_used"] == "e1"
+        assert body["pattern_attempts"] == ["a_b_c", "render", "e1"]
+
+    @pytest.mark.asyncio
+    async def test_render_html_is_kept_as_intermediate_for_the_llm_tier(
+        self, app_no_auth: Any, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """When render can't close it out, its DOM is still the best artefact.
+
+        Richer than D's fetch, and it's what you read to answer "why did this
+        need an LLM?".
+        """
+        from scrapper_tool.errors import BlockedError
+
+        async def fake_ladder(method: str, url: str, **kwargs: Any) -> Any:
+            raise BlockedError("blocked")
+
+        monkeypatch.setattr("scrapper_tool.ladder.request_with_ladder", fake_ladder)
+        monkeypatch.setattr(http_server, "_hostile_available", lambda: False)
+        _install_fake_render(
+            monkeypatch, html="<html><body>rendered but unstructured</body></html>"
+        )
+
+        fake_result = _fake_agent_result()
+        fake_result.final_url = "https://walled.com/p"
+        _mock_agent_module(monkeypatch, extract_result=fake_result)
+
+        async with _client(app_no_auth) as client:
+            resp = await client.post("/scrape", json={"url": "https://walled.com/p"})
+
+        assert "rendered but unstructured" in resp.json()["intermediate_raw_text"]
+
+    @pytest.mark.asyncio
+    async def test_render_failure_falls_through_to_e1(
+        self, app_no_auth: Any, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from scrapper_tool.errors import BlockedError
+
+        async def fake_ladder(method: str, url: str, **kwargs: Any) -> Any:
+            raise BlockedError("blocked")
+
+        monkeypatch.setattr("scrapper_tool.ladder.request_with_ladder", fake_ladder)
+        monkeypatch.setattr(http_server, "_hostile_available", lambda: False)
+        _install_fake_render(monkeypatch, error=RuntimeError("camoufox crashed"))
+
+        fake_result = _fake_agent_result()
+        fake_result.final_url = "https://walled.com/p"
+        _mock_agent_module(monkeypatch, extract_result=fake_result)
+
+        async with _client(app_no_auth) as client:
+            resp = await client.post("/scrape", json={"url": "https://walled.com/p"})
+
+        body = resp.json()
+        assert body["pattern_used"] == "e1"
+        assert body["pattern_attempts"] == ["a_b_c", "render", "e1"]
+        render_rows = [r for r in body["escalation_log"] if r["step"] == "render"]
+        assert render_rows[0]["outcome"] == "failed"
+        assert "camoufox crashed" in render_rows[0]["detail"]
+
+    @pytest.mark.asyncio
+    async def test_render_accepts_a_403_carrying_real_content(
+        self, app_no_auth: Any, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """store.mopar.com: HTTP 403 with a genuine rendered DOM is a WIN.
+
+        Status is not the success signal for a rendered page — extracted content
+        is. Getting this backwards would throw away the exact case the render
+        tier exists to handle.
+        """
+        from scrapper_tool.errors import BlockedError
+
+        async def fake_ladder(method: str, url: str, **kwargs: Any) -> Any:
+            raise BlockedError("blocked")
+
+        monkeypatch.setattr("scrapper_tool.ladder.request_with_ladder", fake_ladder)
+        monkeypatch.setattr(http_server, "_hostile_available", lambda: False)
+        _install_fake_render(monkeypatch, status=403)
+
+        async with _client(app_no_auth) as client:
+            resp = await client.post("/scrape", json={"url": "https://walled.com/p"})
+
+        body = resp.json()
+        assert body["pattern_used"] == "render"
+        assert body["product"]["name"] == "Widget"
+        assert body["blocked"] is False
+
+    @pytest.mark.asyncio
+    async def test_profile_dir_is_shared_with_the_browser(
+        self, app_no_auth: Any, monkeypatch: pytest.MonkeyPatch, tmp_path: Any
+    ) -> None:
+        """Clearance cookies earned by earlier rungs must reach the render."""
+        from scrapper_tool.errors import BlockedError
+
+        async def fake_ladder(method: str, url: str, **kwargs: Any) -> Any:
+            raise BlockedError("blocked")
+
+        monkeypatch.setattr("scrapper_tool.ladder.request_with_ladder", fake_ladder)
+        monkeypatch.setattr(http_server, "_hostile_available", lambda: False)
+        calls: list[dict[str, Any]] = []
+        _install_fake_render(monkeypatch, calls=calls)
+
+        profile = str(tmp_path / "profile")
+        async with _client(app_no_auth) as client:
+            await client.post(
+                "/scrape",
+                json={"url": "https://walled.com/p", "persist_browser_profile_dir": profile},
+            )
+
+        assert calls[0]["options"].user_data_dir == profile
+
+    @pytest.mark.asyncio
+    async def test_tier_can_be_disabled(
+        self, app_no_auth: Any, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from scrapper_tool.errors import BlockedError
+
+        async def fake_ladder(method: str, url: str, **kwargs: Any) -> Any:
+            raise BlockedError("blocked")
+
+        monkeypatch.setattr("scrapper_tool.ladder.request_with_ladder", fake_ladder)
+        monkeypatch.setattr(http_server, "_hostile_available", lambda: False)
+        _install_fake_render(monkeypatch)
+        monkeypatch.setenv("SCRAPPER_TOOL_RENDER_TIER", "0")
+
+        fake_result = _fake_agent_result()
+        fake_result.final_url = "https://walled.com/p"
+        _mock_agent_module(monkeypatch, extract_result=fake_result)
+
+        async with _client(app_no_auth) as client:
+            resp = await client.post("/scrape", json={"url": "https://walled.com/p"})
+
+        assert resp.json()["pattern_attempts"] == ["a_b_c", "e1"]
+
+    def test_tier_is_on_by_default(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Guards the production default, which the test suite deliberately flips."""
+        monkeypatch.delenv("SCRAPPER_TOOL_RENDER_TIER", raising=False)
+        assert http_server._render_tier_enabled() is True
+
+    @pytest.mark.parametrize(
+        ("value", "expected"),
+        [("1", True), ("true", True), ("on", True), ("0", False), ("no", False), ("", True)],
+    )
+    def test_tier_toggle_parsing(
+        self, monkeypatch: pytest.MonkeyPatch, value: str, expected: bool
+    ) -> None:
+        monkeypatch.setenv("SCRAPPER_TOOL_RENDER_TIER", value)
+        assert http_server._render_tier_enabled() is expected
+
+
 # --- v1.2.0: is_structured response field ----------------------------------
 
 

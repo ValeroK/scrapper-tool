@@ -64,6 +64,18 @@ These settings drive `agent_extract`, `agent_browse`, and `agent_session`.
 | `headful` | `SCRAPPER_TOOL_AGENT_HEADFUL` | `0` (false) | `0`/`1`/`true`/`false`/`yes`/`no`/`on`/`off` | Show the browser window. Useful for debugging. |
 | `proxy` | `SCRAPPER_TOOL_AGENT_PROXY` | unset | URL string | `http://user:pass@host:port` or `socks5://host:port`. Forwarded to the browser. |
 
+#### Camoufox render knobs (v1.6.0+)
+
+Camoufox-native; the other backends ignore them.
+
+| Field | Env var | Default | Notes |
+|-------|---------|---------|-------|
+| `camoufox_headless_mode` | `SCRAPPER_TOOL_AGENT_CAMOUFOX_DISPLAY` | `headless` | `virtual` runs under an Xvfb virtual display — stealthier than pure headless, and the Docker image ships `xvfb`. Try this first on a target that challenges you in headless. |
+| `block_images` | `SCRAPPER_TOOL_AGENT_BLOCK_IMAGES` | `0` | Big speed/bandwidth win when only text/DOM matters. **Camoufox warns this can cause detection issues on major WAFs** — use on unprotected targets, not hard ones. |
+| `fingerprint_preset` | `SCRAPPER_TOOL_AGENT_FINGERPRINT_PRESET` | `0` | Use a real bundled fingerprint instead of a generated one (Camoufox 0.5+). |
+| `camoufox_os` | `SCRAPPER_TOOL_AGENT_CAMOUFOX_OS` | unset | e.g. `windows`, `macos`, `linux` — match the target's typical audience. |
+| `camoufox_locale` | `SCRAPPER_TOOL_AGENT_CAMOUFOX_LOCALE` | unset | e.g. `he-IL`. Matching the site's locale is a real signal on geo-targeted sites. |
+
 #### When to switch backends
 
 | Target | Use |
@@ -140,6 +152,30 @@ Without a key, Tier 2 is skipped — captcha-encountered → `AgentBlockedError(
 > **Legal/ToS warning.** Solving CAPTCHAs may violate the target site's ToS. Use only on sites you own or have written permission to automate.
 
 ---
+
+## Cascade tiers
+
+`/scrape` (REST) and `auto_scrape` (MCP) run the same ladder:
+
+```
+A/B/C  curl_cffi TLS impersonation  ->  cheapest
+D      Scrapling (hostile fetcher)
+render stealth browser + deterministic extractors   <- NO LLM
+E1     Crawl4AI + LLM
+E2     browser-use agent                            -> priciest
+```
+
+| Env var | Default | Purpose |
+|---------|---------|---------|
+| `SCRAPPER_TOOL_RENDER_TIER` | `1` (on) | The stealth-render tier. Set `0` to skip straight from D to the LLM tiers. |
+
+The render tier is on by default because it is both cheaper and more reliable
+than escalating to an LLM. Measured on real targets: one site returned 403 on
+all four TLS profiles yet rendered 1.35 MB of genuine content, and another went
+from 4 extractable headlines to 212 once rendered — in both cases the existing
+Pattern B/C/CSS extractors then did the job with **zero tokens**. It uses the
+browser configured by `SCRAPPER_TOOL_AGENT_BROWSER` and skips itself cleanly
+when the `[llm-agent]` extra isn't installed (no entry in `pattern_attempts`).
 
 ## Install extras
 
