@@ -153,8 +153,10 @@ def fake_handle(monkeypatch: pytest.MonkeyPatch) -> BrowserHandle:
 
     # Wire every backend's launch() to return this handle.
     async def fake_launch(
-        self: Any, *, headful: bool, proxy: str | None, fingerprint: Any, behavior: Any
+        self: Any, *, options: Any, fingerprint: Any, behavior: Any
     ) -> BrowserHandle:
+        # Record the options so tests can assert what the caller threaded through.
+        handle._launch_options = options  # type: ignore[attr-defined]
         return handle
 
     from scrapper_tool.agent.backends import browser as browser_mod
@@ -480,6 +482,35 @@ class TestCaptchaBehaviorWiring:
         )
         await browse_mod.run_browse("https://e.example", "do", config=cfg)
         assert fake_browser_use["agent_cls"].last_kwargs.get("on_step_end") is not None
+
+    async def test_run_browse_threads_config_into_launch_options(
+        self,
+        fake_browser_use: dict[str, Any],
+        fake_handle: BrowserHandle,
+        history_fixture: _FakeAgentHistoryList,
+    ) -> None:
+        """v1.6.0: config render knobs must reach the backend via BrowserLaunchOptions.
+
+        Regression guard for the bug where ``user_data_dir`` was threaded through the
+        cascade but never reached the browser (breaking cf_clearance carry-forward).
+        """
+        fake_browser_use["agent_cls"].next_history = history_fixture
+        cfg = AgentConfig(
+            browser="patchright",
+            captcha_solver="none",
+            behavior="off",
+            user_data_dir="/tmp/profile-y",
+            camoufox_headless_mode="virtual",
+            block_images=True,
+            camoufox_locale="he-IL",
+        )
+        await browse_mod.run_browse("https://e.example", "do", config=cfg)
+
+        opts = fake_handle._launch_options  # type: ignore[attr-defined]
+        assert opts.user_data_dir == "/tmp/profile-y"
+        assert opts.headless_mode == "virtual"
+        assert opts.block_images is True
+        assert opts.locale == "he-IL"
 
     async def test_obscura_browse_uses_playwright_path(
         self,

@@ -23,6 +23,7 @@ from scrapper_tool.agent.backends.behavior import (
 from scrapper_tool.agent.backends.browser import (
     BrowserBackend,
     BrowserHandle,
+    BrowserLaunchOptions,
     CamoufoxBackend,
     ObscuraBackend,
     PatchrightBackend,
@@ -69,6 +70,7 @@ __all__ = [
     "BehaviorPolicy",
     "BrowserBackend",
     "BrowserHandle",
+    "BrowserLaunchOptions",
     "BrowserforgeGenerator",
     "CamoufoxAutoSolver",
     "CamoufoxBackend",

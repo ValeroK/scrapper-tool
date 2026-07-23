@@ -25,7 +25,7 @@ from __future__ import annotations
 import os
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Any, Protocol
+from typing import TYPE_CHECKING, Any, Literal, Protocol
 
 from scrapper_tool._logging import get_logger
 
@@ -68,6 +68,34 @@ class BrowserHandle:
             await result
 
 
+@dataclass(frozen=True)
+class BrowserLaunchOptions:
+    """Launch-time knobs handed to a browser backend.
+
+    One object instead of an ever-growing kwargs list on :meth:`launch`.
+    Backends read the fields they understand and ignore the rest — the render/
+    stealth knobs below are Camoufox-native and are no-ops for Patchright /
+    Obscura / Scrapling.
+
+    ``user_data_dir`` is what makes a browser session *persistent*: cookies
+    (including Cloudflare's ``cf_clearance``) survive between launches against
+    the same directory. Threading it here is what lets the cascade's shared
+    profile dir actually reach the browser.
+
+    (``screen`` constraints are not exposed yet — they need a Browserforge
+    ``Screen`` object; add when a caller needs it.)
+    """
+
+    headful: bool = False
+    proxy: str | None = None
+    user_data_dir: str | None = None
+    headless_mode: Literal["headless", "virtual"] = "headless"
+    block_images: bool = False
+    fingerprint_preset: bool = False
+    os: str | None = None
+    locale: str | None = None
+
+
 class BrowserBackend(Protocol):
     """Protocol implemented by all browser backends."""
 
@@ -76,8 +104,7 @@ class BrowserBackend(Protocol):
     async def launch(
         self,
         *,
-        headful: bool,
-        proxy: str | None,
+        options: BrowserLaunchOptions,
         fingerprint: FingerprintGenerator,
         behavior: BehaviorPolicy,
     ) -> BrowserHandle:
@@ -109,11 +136,10 @@ class CamoufoxBackend:
 
     name = "camoufox"
 
-    async def launch(  # pragma: no cover — requires real Camoufox install
+    async def launch(
         self,
         *,
-        headful: bool,
-        proxy: str | None,
+        options: BrowserLaunchOptions,
         fingerprint: FingerprintGenerator,
         behavior: BehaviorPolicy,
     ) -> BrowserHandle:
@@ -128,14 +154,34 @@ class CamoufoxBackend:
         _ = fingerprint  # explicitly drop — Camoufox-internal
         _ = behavior  # behavior shaping is applied by callers per-action
 
+        # ``headless="virtual"`` runs under an Xvfb virtual display, which is
+        # meaningfully stealthier than pure headless (our Docker image ships
+        # xvfb). Otherwise fall back to the plain headless/headful boolean.
+        headless: bool | str
+        headless = "virtual" if options.headless_mode == "virtual" else (not options.headful)
+
         kwargs: dict[str, Any] = {
-            "headless": not headful,
+            "headless": headless,
             # Camoufox's geo+humanize features improve realism out of the box.
             "humanize": True,
             "geoip": True,
         }
-        if proxy:
-            kwargs["proxy"] = {"server": proxy}
+        if options.proxy:
+            kwargs["proxy"] = {"server": options.proxy}
+        # Persistent profile — cookies (incl. cf_clearance) survive between
+        # launches against the same dir. Camoufox honours user_data_dir only
+        # with persistent_context=True, so both must be set together.
+        if options.user_data_dir:
+            kwargs["user_data_dir"] = options.user_data_dir
+            kwargs["persistent_context"] = True
+        if options.block_images:
+            kwargs["block_images"] = True
+        if options.fingerprint_preset:
+            kwargs["fingerprint_preset"] = True
+        if options.os:
+            kwargs["os"] = options.os
+        if options.locale:
+            kwargs["locale"] = options.locale
 
         # Camoufox is untyped on some installs but typed on others; tolerate both.
         ctx = AsyncCamoufox(**kwargs)  # type: ignore[no-untyped-call,unused-ignore]
@@ -147,7 +193,12 @@ class CamoufoxBackend:
             except Exception as exc:
                 _logger.warning("agent.browser.camoufox.close_failed", error=str(exc))
 
-        _logger.info("agent.browser.camoufox.launched", headful=headful)
+        _logger.info(
+            "agent.browser.camoufox.launched",
+            headless=headless,
+            persistent=bool(options.user_data_dir),
+            block_images=options.block_images,
+        )
         return BrowserHandle(
             name="camoufox",
             playwright_browser=browser,
@@ -181,8 +232,7 @@ class PatchrightBackend:
     async def launch(  # pragma: no cover — requires real Patchright install
         self,
         *,
-        headful: bool,
-        proxy: str | None,
+        options: BrowserLaunchOptions,
         fingerprint: FingerprintGenerator,
         behavior: BehaviorPolicy,
     ) -> BrowserHandle:
@@ -198,9 +248,9 @@ class PatchrightBackend:
 
         fp = fingerprint.generate()
 
-        launch_kwargs: dict[str, Any] = {"headless": not headful}
-        if proxy:
-            launch_kwargs["proxy"] = {"server": proxy}
+        launch_kwargs: dict[str, Any] = {"headless": not options.headful}
+        if options.proxy:
+            launch_kwargs["proxy"] = {"server": options.proxy}
         # Patchright recommends Chromium for the stealth patches.
         browser = await pw.chromium.launch(**launch_kwargs)
 
@@ -226,7 +276,7 @@ class PatchrightBackend:
             except Exception as exc:
                 _logger.warning("agent.browser.patchright.close_failed", error=str(exc))
 
-        _logger.info("agent.browser.patchright.launched", headful=headful)
+        _logger.info("agent.browser.patchright.launched", headful=options.headful)
         return BrowserHandle(
             name="patchright",
             playwright_browser=browser,
@@ -277,8 +327,7 @@ class ObscuraBackend:
     async def launch(
         self,
         *,
-        headful: bool,
-        proxy: str | None,
+        options: BrowserLaunchOptions,
         fingerprint: FingerprintGenerator,
         behavior: BehaviorPolicy,
     ) -> BrowserHandle:
@@ -291,7 +340,7 @@ class ObscuraBackend:
         # ``headful`` / ``proxy`` are properties of the external Obscura
         # server (``obscura serve --proxy ...``), not the CDP client, so we
         # can only connect to whatever the server was started with.
-        _ = (headful, proxy)
+        _ = (options.headful, options.proxy)
 
         pw_ctx = async_playwright()
         pw = await pw_ctx.__aenter__()
@@ -360,8 +409,7 @@ class ScraplingBackend:
     async def launch(  # pragma: no cover — requires real Scrapling install
         self,
         *,
-        headful: bool,
-        proxy: str | None,
+        options: BrowserLaunchOptions,
         fingerprint: FingerprintGenerator,
         behavior: BehaviorPolicy,
     ) -> BrowserHandle:
@@ -373,7 +421,7 @@ class ScraplingBackend:
         _ = fingerprint
         _ = behavior
 
-        ctx_mgr = hostile_client(headless=not headful)
+        ctx_mgr = hostile_client(headless=not options.headful)
         fetcher = await ctx_mgr.__aenter__()
 
         async def shutdown() -> None:
@@ -382,9 +430,9 @@ class ScraplingBackend:
             except Exception as exc:
                 _logger.warning("agent.browser.scrapling.close_failed", error=str(exc))
 
-        _ = proxy  # Scrapling pulls proxy from ENV / fetcher config
+        _ = options.proxy  # Scrapling pulls proxy from ENV / fetcher config
 
-        _logger.info("agent.browser.scrapling.launched", headful=headful)
+        _logger.info("agent.browser.scrapling.launched", headful=options.headful)
         return BrowserHandle(
             name="scrapling",
             playwright_browser=None,
@@ -421,15 +469,12 @@ def get_browser_backend(name: str, *, cdp_url: str | None = None) -> BrowserBack
 async def open_browser(
     backend: BrowserBackend,
     *,
-    headful: bool,
-    proxy: str | None,
+    options: BrowserLaunchOptions,
     fingerprint: FingerprintGenerator,
     behavior: BehaviorPolicy,
 ) -> AsyncIterator[BrowserHandle]:
     """Async context manager — launches and reliably closes a browser."""
-    handle = await backend.launch(
-        headful=headful, proxy=proxy, fingerprint=fingerprint, behavior=behavior
-    )
+    handle = await backend.launch(options=options, fingerprint=fingerprint, behavior=behavior)
     try:
         yield handle
     finally:
@@ -439,6 +484,7 @@ async def open_browser(
 __all__ = [
     "BrowserBackend",
     "BrowserHandle",
+    "BrowserLaunchOptions",
     "CamoufoxBackend",
     "ObscuraBackend",
     "PatchrightBackend",

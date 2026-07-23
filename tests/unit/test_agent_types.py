@@ -73,6 +73,29 @@ class TestFromEnv:
         assert cfg.captcha_paid_fallback == "twocaptcha"
         assert cfg.respect_robots is False
 
+    def test_from_env_reads_render_knobs(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """v1.6.0 Camoufox render/stealth knobs round-trip through from_env."""
+        monkeypatch.setenv("SCRAPPER_TOOL_AGENT_CAMOUFOX_DISPLAY", "virtual")
+        monkeypatch.setenv("SCRAPPER_TOOL_AGENT_BLOCK_IMAGES", "1")
+        monkeypatch.setenv("SCRAPPER_TOOL_AGENT_FINGERPRINT_PRESET", "true")
+        monkeypatch.setenv("SCRAPPER_TOOL_AGENT_CAMOUFOX_OS", "windows")
+        monkeypatch.setenv("SCRAPPER_TOOL_AGENT_CAMOUFOX_LOCALE", "he-IL")
+        cfg = AgentConfig.from_env()
+        assert cfg.camoufox_headless_mode == "virtual"
+        assert cfg.block_images is True
+        assert cfg.fingerprint_preset is True
+        assert cfg.camoufox_os == "windows"
+        assert cfg.camoufox_locale == "he-IL"
+
+    def test_render_knobs_default_off(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        for k in list(__import__("os").environ.keys()):
+            if k.startswith("SCRAPPER_TOOL_"):
+                monkeypatch.delenv(k, raising=False)
+        cfg = AgentConfig.from_env()
+        assert cfg.camoufox_headless_mode == "headless"
+        assert cfg.block_images is False
+        assert cfg.fingerprint_preset is False
+
     def test_from_env_reads_llm_api_key(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setenv("SCRAPPER_TOOL_AGENT_LLM", "openai_compat")
         monkeypatch.setenv("SCRAPPER_TOOL_AGENT_LLM_API_KEY", "sk-openai-test-key")

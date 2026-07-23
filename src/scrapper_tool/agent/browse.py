@@ -26,6 +26,7 @@ from pydantic import BaseModel, ValidationError
 from scrapper_tool._logging import get_logger
 from scrapper_tool.agent.backends import (
     BrowserHandle,
+    BrowserLaunchOptions,
     get_behavior_policy,
     get_browser_backend,
     get_captcha_solver,
@@ -77,9 +78,22 @@ async def run_browse(
     behavior = get_behavior_policy(config.behavior)
     solver = get_captcha_solver(config)
 
-    handle = await backend.launch(
+    # v1.6.0: hand the backend the full launch-options object. This is what
+    # finally threads ``user_data_dir`` (cf_clearance carry-forward) and the
+    # render/stealth knobs (virtual display, image blocking) into Camoufox —
+    # previously they never reached it.
+    launch_options = BrowserLaunchOptions(
         headful=config.headful,
         proxy=config.proxy,
+        user_data_dir=config.user_data_dir,
+        headless_mode=config.camoufox_headless_mode,
+        block_images=config.block_images,
+        fingerprint_preset=config.fingerprint_preset,
+        os=config.camoufox_os,
+        locale=config.camoufox_locale,
+    )
+    handle = await backend.launch(
+        options=launch_options,
         fingerprint=fingerprint,
         behavior=behavior,
     )

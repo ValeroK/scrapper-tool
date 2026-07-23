@@ -16,6 +16,7 @@ import httpx
 import pytest
 
 from scrapper_tool.agent.backends import (
+    BrowserLaunchOptions,
     CamoufoxBackend,
     ObscuraBackend,
     PatchrightBackend,
@@ -99,8 +100,7 @@ class TestBrowserResolver:
 
         backend = get_browser_backend("obscura", cdp_url="ws://host:9999")
         handle = await backend.launch(
-            headful=False,
-            proxy=None,
+            options=BrowserLaunchOptions(),
             fingerprint=get_fingerprint_generator("none"),
             behavior=get_behavior_policy("off"),
         )
@@ -134,8 +134,7 @@ class TestBrowserResolver:
         backend = get_browser_backend("obscura", cdp_url="ws://dead:1")
         with pytest.raises(ImportError, match="Obscura CDP connect failed"):
             await backend.launch(
-                headful=False,
-                proxy=None,
+                options=BrowserLaunchOptions(),
                 fingerprint=get_fingerprint_generator("none"),
                 behavior=get_behavior_policy("off"),
             )
@@ -183,8 +182,7 @@ class TestBackendLaunchContracts:
         monkeypatch.setitem(sys.modules, "camoufox.async_api", fake)
 
         handle = await CamoufoxBackend().launch(
-            headful=False,
-            proxy="http://p:8080",
+            options=BrowserLaunchOptions(headful=False, proxy="http://p:8080"),
             fingerprint=get_fingerprint_generator("none"),
             behavior=get_behavior_policy("off"),
         )
@@ -193,6 +191,56 @@ class TestBackendLaunchContracts:
         assert captured["geoip"] is True
         assert captured["proxy"] == {"server": "http://p:8080"}
         assert handle.name == "camoufox"
+        # Knobs left at their defaults must NOT be passed at all.
+        assert "user_data_dir" not in captured
+        assert "block_images" not in captured
+        await handle.close()
+
+    async def test_camoufox_render_knobs_reach_asynccamoufox(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """v1.6.0 knobs: virtual display, persistent profile, image blocking.
+
+        The persistent-profile assertion is the regression guard for the bug where
+        ``user_data_dir`` was threaded through the cascade but never reached Camoufox,
+        silently breaking cf_clearance carry-forward for E2.
+        """
+        captured: dict[str, Any] = {}
+
+        class _AsyncCamoufox:
+            def __init__(self, **kwargs: Any) -> None:
+                captured.update(kwargs)
+
+            async def __aenter__(self) -> Any:
+                return object()
+
+            async def __aexit__(self, *a: Any) -> None:
+                return None
+
+        fake = types.ModuleType("camoufox.async_api")
+        fake.AsyncCamoufox = _AsyncCamoufox  # type: ignore[attr-defined]
+        monkeypatch.setitem(sys.modules, "camoufox", types.ModuleType("camoufox"))
+        monkeypatch.setitem(sys.modules, "camoufox.async_api", fake)
+
+        handle = await CamoufoxBackend().launch(
+            options=BrowserLaunchOptions(
+                headless_mode="virtual",
+                user_data_dir="/tmp/profile-x",
+                block_images=True,
+                fingerprint_preset=True,
+                os="windows",
+                locale="he-IL",
+            ),
+            fingerprint=get_fingerprint_generator("none"),
+            behavior=get_behavior_policy("off"),
+        )
+        assert captured["headless"] == "virtual"
+        assert captured["user_data_dir"] == "/tmp/profile-x"
+        assert captured["persistent_context"] is True  # must accompany user_data_dir
+        assert captured["block_images"] is True
+        assert captured["fingerprint_preset"] is True
+        assert captured["os"] == "windows"
+        assert captured["locale"] == "he-IL"
         await handle.close()
 
     async def test_patchright_launch_kwargs(self, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -219,8 +267,7 @@ class TestBackendLaunchContracts:
         monkeypatch.setitem(sys.modules, "patchright.async_api", fake)
 
         handle = await PatchrightBackend().launch(
-            headful=False,
-            proxy="http://p:1",
+            options=BrowserLaunchOptions(headful=False, proxy="http://p:1"),
             fingerprint=get_fingerprint_generator("none"),
             behavior=get_behavior_policy("off"),
         )
@@ -250,8 +297,7 @@ class TestBackendLaunchContracts:
         monkeypatch.setattr(d_mod, "hostile_client", fake_hostile_client)
 
         handle = await ScraplingBackend().launch(
-            headful=False,
-            proxy=None,
+            options=BrowserLaunchOptions(),
             fingerprint=get_fingerprint_generator("none"),
             behavior=get_behavior_policy("off"),
         )
