@@ -28,14 +28,13 @@ All notable changes to `scrapper-tool` are recorded here. Format follows [Keep a
   with `hit_page_limit`, `hit_depth_limit`, and `queued_but_unvisited` reported so
   a bounded crawl is never mistaken for a complete one. Page HTML is omitted
   unless requested (a 50-page crawl of rendered pages is tens of MB of JSON).
-- **`respect_robots` is now actually enforced.** The setting has existed since
-  v1.0 and defaulted to True, but nothing read it beyond a startup log line. The
-  crawler honours robots.txt by default, including `Crawl-delay` — fractional
-  values included, which Python's own `RobotFileParser` silently discards because
-  it parses that directive with `int()`. Status handling follows RFC 9309: 4xx
-  (including the 403 anti-bot systems often serve for robots.txt) means no rules
-  published; 5xx or unreachable is a full disallow. Fetched once per origin per
-  hour. A hostile `Crawl-delay` is capped at 10s of real waiting.
+- **robots.txt handling, opt-in via `respect_robots`.** The setting has existed
+  since v1.0 but nothing read it beyond a startup log line; it now works. Full RFC
+  9309 handling: 4xx (including the 403 anti-bot systems often serve for
+  robots.txt) means no rules published, 5xx or unreachable is a full disallow,
+  fetched once per origin per hour. `Crawl-delay` is honoured including fractional
+  values, which Python's own `RobotFileParser` silently discards because it parses
+  that directive with `int()`; a hostile delay is capped at 10s of real waiting.
 - **Learn-once / replay (`pattern_used="replay"`).** When an expensive tier
   succeeds, the cascade derives the CSS selectors that would have produced the
   same data for free, verifies them against that page, and caches the recipe per
@@ -82,6 +81,15 @@ All notable changes to `scrapper-tool` are recorded here. Format follows [Keep a
   its response carries the extracted rows in `data`.
 
 ### Changed
+- **`respect_robots` now defaults to `False`.** robots.txt is a crawling
+  convention rather than an access control, and this toolkit's job is to retrieve
+  the pages its operator asks for. Enforcement remains fully implemented and is a
+  one-flag opt-in (`SCRAPPER_TOOL_AGENT_RESPECT_ROBOTS=1`, or `respect_robots:
+  true` per crawl). Note that `Crawl-delay` is the one directive that also protects
+  the caller — request rate is what builds an IP reputation score, the one form of
+  blocking that stealth work can't undo — so use `concurrency` to pace crawls when
+  enforcement is off. `concurrency` and `max_pages` remain non-optional because
+  they bound this process's own resource use, not the target's.
 - **BREAKING (cascade behaviour): E2 no longer runs automatically.** A blocked
   E1 used to auto-escalate into the browser-use agent loop on every `mode=auto`
   scrape. E2 is the most expensive tier by a wide margin and the only thing it

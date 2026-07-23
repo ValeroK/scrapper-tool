@@ -143,8 +143,14 @@ class AgentConfig(BaseModel):
     captcha_paid_fallback: PaidFallbackName = "capsolver"
     captcha_timeout_s: float = 120.0
 
-    # --- ToS / safety
-    respect_robots: bool = True
+    # --- robots.txt
+    # Off by default: this toolkit's job is to retrieve pages its operator asks
+    # for, and robots.txt is a crawling convention rather than an access control.
+    # Enforcement is still available for deployments that want it — set
+    # SCRAPPER_TOOL_AGENT_RESPECT_ROBOTS=1 (or pass respect_robots=True to the
+    # crawler) and the full RFC 9309 handling in scrapper_tool.crawl.robots
+    # applies, Crawl-delay included.
+    respect_robots: bool = False
 
     @classmethod
     def from_env(cls) -> AgentConfig:
@@ -194,7 +200,7 @@ class AgentConfig(BaseModel):
                 ),
                 "captcha_timeout_s": float(env.get("SCRAPPER_TOOL_CAPTCHA_TIMEOUT_S", "120")),
                 "respect_robots": _envbool(
-                    env.get("SCRAPPER_TOOL_AGENT_RESPECT_ROBOTS"), default=True
+                    env.get("SCRAPPER_TOOL_AGENT_RESPECT_ROBOTS"), default=False
                 ),
             }
         )

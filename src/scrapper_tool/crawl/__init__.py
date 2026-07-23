@@ -3,8 +3,8 @@
 Everything above a single page. :mod:`~scrapper_tool.crawl.map` answers "what
 pages does this site have?", :mod:`~scrapper_tool.crawl.crawl` walks them
 breadth-first through the caller's cascade, and
-:mod:`~scrapper_tool.crawl.robots` finally enforces the ``respect_robots``
-setting that had existed as configuration without an implementation.
+:mod:`~scrapper_tool.crawl.robots` implements robots.txt handling for deployments
+that opt into it (``respect_robots``, off by default).
 
 Both entrypoints take the fetch/scrape function as an argument rather than
 importing the cascade. That keeps this package free of the browser and LLM extras
