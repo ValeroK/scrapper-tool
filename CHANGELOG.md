@@ -74,6 +74,41 @@ All notable changes to `scrapper-tool` are recorded here. Format follows [Keep a
   profile-gated `obscura` service is included in `docker-compose.yml`.
 
 ### Fixed
+- **European decimal commas no longer multiply prices by 100.** Pattern C stripped
+  every comma before parsing, so `"19,99"` became `Decimal("1999")` — silent, with
+  no error and a plausible-looking number. Pattern B had the mirror-image bug:
+  it handed the raw string to `Decimal()`, so the US `"1,299.99"` raised and the
+  price came back as `None`. Both now use one shared parser
+  (`scrapper_tool._money.parse_price`) that infers the separator from the
+  string's shape: with both present the last one is the decimal (`1,299.99` and
+  `1.299,99` both give 1299.99); a lone comma with 1-2 trailing digits is a
+  decimal, three is a thousands group. Space/NBSP/apostrophe grouping is handled,
+  and `decimal_sep="."`/`","` forces an interpretation when the locale is known.
+  The one irreducibly ambiguous case — a lone dot with three digits, `"1.299"` —
+  keeps the US reading, and is documented rather than guessed.
+- **A bad per-call backend name returns 503, not 500.** The browser, LLM,
+  fingerprint, behavior, and captcha resolvers raised bare `ValueError` on an
+  unknown name, which surfaced as an unhandled 500. They now raise
+  `ConfigurationError`, which the REST layer already maps to 503 — a
+  misconfiguration the caller can fix, not a server fault.
+- **The anti-bot block heuristic is no longer duplicated.** E1 and E2 carried
+  byte-identical copies of a substring list, so teaching one about a new vendor
+  left the other behind. Both now call
+  `scrapper_tool._challenge.looks_like_block_message`, which reuses the same
+  per-vendor signature table the cascade uses (a navigation error often carries
+  the wall's own hostname) and adds the generic 429 / rate-limit wording that
+  neither copy had.
+
+### Added (batch)
+- **`batch_fetch` via the `obscura` CLI** (`scrapper_tool.crawl.batch`) — renders
+  many URLs in one process via `obscura scrape --concurrency`. A fast path for
+  bulk retrieval of pages already known to be unprotected; it gives up the TLS
+  ladder, recipe replay, challenge detection, proxy rotation, and per-page
+  escalation, so `crawl()` remains the right call for anything else. Output is
+  parsed tolerantly (array, single object, or JSON Lines; alternative field
+  names) and a non-zero exit still returns the records that did parse, with
+  unparsed and never-returned URLs both reported rather than dropped.
+
 - **A CSS-shaped `schema_json` now wins at tier 1.** The A/B/C tier ran only the
   JSON-LD and microdata extractors, so a caller supplying a CSS schema always fell
   through to Pattern D and paid for Scrapling's browser at minimum — even on a

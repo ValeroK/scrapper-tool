@@ -16,6 +16,7 @@ from __future__ import annotations
 from typing import Protocol
 
 from scrapper_tool._logging import get_logger
+from scrapper_tool.errors import ConfigurationError
 
 _logger = get_logger(__name__)
 
@@ -154,7 +155,7 @@ def get_fingerprint_generator(name: str) -> FingerprintGenerator:
     if name == "none":
         return NoOpGenerator()
     msg = f"Unknown fingerprint generator: {name!r}. Choices: 'browserforge', 'none'."
-    raise ValueError(msg)
+    raise ConfigurationError(msg)
 
 
 __all__ = [

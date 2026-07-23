@@ -14,6 +14,12 @@ anti-bot handling, proxy rotation, and recipe replay the caller's cascade has.
 
 from __future__ import annotations
 
+from scrapper_tool.crawl.batch import (
+    BatchPage,
+    BatchResult,
+    batch_fetch,
+    obscura_available,
+)
 from scrapper_tool.crawl.crawl import CrawlPage, CrawlStats, crawl, crawl_to_list
 from scrapper_tool.crawl.map import (
     MapResult,
@@ -26,15 +32,19 @@ from scrapper_tool.crawl.map import (
 from scrapper_tool.crawl.robots import RobotsCache
 
 __all__ = [
+    "BatchPage",
+    "BatchResult",
     "CrawlPage",
     "CrawlStats",
     "MapResult",
     "RobotsCache",
+    "batch_fetch",
     "crawl",
     "crawl_to_list",
     "extract_links",
     "make_ladder_fetch",
     "map_site",
     "normalise_url",
+    "obscura_available",
     "same_site",
 ]

@@ -31,11 +31,15 @@ Usage::
 
 from __future__ import annotations
 
-from decimal import Decimal, InvalidOperation
+from typing import TYPE_CHECKING
 
 from selectolax.lexbor import LexborHTMLParser
 
 from scrapper_tool._logging import get_logger
+from scrapper_tool._money import parse_price
+
+if TYPE_CHECKING:
+    from decimal import Decimal
 
 _logger = get_logger(__name__)
 
@@ -43,32 +47,12 @@ _logger = get_logger(__name__)
 def _coerce_decimal(value: str | None) -> Decimal | None:
     """Best-effort string → Decimal, tolerating common price formatting.
 
-    Accepts:
-    - ``"19.99"`` — plain decimal
-    - ``"$19.99"`` — leading currency glyphs (stripped)
-    - ``" 19.99 "`` — leading/trailing whitespace
-    - ``"1,299.99"`` — thousands-separator commas (stripped)
-    - ``"19,99"`` — European decimal-comma is NOT supported here;
-      vendor-specific normalisation lives in the consumer.
-
-    Returns ``None`` for empty/non-numeric input.
+    Delegates to :func:`scrapper_tool._money.parse_price`. Until v1.6.0 this
+    stripped every comma unconditionally, which turned the European ``"19,99"``
+    into ``Decimal("1999")`` — a silent 100x error. The separator is now inferred
+    from the string's shape; see that module for the rules.
     """
-    if not value:
-        return None
-    cleaned = value.strip()
-    # Strip common currency glyphs.
-    for glyph in ("$", "€", "£", "₪", "¥"):
-        cleaned = cleaned.replace(glyph, "")
-    # Strip thousands-separator commas (US/UK convention; if you see
-    # European comma-decimal you need vendor-side normalisation).
-    cleaned = cleaned.replace(",", "")
-    cleaned = cleaned.strip()
-    if not cleaned:
-        return None
-    try:
-        return Decimal(cleaned)
-    except (InvalidOperation, ValueError):
-        return None
+    return parse_price(value)
 
 
 def extract_microdata_price(html: str) -> tuple[Decimal, str] | None:

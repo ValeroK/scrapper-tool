@@ -28,6 +28,7 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Literal, Protocol
 
 from scrapper_tool._logging import get_logger
+from scrapper_tool.errors import ConfigurationError
 
 if TYPE_CHECKING:
     from collections.abc import AsyncIterator
@@ -471,7 +472,7 @@ def get_browser_backend(name: str, *, cdp_url: str | None = None) -> BrowserBack
     }
     if name not in table:
         msg = f"Unknown browser backend: {name!r}. Choices: {sorted(table)}."
-        raise ValueError(msg)
+        raise ConfigurationError(msg)
     if name == "obscura":
         return ObscuraBackend(cdp_url=cdp_url)
     return table[name]()

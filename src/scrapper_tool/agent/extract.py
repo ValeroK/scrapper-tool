@@ -24,6 +24,7 @@ from typing import Any, cast
 
 from pydantic import BaseModel, ValidationError
 
+from scrapper_tool._challenge import looks_like_block_message
 from scrapper_tool._logging import get_logger
 from scrapper_tool.agent.backends import (
     get_behavior_policy,
@@ -232,20 +233,13 @@ def _crawl4ai_browser_type(name: str) -> str:
 
 
 def _looks_like_block(exc: Exception) -> bool:
-    """Heuristic — does the exception look like an anti-bot block?"""
-    text = str(exc).lower()
-    return any(
-        needle in text
-        for needle in (
-            "challenge",
-            "cloudflare",
-            "captcha",
-            "blocked",
-            "403",
-            "access denied",
-            "datadome",
-        )
-    )
+    """Does this exception look like an anti-bot block rather than a bug?
+
+    Shared with E1 via :func:`scrapper_tool._challenge.looks_like_block_message`
+    — the two tiers had byte-identical copies of this list, which is exactly the
+    kind of duplication that drifts the moment one of them learns a new vendor.
+    """
+    return looks_like_block_message(str(exc))
 
 
 def _crawl4ai_result_to_agent(

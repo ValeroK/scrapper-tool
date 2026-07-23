@@ -37,7 +37,7 @@ from scrapper_tool.agent.backends.llm import (
     OpenAICompatBackend,
 )
 from scrapper_tool.agent.types import AgentConfig
-from scrapper_tool.errors import AgentLLMError
+from scrapper_tool.errors import AgentLLMError, ConfigurationError
 
 # --- Browser resolver -----------------------------------------------------
 
@@ -61,7 +61,7 @@ class TestBrowserResolver:
         # Zendriver / Botasaurus were removed in v1.5.0 — they must no
         # longer resolve (they raised AgentError at browse time anyway).
         for name in ("zendriver", "botasaurus"):
-            with pytest.raises(ValueError, match="Unknown browser backend"):
+            with pytest.raises(ConfigurationError, match="Unknown browser backend"):
                 get_browser_backend(name)
 
     def test_obscura_resolves_with_cdp_url(self) -> None:
@@ -140,7 +140,7 @@ class TestBrowserResolver:
             )
 
     def test_unknown_backend_raises(self) -> None:
-        with pytest.raises(ValueError, match="Unknown browser backend"):
+        with pytest.raises(ConfigurationError, match="Unknown browser backend"):
             get_browser_backend("internet-explorer")
 
     def test_camoufox_install_error_message_is_helpful(self) -> None:
@@ -323,7 +323,7 @@ class TestFingerprintResolver:
         assert fp.viewport == (1280, 800)
 
     def test_unknown_raises(self) -> None:
-        with pytest.raises(ValueError, match="Unknown fingerprint"):
+        with pytest.raises(ConfigurationError, match="Unknown fingerprint"):
             get_fingerprint_generator("evil")
 
     def test_browserforge_lazy_import_failure_is_helpful(
@@ -387,7 +387,7 @@ class TestBehaviorResolver:
             assert get_behavior_policy(name).name == name
 
     def test_unknown_raises(self) -> None:
-        with pytest.raises(ValueError, match="Unknown behavior policy"):
+        with pytest.raises(ConfigurationError, match="Unknown behavior policy"):
             get_behavior_policy("evil")
 
     @pytest.mark.asyncio
@@ -435,7 +435,7 @@ class TestLLMResolver:
 
     def test_unknown_raises(self) -> None:
         cfg = AgentConfig.model_construct(llm="evil")  # bypass validation
-        with pytest.raises(ValueError, match="Unknown LLM backend"):
+        with pytest.raises(ConfigurationError, match="Unknown LLM backend"):
             get_llm_backend(cfg)
 
     @pytest.mark.asyncio
@@ -734,7 +734,7 @@ class TestCaptchaResolver:
 
     def test_unknown_solver_raises(self) -> None:
         cfg = AgentConfig.model_construct(captcha_solver="bogus", captcha_api_key=None)
-        with pytest.raises(ValueError, match="Unknown captcha solver"):
+        with pytest.raises(ConfigurationError, match="Unknown captcha solver"):
             get_captcha_solver(cfg)
 
     @pytest.mark.parametrize(

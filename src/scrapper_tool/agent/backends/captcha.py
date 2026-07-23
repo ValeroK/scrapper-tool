@@ -28,7 +28,7 @@ from typing import TYPE_CHECKING, Literal, Protocol
 import httpx
 
 from scrapper_tool._logging import get_logger
-from scrapper_tool.errors import CaptchaSolveError
+from scrapper_tool.errors import CaptchaSolveError, ConfigurationError
 
 if TYPE_CHECKING:
     from scrapper_tool.agent.types import AgentConfig
@@ -610,7 +610,7 @@ def get_captcha_solver(config: AgentConfig) -> CaptchaSolver:  # noqa: PLR0911, 
                 tiers.append(paid_solver)
         return AutoCascadeSolver(tiers=tiers)
 
-    raise ValueError(f"Unknown captcha solver: {name!r}")  # type: ignore[unreachable, unused-ignore]  # pragma: no cover
+    raise ConfigurationError(f"Unknown captcha solver: {name!r}")  # type: ignore[unreachable, unused-ignore]  # pragma: no cover
 
 
 __all__ = [

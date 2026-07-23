@@ -26,6 +26,7 @@ import random
 from typing import Any, Protocol
 
 from scrapper_tool._logging import get_logger
+from scrapper_tool.errors import ConfigurationError
 
 _logger = get_logger(__name__)
 
@@ -160,7 +161,7 @@ def get_behavior_policy(name: str, *, rng: random.Random | None = None) -> Behav
     if name == "off":
         return OffPolicy()
     msg = f"Unknown behavior policy: {name!r}. Choices: 'humanlike', 'fast', 'off'."
-    raise ValueError(msg)
+    raise ConfigurationError(msg)
 
 
 # --- Helpers used by browser backends -------------------------------------

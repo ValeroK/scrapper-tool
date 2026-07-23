@@ -165,6 +165,48 @@ def looks_unhydrated(html: str) -> bool:
     return (hits / len(headings)) > _MAX_PLACEHOLDER_HEADING_RATIO
 
 
+def looks_like_block_message(text: str) -> bool:
+    """Whether an *error message* suggests an anti-bot block rather than a bug.
+
+    Distinct from :func:`is_interstitial`, which inspects a document: by the time
+    a browser or LLM tier raises, there is no document — only whatever string the
+    library produced. So this matches on the message, and it deliberately reuses
+    the same per-vendor signatures, because a navigation error frequently carries
+    the wall's own hostname (``validate.perfdrive.com``,
+    ``geo.captcha-delivery.com``) right in the text.
+
+    Used to decide between ``AgentBlockedError`` (the cascade may escalate) and
+    ``AgentError`` (a real failure). Over-matching costs a pointless escalation;
+    under-matching means a blocked page is reported as a crash, so the generic
+    terms below are kept broad on purpose.
+    """
+    if not text:
+        return False
+    lowered = text.lower()
+    if any(term in lowered for term in _BLOCK_MESSAGE_TERMS):
+        return True
+    return any(sig in lowered for sigs in _VENDOR_SIGNATURES.values() for sig in sigs)
+
+
+# Generic wording that shows up in anti-bot failures across libraries. Kept
+# separate from the vendor table so each can grow without disturbing the other.
+_BLOCK_MESSAGE_TERMS: tuple[str, ...] = (
+    "challenge",
+    "captcha",
+    "blocked",
+    "403",
+    "429",
+    "access denied",
+    "forbidden",
+    "unusual traffic",
+    "rate limit",
+    "too many requests",
+    "verify you are human",
+    "are you a robot",
+    "bot detect",
+)
+
+
 def has_real_content(html: str, status_code: int = 200) -> bool:
     """Whether a fetch/render produced usable (non-walled) content.
 
@@ -187,6 +229,7 @@ __all__ = [
     "has_real_content",
     "is_cf_challenge_body",
     "is_interstitial",
+    "looks_like_block_message",
     "looks_like_spa_shell",
     "looks_unhydrated",
 ]

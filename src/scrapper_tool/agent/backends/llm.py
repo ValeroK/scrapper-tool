@@ -22,7 +22,7 @@ from urllib.parse import urljoin
 import httpx
 
 from scrapper_tool._logging import get_logger
-from scrapper_tool.errors import AgentLLMError
+from scrapper_tool.errors import AgentLLMError, ConfigurationError
 
 if TYPE_CHECKING:
     from scrapper_tool.agent.types import AgentConfig
@@ -226,7 +226,7 @@ def get_llm_backend(config: AgentConfig) -> LLMBackend:
         api_key = config.llm_api_key.get_secret_value() if config.llm_api_key else None
         return cls(model=config.model, base_url=config.ollama_url, api_key=api_key)
     msg = f"Unknown LLM backend: {config.llm!r}"
-    raise ValueError(msg)
+    raise ConfigurationError(msg)
 
 
 def is_vision_model(model: str) -> bool:
