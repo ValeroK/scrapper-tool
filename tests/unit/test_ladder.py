@@ -264,3 +264,76 @@ class TestLadderProxyRotation:
         resp, _ = await request_with_ladder("GET", "https://example.test/p")
         assert resp.status_code == 200
         assert fake_curl.INSTANCES[0].proxy is None
+
+
+class TestLadderProxyTransportFailures:
+    """Regression: a dead proxy must not kill the whole ladder walk.
+
+    Found by live-testing against free proxies: they passed an http:// liveness
+    probe but could not CONNECT-tunnel TLS, so `request_with_retry` raised
+    VendorHTTPError, which propagated out and aborted the walk on rung 1 — and the
+    proxy was never even penalised (failures stayed 0).
+    """
+
+    @pytest.mark.asyncio
+    async def test_dead_proxy_rotates_to_next_rung_and_is_penalised(
+        self, fake_curl: type[FakeCurlSession], monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from scrapper_tool.errors import VendorHTTPError
+        from scrapper_tool.proxy import ProxyPool
+
+        pool = ProxyPool.from_urls(["http://dead:1", "http://good:2"])
+        calls: list[str | None] = []
+        real_retry = ladder_module.request_with_retry
+
+        async def flaky_retry(session, method, url, **kwargs):  # type: ignore[no-untyped-def]
+            calls.append(session.proxy)
+            if session.proxy == "http://dead:1":
+                raise VendorHTTPError("CONNECT tunnel failed")
+            return await real_retry(session, method, url, **kwargs)
+
+        monkeypatch.setattr(ladder_module, "request_with_retry", flaky_retry)
+        fake_curl.STATUS_FOR_PROFILE = dict.fromkeys(IMPERSONATE_LADDER, 200)
+
+        resp, profile = await request_with_ladder("GET", "https://example.test/p", proxy_pool=pool)
+        assert resp.status_code == 200
+        # Rung 1 died on the bad proxy; rung 2 succeeded on the good one.
+        assert calls == ["http://dead:1", "http://good:2"]
+        assert profile == IMPERSONATE_LADDER[1]
+
+        by_url = {e.url: e for e in pool.entries}
+        assert by_url["http://dead:1"].failures == 1, "dead proxy must be penalised"
+        assert by_url["http://good:2"].successes == 1
+
+    @pytest.mark.asyncio
+    async def test_all_proxies_dead_reports_transport_cause(
+        self, fake_curl: type[FakeCurlSession], monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from scrapper_tool.errors import VendorHTTPError
+        from scrapper_tool.proxy import ProxyPool
+
+        pool = ProxyPool.from_urls(["http://dead:1"])
+
+        async def always_dead(*_a, **_k):  # type: ignore[no-untyped-def]
+            raise VendorHTTPError("CONNECT tunnel failed")
+
+        monkeypatch.setattr(ladder_module, "request_with_retry", always_dead)
+
+        # Must not claim "all profiles returned 403/503" — that would be misleading
+        # when the real cause is an unusable proxy pool.
+        with pytest.raises(BlockedError, match="transport layer"):
+            await request_with_ladder("GET", "https://example.test/p", proxy_pool=pool)
+
+    @pytest.mark.asyncio
+    async def test_without_pool_transport_error_still_propagates(
+        self, fake_curl: type[FakeCurlSession], monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """No pool => original behaviour preserved (VendorHTTPError propagates)."""
+        from scrapper_tool.errors import VendorHTTPError
+
+        async def always_dead(*_a, **_k):  # type: ignore[no-untyped-def]
+            raise VendorHTTPError("network down")
+
+        monkeypatch.setattr(ladder_module, "request_with_retry", always_dead)
+        with pytest.raises(VendorHTTPError):
+            await request_with_ladder("GET", "https://example.test/p")

@@ -31,6 +31,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 from scrapper_tool._logging import get_logger
+from scrapper_tool.errors import ConfigurationError
 
 if TYPE_CHECKING:
     from collections.abc import Callable, Iterable
@@ -68,7 +69,28 @@ class ProxyPool:
     cooldown_s: float = _DEFAULT_COOLDOWN_S
     max_failures: int = _DEFAULT_MAX_FAILURES
     time_fn: Callable[[], float] = time.monotonic
+    # True when the entries come from a public/free list, i.e. run by unknown
+    # operators who can log traffic, inject content, or hijack sessions. Such a
+    # pool must NEVER carry credentials or authenticated sessions — see
+    # :meth:`assert_safe_for_credentials`.
+    untrusted: bool = False
     _cursor: int = 0
+
+    def assert_safe_for_credentials(self) -> None:
+        """Raise if this pool must not be used for authenticated traffic.
+
+        Call before any flow that sends credentials, cookies, or tokens (E2
+        logins, clearance-cookie reuse). Free/public proxies are operated by
+        strangers; routing a session through them is a credential-disclosure risk,
+        not a performance trade-off.
+        """
+        if self.untrusted:
+            msg = (
+                "Refusing to use an untrusted (public/free) proxy pool for "
+                "credentialed traffic — those proxies can log, inject, or hijack "
+                "sessions. Use trusted/paid proxies for authenticated flows."
+            )
+            raise ConfigurationError(msg)
 
     # --- construction -----------------------------------------------------
 

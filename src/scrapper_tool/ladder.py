@@ -46,7 +46,7 @@ from typing import TYPE_CHECKING, Any, cast
 from curl_cffi.requests import AsyncSession as _CurlCffiAsyncSession
 
 from scrapper_tool._logging import get_logger
-from scrapper_tool.errors import BlockedError
+from scrapper_tool.errors import BlockedError, VendorHTTPError
 from scrapper_tool.http import _DEFAULT_USER_AGENT, request_with_retry
 from scrapper_tool.proxy import resolve_proxy
 
@@ -174,22 +174,42 @@ async def request_with_ladder(
         raise ValueError(msg)
 
     last_status: int | None = None
+    last_error: VendorHTTPError | None = None
     for profile in ladder:
         # Fresh IP per rung when a pool is configured; an explicit proxy wins.
         attempt_proxy, managed_pool = resolve_proxy(proxy_pool, proxy)
-        async with _curl_cffi_session(
-            profile,
-            timeout=timeout,
-            proxy=attempt_proxy,
-            extra_headers=extra_headers,
-        ) as session:
-            resp = await request_with_retry(
-                cast("httpx.AsyncClient", session),
-                method,
-                url,
-                max_attempts=max_attempts_per_profile,
-                **kwargs,
+        try:
+            async with _curl_cffi_session(
+                profile,
+                timeout=timeout,
+                proxy=attempt_proxy,
+                extra_headers=extra_headers,
+            ) as session:
+                resp = await request_with_retry(
+                    cast("httpx.AsyncClient", session),
+                    method,
+                    url,
+                    max_attempts=max_attempts_per_profile,
+                    **kwargs,
+                )
+        except VendorHTTPError as exc:
+            # Transport exhaustion. When we're going through a pooled proxy this is
+            # almost always the *proxy* being dead/unable to CONNECT-tunnel, not the
+            # target being down — so penalise that proxy and try the next rung
+            # instead of aborting the whole walk. One bad proxy must not kill the
+            # ladder. Without a pool, preserve the original behaviour and propagate.
+            if managed_pool is None:
+                raise
+            managed_pool.mark_blocked(attempt_proxy)
+            last_error = exc
+            _logger.warning(
+                "ladder.proxy_transport_failed",
+                profile=profile,
+                method=method,
+                url=url,
+                error=str(exc)[:160],
             )
+            continue
         last_status = resp.status_code
         if resp.status_code in _ROTATE_STATUS_CODES:
             # The block could be the fingerprint OR the IP — we can't tell which,
@@ -218,6 +238,18 @@ async def request_with_ladder(
             proxied=attempt_proxy is not None,
         )
         return resp, profile
+
+    # Every rung failed. If they failed at the transport layer through pooled
+    # proxies, say so — "all profiles were blocked" would be misleading when the
+    # real problem is that the proxy pool is dead.
+    if last_status is None and last_error is not None:
+        msg = (
+            f"All {len(ladder)} ladder rungs failed at the transport layer for "
+            f"{method} {url} — every pooled proxy was unusable "
+            f"(last error: {last_error}). Check proxy health/credentials; free "
+            f"proxies commonly cannot CONNECT-tunnel TLS."
+        )
+        raise BlockedError(msg) from last_error
 
     raise BlockedError(
         f"All {len(ladder)} ladder profiles returned 403/503 for "
