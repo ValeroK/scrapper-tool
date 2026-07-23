@@ -90,6 +90,9 @@ class BrowserLaunchOptions:
     proxy: str | None = None
     user_data_dir: str | None = None
     headless_mode: Literal["headless", "virtual"] = "headless"
+    # WARNING: blocking images is a speed/bandwidth win but Camoufox itself warns
+    # it "has been reported to cause detection issues on major WAFs". Use it for
+    # unprotected / speed-critical scrapes only — NOT on hard targets.
     block_images: bool = False
     fingerprint_preset: bool = False
     os: str | None = None
@@ -175,6 +178,15 @@ class CamoufoxBackend:
             kwargs["user_data_dir"] = options.user_data_dir
             kwargs["persistent_context"] = True
         if options.block_images:
+            # Camoufox emits a LeakWarning here: blocking images is reported to
+            # cause detection issues on major WAFs. Surface it in our own logs so
+            # it's visible in structured output, and leave Camoufox's warning
+            # intact rather than silencing it with i_know_what_im_doing.
+            _logger.warning(
+                "agent.browser.camoufox.block_images_stealth_tradeoff",
+                detail="block_images speeds up loads but can trip WAF detection; "
+                "avoid on protected targets",
+            )
             kwargs["block_images"] = True
         if options.fingerprint_preset:
             kwargs["fingerprint_preset"] = True

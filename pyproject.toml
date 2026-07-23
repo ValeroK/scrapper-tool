@@ -59,7 +59,12 @@ llm-agent = [
     # The ``[geoip]`` extra pulls ``geoip2`` + ``maxminddb``. Bare
     # ``camoufox`` lets ``camoufox fetch`` succeed but every browser
     # launch then 500s with ``NotInstalledGeoIPExtra``.
-    "camoufox[geoip]>=0.4",
+    # v1.6.0: upgraded 0.4 -> 0.5.x. 0.5 adds ``fingerprint_preset`` (real
+    # bundled fingerprints, more realistic than generated) and needs Python
+    # >=3.10 (we require >=3.12). Upper bound pinned so a 0.6 with a changed
+    # AsyncCamoufox kwargs surface can't land silently — the launch-contract
+    # test in tests/unit/test_agent_backends.py is the tripwire.
+    "camoufox[geoip]>=0.5,<0.6",
     "patchright>=1.49",
     "browserforge>=1.2",
     "pillow>=10",

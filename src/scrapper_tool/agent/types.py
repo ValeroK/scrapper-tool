@@ -118,6 +118,8 @@ class AgentConfig(BaseModel):
     # stealthier than pure headless (the Docker image ships xvfb).
     camoufox_headless_mode: CamoufoxDisplayName = "headless"
     # Drop image requests — large speed/bandwidth win when only text/DOM matters.
+    # WARNING: Camoufox reports this can cause detection issues on major WAFs.
+    # Enable for unprotected / speed-critical scrapes, NOT for hard targets.
     block_images: bool = False
     # Use a real bundled fingerprint instead of a generated one (Camoufox 0.5+).
     fingerprint_preset: bool = False
