@@ -124,6 +124,34 @@ setExtraHTTPHeaders / setUserAgentOverride), **Fetch (request interception:
 continue/fulfill/fail)**, IO (stream large bodies), Storage, Input, and a custom
 `LP.getMarkdown`.
 
+### Measured: the stealth build, benchmarked (2026-07)
+
+`Dockerfile.obscura` builds obscura from source with `--features stealth`. Result:
+a **247 MB** image (much smaller than the app image) reporting version `0.1.0` —
+the `main` branch's Cargo version, i.e. *not* the same tag as the Hub release
+`0.1.10`; worth pinning `OBSCURA_REF` if reproducibility matters. Unlike the Hub
+image it answers `GET /json/version`, and Playwright `connect_over_cdp` works
+against it through our render tier.
+
+`scripts/e2e/bench_obscura.py` (render tier, 6 s settle, same machine/IP):
+
+| Target | Camoufox | Obscura-stealth |
+|---|---|---|
+| `quotes.toscrape.com/js/` (JS-only control) | PASSED, 8940 B, **12.6 s** | PASSED, 8940 B, **8.6 s** |
+| Yad2 (Radware/ShieldSquare) | CHALLENGED (18 KB perfdrive page) | CHALLENGED (118 KB Radware loader) |
+
+Reading it honestly:
+- **Obscura-stealth works and is ~30-40% faster** than Camoufox on a clean JS
+  target — its speed/RAM claims hold up.
+- The Yad2 row is **inconclusive, not a verdict on obscura**: by the time this ran,
+  the test IP had been flagged by repeated automated hits, and Camoufox — which
+  passed the same URL cleanly earlier the same day — was *also* challenged.
+  Anti-bot vendors escalate on IP reputation, so a stealth comparison on a hard
+  target is only meaningful from a clean IP / rotating proxy pool. That is exactly
+  the gap the proxy-rotation task addresses; re-run this benchmark then.
+- Do **not** promote obscura in any auto-selection heuristic on this data. It is
+  established as fast and functional; its stealth vs Camoufox is still unmeasured.
+
 ### The stealth-build caveat (important)
 `--stealth` help: *"consistent browser fingerprint, and **with the `stealth` build
 feature**, TLS impersonation plus tracker blocking"*. Full stealth (per-session

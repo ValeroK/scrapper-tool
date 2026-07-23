@@ -58,9 +58,16 @@ _CHALLENGE_MARKERS = (
 )
 
 # (label, url, marker that proves we got REAL content)
+#
+# Target choice matters. A captcha *demo* page is useless here: it embeds the
+# widget by design, so a challenge-marker heuristic can't tell "widget present"
+# from "we were walled" — every verdict comes back CHALLENGED regardless of the
+# backend. Only use targets where a bot-wall is distinguishable from the content:
+#   - js-sandbox: control. JS-only content, no anti-bot. Any backend that fails
+#     here is broken, not blocked.
+#   - yad2-radware: a real Radware/ShieldSquare wall.
 TARGETS: list[tuple[str, str, str]] = [
     ("js-sandbox", "https://quotes.toscrape.com/js/", 'class="quote"'),
-    ("cf-turnstile-demo", "https://nopecha.com/demo/turnstile", "turnstile"),
     ("yad2-radware", "https://www.yad2.co.il/vehicles/cars", "__NEXT_DATA__"),
 ]
 
