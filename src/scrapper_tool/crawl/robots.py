@@ -1,18 +1,12 @@
-"""robots.txt fetching, caching, and enforcement — opt-in.
+"""robots.txt fetching, caching, and enforcement.
 
-``AgentConfig.respect_robots`` defaults to **False**: this toolkit's job is to
-retrieve pages its operator asks for, and robots.txt is a crawling convention
-rather than an access control. This module is what makes the setting mean
-something when a deployment does turn it on, rather than the startup log line it
-used to be.
+``AgentConfig.respect_robots`` has existed since v1.0 and defaulted to True, but
+nothing ever read it beyond a startup log line — it was a promise the code didn't
+keep. This module is what makes it real, and the crawler is where it matters
+most: a single scrape is a user asking for one page, while a crawler walking a
+site unasked is exactly what robots.txt exists to govern.
 
-One piece is worth reading even when enforcement is off: ``Crawl-delay`` protects
-the *caller* as much as the site. Hammering a host is how an IP earns a reputation
-score, and that is the one form of blocking no amount of TLS impersonation or
-fingerprint work recovers from — measured on this project, an address that passed
-a hard target in the morning was challenged on the identical URL hours later.
-
-Two deliberate choices in the implementation:
+Two deliberate choices:
 
 **Fetched with httpx, parsed with the stdlib.** ``RobotFileParser.read()`` calls
 ``urlopen`` synchronously, which would block the event loop for every new host in
@@ -23,8 +17,7 @@ the well-tested matching logic without the blocking I/O.
 often serve for robots.txt) means "no rules published" and everything is allowed;
 5xx means the site is telling us it can't answer, which the RFC says to treat as
 a full disallow. Guessing "allow" on a 5xx would be the one case where being
-wrong means hammering a struggling server — and a struggling server is one that
-starts returning 403s to everyone.
+wrong means hammering a struggling server.
 """
 
 from __future__ import annotations

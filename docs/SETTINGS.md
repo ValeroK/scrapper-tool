@@ -235,8 +235,7 @@ impersonation ladder. No browser, no LLM. Truncation is always reported via
 answers to plan a crawl on.
 
 `/crawl` (MCP: `crawl_site`) walks a site breadth-first, running the **full auto
-cascade on each page**. robots.txt is not consulted unless you ask for it (see
-below). That means a crawl inherits recipe replay, the render
+cascade on each page**. That means a crawl inherits recipe replay, the render
 tier, challenge detection, and proxy rotation for free, and the recipe learned on
 page one makes the rest of the crawl cheap. Bounded by `depth`, `max_pages`, and
 `concurrency`; the response's `stats` reports `hit_page_limit`, `hit_depth_limit`,
@@ -250,33 +249,25 @@ deliberately avoids computing a "registrable domain" without a public-suffix
 list, which would reduce `yad2.co.il` to `co.il` and treat every Israeli
 commercial site as one site.
 
-### robots.txt — opt-in
+### robots.txt
 
-`respect_robots` defaults to **false** (`SCRAPPER_TOOL_AGENT_RESPECT_ROBOTS=1`, or
-`respect_robots: true` per crawl, turns it on). The toolkit's job is to retrieve
-the pages its operator asked for; robots.txt is a crawling convention, not an
-access control.
-
-Full RFC 9309 handling is implemented and applies when you do enable it:
+`respect_robots` (default true, `SCRAPPER_TOOL_AGENT_RESPECT_ROBOTS`) is now
+enforced — previously it was configuration that nothing read. It applies to the
+crawler, which is where it matters: a single scrape is a user asking for one page
+they could have opened themselves, while a crawler visits pages nobody asked for.
 
 - `Crawl-delay` is honoured, including fractional values. Python's
   `RobotFileParser` parses this directive with `int()` and silently discards
   `Crawl-delay: 0.5`, so it's parsed separately. A delay is capped at 10s of
   actual waiting — honouring a hostile `Crawl-delay: 86400` literally is
   indistinguishable from hanging.
-- 4xx (including the 403 anti-bot systems often serve for robots.txt) means no
-  rules published and everything is allowed; 5xx or unreachable is a full
-  disallow.
+- Status handling follows RFC 9309: 4xx (including the 403 anti-bot systems often
+  serve for robots.txt) means no rules published and everything is allowed; 5xx or
+  unreachable is treated as a full disallow.
 - robots.txt is fetched once per origin per hour, not once per URL.
 
-**Worth knowing even with enforcement off:** `Crawl-delay` is the one directive
-that protects *you* rather than the site. Request rate is what builds an IP
-reputation score, and that is the single form of blocking no amount of TLS
-impersonation or fingerprint work recovers from — measured on this project, an
-address that passed a hard target in the morning was challenged on the identical
-URL hours later, with no code change. With robots off, `concurrency` is your
-pacing control; it and `max_pages` are not configurable away because they bound
-this process's own resource use, not the target's.
+Set `respect_robots: false` only for sites you own or are authorised to crawl. It
+logs a warning when disabled.
 
 ### The E2 gate — `interactive`
 

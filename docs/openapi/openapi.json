@@ -350,7 +350,7 @@
           "scraping"
         ],
         "summary": "Crawl a site, running the full cascade per page",
-        "description": "Breadth-first traversal from a seed URL. Each page runs the same auto cascade as /scrape, so every page benefits from recipe replay, the render tier, and proxy rotation. Bounded by depth, max_pages, and concurrency; the response reports what the bounds left unvisited. robots.txt is not consulted unless respect_robots=true.",
+        "description": "Breadth-first traversal from a seed URL. Each page runs the same auto cascade as /scrape, so every page benefits from recipe replay, the render tier, and proxy rotation. robots.txt is honoured by default (including Crawl-delay). Bounded by depth, max_pages, and concurrency; the response reports what the bounds left unvisited.",
         "operationId": "crawl",
         "requestBody": {
           "content": {
@@ -540,8 +540,8 @@
           "respect_robots": {
             "type": "boolean",
             "title": "Respect Robots",
-            "description": "Consult robots.txt and honour Crawl-delay. Off by default. Note that Crawl-delay is the one directive that also protects the caller \u2014 hammering a host is how an IP earns a reputation score that no amount of TLS or fingerprint work recovers from \u2014 so pace crawls with `concurrency` when this is off.",
-            "default": false
+            "description": "Honour robots.txt, including Crawl-delay. Only set False for sites you own or are authorised to crawl \u2014 a crawler visits pages nobody asked for, which is exactly what robots.txt governs.",
+            "default": true
           },
           "interactive": {
             "type": "boolean",

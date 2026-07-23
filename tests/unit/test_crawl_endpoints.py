@@ -327,41 +327,12 @@ class TestCrawlEndpoint:
 
         async with _client(app_no_auth) as client:
             body = (
-                await client.post(
-                    "/crawl",
-                    json={
-                        "url": "https://site.test/",
-                        "depth": 1,
-                        "respect_robots": True,
-                    },
-                )
+                await client.post("/crawl", json={"url": "https://site.test/", "depth": 1})
             ).json()
 
         assert "https://site.test/b" not in calls
         assert body["stats"]["skipped_robots"] == 1
         assert any(p["skipped_reason"] == "robots" for p in body["pages"])
-
-    @pytest.mark.asyncio
-    async def test_robots_is_not_consulted_by_default(
-        self, app_no_auth: Any, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        """Enforcement is opt-in, so a default crawl fetches everything."""
-        from scrapper_tool.crawl.robots import RobotsCache
-
-        calls = _serve_site(monkeypatch, dict.fromkeys(_SITE, _PRODUCT_HTML))
-
-        async def never(self: Any, url: str, **_kwargs: Any) -> bool:
-            raise AssertionError("robots.txt must not be fetched unless asked for")
-
-        monkeypatch.setattr(RobotsCache, "allowed", never)
-
-        async with _client(app_no_auth) as client:
-            body = (
-                await client.post("/crawl", json={"url": "https://site.test/", "depth": 1})
-            ).json()
-
-        assert body["stats"]["skipped_robots"] == 0
-        assert sorted(calls) == sorted(_SITE)
 
     @pytest.mark.asyncio
     async def test_rejects_an_absurd_depth(self, app_no_auth: Any) -> None:

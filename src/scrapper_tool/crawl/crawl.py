@@ -10,18 +10,11 @@ pagination chain or a facet-filter rabbit hole and spends the whole page budget
 in one corner; BFS spends it across the site, which is what "crawl this vendor"
 means.
 
-Two bounds that are *not* configurable away, because they protect this process
-rather than the target: ``concurrency`` caps in-flight requests, and ``max_pages``
-caps total work. An unbounded crawl exhausts local file handles and browser
-processes long before it troubles a real site.
-
-robots.txt enforcement is **off by default** and available via
-``respect_robots=True``, which turns on the full RFC 9309 handling in
-:mod:`~scrapper_tool.crawl.robots`, ``Crawl-delay`` included. Note that
-``Crawl-delay`` is the one directive that also protects the caller: hammering a
-host is how an IP earns a reputation score that no amount of TLS or fingerprint
-work recovers from. When enforcement is off, pace a crawl with ``concurrency``
-instead.
+Politeness is not optional here. Unlike a single scrape — a user asking for one
+page they could have opened themselves — a crawler visits pages nobody asked for,
+so robots.txt is honoured by default (including ``Crawl-delay``) and concurrency
+is capped. ``respect_robots=False`` exists because some authorised work needs it
+(you own the site, or you have written permission), and it logs loudly.
 """
 
 from __future__ import annotations
@@ -125,7 +118,7 @@ async def crawl(
     max_pages: int = _DEFAULT_MAX_PAGES,
     concurrency: int = _DEFAULT_CONCURRENCY,
     same_domain: bool = True,
-    respect_robots: bool = False,
+    respect_robots: bool = True,
     stats: CrawlStats | None = None,
     robots: RobotsCache | None = None,
 ) -> AsyncIterator[CrawlPage]:
@@ -140,17 +133,18 @@ async def crawl(
     Pass ``stats`` to observe totals during the crawl (it's mutated in place);
     otherwise read the final numbers off the last yielded page's crawl.
 
-    ``respect_robots`` defaults to False. Set it True to consult robots.txt and
-    honour ``Crawl-delay``; ``concurrency`` is the pacing control either way.
-
     Bounds are reported, never silent: hitting ``max_pages`` or ``depth`` sets a
     flag on the stats and leaves ``queued_but_unvisited`` non-zero.
     """
     counters = stats if stats is not None else CrawlStats()
     started = time.perf_counter()
-    # Built lazily-ish: constructing it is free, and nothing is fetched unless
-    # respect_robots actually asks a question.
     robots_cache = robots or RobotsCache()
+    if not respect_robots:
+        _logger.warning(
+            "crawl.robots_disabled",
+            seed=seed,
+            detail="respect_robots=False — only for sites you own or are authorised to crawl",
+        )
 
     frontier = _Frontier()
     frontier.push(seed, 0)

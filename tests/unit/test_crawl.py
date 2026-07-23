@@ -276,11 +276,7 @@ async def test_crawl_skips_disallowed_urls_and_reports_them() -> None:
     cache.crawl_delay = crawl_delay  # type: ignore[method-assign]
 
     pages, stats = await crawl_to_list(
-        "https://site.test/",
-        scrape=_make_scrape(site, calls=calls),
-        depth=1,
-        respect_robots=True,
-        robots=cache,
+        "https://site.test/", scrape=_make_scrape(site, calls=calls), depth=1, robots=cache
     )
     assert "https://site.test/private/x" not in calls, "a disallowed page must not be fetched"
     assert stats.skipped_robots == 1
@@ -289,8 +285,8 @@ async def test_crawl_skips_disallowed_urls_and_reports_them() -> None:
 
 
 @pytest.mark.asyncio
-async def test_robots_is_not_consulted_by_default() -> None:
-    """Enforcement is opt-in, so nothing should even ask robots.txt."""
+async def test_respect_robots_false_fetches_anyway() -> None:
+    """Escape hatch for sites you own — must still work when explicitly set."""
     calls: list[str] = []
     site = {
         "https://site.test/": '<a href="/private/x">x</a>',
@@ -299,12 +295,16 @@ async def test_robots_is_not_consulted_by_default() -> None:
     cache = RobotsCache()
 
     async def never(url: str, **_kwargs: Any) -> bool:
-        raise AssertionError("robots.txt must not be fetched unless respect_robots=True")
+        raise AssertionError("robots must not be consulted when respect_robots=False")
 
     cache.allowed = never  # type: ignore[method-assign]
 
     _pages, stats = await crawl_to_list(
-        "https://site.test/", scrape=_make_scrape(site, calls=calls), depth=1, robots=cache
+        "https://site.test/",
+        scrape=_make_scrape(site, calls=calls),
+        depth=1,
+        respect_robots=False,
+        robots=cache,
     )
     assert "https://site.test/private/x" in calls
     assert stats.skipped_robots == 0
@@ -438,13 +438,7 @@ async def test_a_hostile_crawl_delay_is_capped() -> None:
 
     with pytest.MonkeyPatch.context() as mp:
         mp.setattr(asyncio, "sleep", fake_sleep)
-        await crawl_to_list(
-            "https://site.test/",
-            scrape=_make_scrape(),
-            depth=0,
-            respect_robots=True,
-            robots=cache,
-        )
+        await crawl_to_list("https://site.test/", scrape=_make_scrape(), depth=0, robots=cache)
     assert slept == [_MAX_HONOURED_CRAWL_DELAY_S]
 
 

@@ -1331,9 +1331,9 @@ def _build_server(  # noqa: PLR0915 — single-place tool registration
             "Crawl a site breadth-first, running the full auto_scrape cascade on "
             "each page — so every page benefits from recipe replay, the render "
             "tier, and proxy rotation, and the recipe learned on page one makes "
-            "the rest cheap. Bounded by depth / max_pages / concurrency, and "
-            "the response reports what the bounds left unvisited. robots.txt is "
-            "not consulted unless respect_robots=True. Page HTML is "
+            "the rest cheap. robots.txt is honoured by default, including "
+            "Crawl-delay. Bounded by depth / max_pages / concurrency, and the "
+            "response reports what the bounds left unvisited. Page HTML is "
             "omitted by default: a 50-page crawl of rendered pages is tens of MB "
             "and would swamp the agent's context."
         ),
@@ -1345,7 +1345,7 @@ def _build_server(  # noqa: PLR0915 — single-place tool registration
         max_pages: int = 25,
         concurrency: int = 4,
         same_domain: bool = True,
-        respect_robots: bool = False,
+        respect_robots: bool = True,
         interactive: bool = False,
         timeout_s: float = 120.0,
     ) -> dict[str, Any]:

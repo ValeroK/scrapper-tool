@@ -29,11 +29,8 @@ class TestAgentConfigDefaults:
         assert cfg.behavior == "humanlike"
         assert cfg.captcha_solver == "auto"
         assert cfg.fingerprint == "browserforge"
+        assert cfg.respect_robots is True
         assert cfg.captcha_api_key is None
-        # robots.txt is a crawling convention, not access control; the toolkit's
-        # job is to retrieve what its operator asked for. Enforcement stays
-        # available for deployments that want it (see test_from_env_* below).
-        assert cfg.respect_robots is False
 
 
 class TestFromEnv:
@@ -59,7 +56,7 @@ class TestFromEnv:
         monkeypatch.setenv("SCRAPPER_TOOL_CAPTCHA_SOLVER", "capsolver")
         monkeypatch.setenv("SCRAPPER_TOOL_CAPTCHA_KEY", "sk_test_123")
         monkeypatch.setenv("SCRAPPER_TOOL_CAPTCHA_PAID_FALLBACK", "twocaptcha")
-        monkeypatch.setenv("SCRAPPER_TOOL_AGENT_RESPECT_ROBOTS", "true")
+        monkeypatch.setenv("SCRAPPER_TOOL_AGENT_RESPECT_ROBOTS", "false")
 
         cfg = AgentConfig.from_env()
         assert cfg.browser == "patchright"
@@ -74,8 +71,7 @@ class TestFromEnv:
         assert cfg.captcha_api_key is not None
         assert cfg.captcha_api_key.get_secret_value() == "sk_test_123"
         assert cfg.captcha_paid_fallback == "twocaptcha"
-        # Set to the NON-default so this proves the var is actually read.
-        assert cfg.respect_robots is True
+        assert cfg.respect_robots is False
 
     def test_from_env_reads_render_knobs(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """v1.6.0 Camoufox render/stealth knobs round-trip through from_env."""

@@ -283,13 +283,11 @@ class CrawlRequest(BaseModel):
     concurrency: int = Field(4, ge=1, le=32, description="Pages fetched in parallel")
     same_domain: bool = Field(True, description="Stay on the seed's host and its subdomains")
     respect_robots: bool = Field(
-        False,
+        True,
         description=(
-            "Consult robots.txt and honour Crawl-delay. Off by default. Note that "
-            "Crawl-delay is the one directive that also protects the caller — "
-            "hammering a host is how an IP earns a reputation score that no "
-            "amount of TLS or fingerprint work recovers from — so pace crawls "
-            "with `concurrency` when this is off."
+            "Honour robots.txt, including Crawl-delay. Only set False for sites "
+            "you own or are authorised to crawl — a crawler visits pages nobody "
+            "asked for, which is exactly what robots.txt governs."
         ),
     )
     interactive: bool = Field(
@@ -792,9 +790,9 @@ def _build_app(
         description=(
             "Breadth-first traversal from a seed URL. Each page runs the same "
             "auto cascade as /scrape, so every page benefits from recipe replay, "
-            "the render tier, and proxy rotation. Bounded by depth, max_pages, "
-            "and concurrency; the response reports what the bounds left "
-            "unvisited. robots.txt is not consulted unless respect_robots=true."
+            "the render tier, and proxy rotation. robots.txt is honoured by "
+            "default (including Crawl-delay). Bounded by depth, max_pages, and "
+            "concurrency; the response reports what the bounds left unvisited."
         ),
     )
     async def crawl_endpoint(
