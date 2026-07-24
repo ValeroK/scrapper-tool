@@ -4,6 +4,23 @@ All notable changes to `scrapper-tool` are recorded here. Format follows [Keep a
 
 ## [Unreleased]
 
+## [2.0.0] - 2026-07-24
+
+The autonomous-cascade release. One `scrape()` call now runs a self-driving
+ladder — replay → HTTP → Pattern D → stealth render → LLM — that escalates only as
+far as each site forces it, learns a cheap CSS recipe from every expensive win,
+and remembers per-domain which tier works. Adds site-level `map`/`crawl`, proxy
+rotation, an Agent Skill for LLM clients, and observability for all of it; ports
+to browser-use 0.13; and sweeps the dependency tree (with six transitive CVEs
+fixed via overrides).
+
+**Breaking:** E2 (the interactive browser-use agent) no longer runs
+automatically — pass `interactive=true` for login/pagination/form flows; and
+E2-on-Camoufox now raises rather than silently downgrading, because browser-use
+0.13 attaches over CDP and Camoufox (Firefox) has none. Both are detailed below
+with migration notes. The major bump reflects these cascade-behaviour changes;
+the low-level pattern/extractor API is unchanged.
+
 ### Changed (dependencies)
 - **browser-use 0.5.9 → 0.13.6 (BREAKING for E2).** 0.13 dropped the
   `browser_context=` / `page=` handoff our stealth fix used and attaches over CDP
