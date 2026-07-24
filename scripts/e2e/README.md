@@ -15,6 +15,8 @@ uv run python scripts/e2e/test_pattern_e2.py       # heavy — Pattern E2 (LLM a
 uv run python scripts/e2e/test_captcha_tier0.py    # requires Camoufox installed
 uv run python scripts/e2e/test_captcha_tier2.py    # requires SCRAPPER_TOOL_CAPTCHA_KEY
 uv run python scripts/e2e/test_errors.py           # error taxonomy
+uv run python scripts/e2e/test_autonomous_cascade.py           # the whole cascade via scrape()
+uv run python scripts/e2e/test_autonomous_cascade.py --render  # + the stealth render tier
 
 # MCP-from-agent simulation — runs INSIDE Docker, spawns scrapper-tool-mcp
 # as a sibling subprocess and drives all 6 tools via stdio JSON-RPC.

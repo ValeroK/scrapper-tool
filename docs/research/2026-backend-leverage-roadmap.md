@@ -1,5 +1,17 @@
 # Backend leverage roadmap — Camoufox, Obscura, and the pipeline
 
+> **Status (2026-07): shipped.** The F1–F15 backlog in this document has been
+> delivered across the Phase A–F effort. Highlights: F1 (stealth render tier,
+> `patterns/render.py` + the `render` cascade tier), F2 (learn-once/replay,
+> `scrapper_tool.recipe`), F7 (proxy rotation, `scrapper_tool.proxy`), F8
+> (crawl/map, `scrapper_tool.crawl`), F9 (E1→E2 interactive gate), F10 (real
+> E1-via-Obscura-CDP), F13 (the EU-decimal / block-heuristic / resolver-error
+> fixes), F14 (the full dependency sweep incl. browser-use 0.13). Beyond the
+> backlog: per-domain tier memory, challenge-vendor-steered escalation, the
+> unified `scrape()` entrypoint, and observability for all of it. Live-validated
+> in `2026-07-live-validation.md`. This document is kept for its analysis; the
+> table below is now a record, not a plan.
+
 Forward plan for getting more out of the stealth-browser backends, plus the
 architectural question of **where browsers belong in the pipeline**, and a
 consolidated follow-up backlog. Builds on:
