@@ -36,6 +36,13 @@ All notable changes to `scrapper-tool` are recorded here. Format follows [Keep a
   additive and only dragged other packages back.
 
 ### Added
+- **Agent Skill for driving scrapper-tool from an LLM.**
+  `skills/scrapper-tool/SKILL.md` is a portable, self-contained instruction file
+  (Agent Skills format) that teaches Claude, Cursor, or any agent which
+  entrypoint to call, how the auto-escalating cascade works, how to ask for
+  structured data, and how to read the result. Install instructions per tool in
+  `skills/README.md`. Also fixed a consistency slip the F1 work introduced:
+  `crawl_site()` (library) now defaults `respect_robots=True`, matching REST/MCP.
 - **One library entrypoint: `scrapper_tool.scrape` and `crawl_site`.** The whole
   autonomous cascade — replay → HTTP ladder → Pattern D → render → E1 → (E2 if
   `interactive`), with recipe learning, per-domain tier memory, challenge

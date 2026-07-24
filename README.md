@@ -224,6 +224,13 @@ See **[`docs/quickstart.md`](docs/quickstart.md)** for a 5-minute on-ramp coveri
 MCP-aware client (Claude Desktop, Claude Code, OpenClaw, Hermes Agent, AutoGen,
 LangChain) can call.
 
+> **Teaching an agent to use it:** [`skills/scrapper-tool/SKILL.md`](skills/scrapper-tool/SKILL.md)
+> is a portable Agent Skill that gives an LLM the know-how to drive scrapper-tool
+> — which entrypoint to call, how the cascade escalates, and how to read the
+> result. Load it as a Claude skill, a Cursor rule, or plain context; see
+> [`skills/README.md`](skills/README.md). Pair it with the MCP server (know-how +
+> capability).
+
 ### Tools exposed
 
 | Tool | Purpose |

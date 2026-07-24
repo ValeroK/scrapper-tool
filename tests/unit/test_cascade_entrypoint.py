@@ -166,7 +166,9 @@ async def test_crawl_site_streams_pages(monkeypatch: pytest.MonkeyPatch) -> None
     monkeypatch.setattr("scrapper_tool.ladder.request_with_ladder", ladder)
 
     seen: list[str] = []
-    async for page in crawl_site("https://site.test/", depth=1):
+    # respect_robots=False keeps this test about traversal, not robots.txt (which
+    # for the fake host is unreachable and would disallow everything).
+    async for page in crawl_site("https://site.test/", depth=1, respect_robots=False):
         seen.append(page.url)
         assert page.ok
 
@@ -178,7 +180,7 @@ async def test_crawl_site_yields_incrementally(monkeypatch: pytest.MonkeyPatch) 
     """It's an async iterator, not a batch — the first page arrives early."""
     _fake_ladder(monkeypatch)
 
-    agen = crawl_site("https://example.com/", depth=0)
+    agen = crawl_site("https://example.com/", depth=0, respect_robots=False)
     first = await agen.__anext__()
     assert first.url == "https://example.com/"
     await agen.aclose()

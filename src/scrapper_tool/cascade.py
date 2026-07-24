@@ -83,7 +83,7 @@ async def crawl_site(
     max_pages: int = 50,
     concurrency: int = 4,
     same_domain: bool = True,
-    respect_robots: bool = False,
+    respect_robots: bool = True,
     interactive: bool = False,
     timeout_s: float | None = None,
 ) -> AsyncIterator[Any]:
