@@ -3493,3 +3493,105 @@ class TestMetricsEndpoint:
         body = metrics_resp.text
         # Counter line shape: scrapper_pattern_used_total{pattern="a_b_c"} <N>
         assert 'scrapper_pattern_used_total{pattern="a_b_c"}' in body
+
+    @pytest.mark.asyncio
+    async def test_metrics_record_challenge_vendor(
+        self, app_no_auth: Any, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """F3: a detected wall shows up broken down by vendor."""
+        radware = (
+            "<html><body><script>window.location="
+            "'https://validate.perfdrive.com/x'</script></body></html>"
+        )
+
+        async def fake_ladder(method: str, url: str, **kwargs: Any) -> tuple[Any, str]:
+            return _make_response(text=radware, url=url), "chrome146"
+
+        monkeypatch.setattr("scrapper_tool.ladder.request_with_ladder", fake_ladder)
+        monkeypatch.setattr(http_server, "_hostile_available", lambda: False)
+        _install_fake_render(monkeypatch, html=_PRODUCT_HTML)
+
+        async with _client(app_no_auth) as client:
+            await client.post("/scrape", json={"url": "https://walled.test/p"})
+            metrics_resp = await client.get("/metrics")
+        if metrics_resp.status_code != 200:
+            pytest.skip("prometheus-client not installed")
+        assert 'scrapper_challenge_detected_total{vendor="radware"}' in metrics_resp.text
+
+    @pytest.mark.asyncio
+    async def test_metrics_record_replay_hit(
+        self, app_no_auth: Any, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """F3: recipe payoff is countable — a replay increments the hit event."""
+        from datetime import UTC, datetime
+
+        from scrapper_tool.recipe.derive import Recipe
+        from scrapper_tool.recipe.store import cache_key, get_store
+
+        schema = {
+            "baseSelector": "div.feed-item",
+            "fields": [{"name": "title", "selector": "h2.t", "type": "text"}],
+        }
+        get_store().put(
+            cache_key("https://cars.test/l", schema),
+            Recipe(
+                domain="cars.test",
+                schema=schema,
+                source_tier="a_b_c",
+                sample_url="https://cars.test/l",
+                multi_row=True,
+                created_at=datetime.now(UTC).isoformat(),
+                schema_hash="h",
+                field_names=("title",),
+            ),
+        )
+
+        async def fake_ladder(method: str, url: str, **kwargs: Any) -> tuple[Any, str]:
+            return _make_response(text=_RECIPE_LISTING_HTML, url=url), "chrome146"
+
+        monkeypatch.setattr("scrapper_tool.ladder.request_with_ladder", fake_ladder)
+
+        async with _client(app_no_auth) as client:
+            body = (
+                await client.post(
+                    "/scrape", json={"url": "https://cars.test/l", "schema_json": schema}
+                )
+            ).json()
+            assert body["pattern_used"] == "replay"
+            metrics_resp = await client.get("/metrics")
+        if metrics_resp.status_code != 200:
+            pytest.skip("prometheus-client not installed")
+        assert 'scrapper_recipe_events_total{event="hit"}' in metrics_resp.text
+
+    @pytest.mark.asyncio
+    async def test_metrics_record_policy_skip(
+        self, app_no_auth: Any, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """F3: the self-tuning payoff is countable."""
+        from datetime import UTC, datetime
+
+        from scrapper_tool.recipe.policy import DomainPolicy, get_policy_store
+
+        get_policy_store()._write(  # type: ignore[attr-defined]
+            "walled.test",
+            DomainPolicy(
+                domain="walled.test",
+                best_tier="render",
+                updated_at=datetime.now(UTC).isoformat(),
+                observations=3,
+            ),
+        )
+
+        async def spy_ladder(method: str, url: str, **kwargs: Any) -> tuple[Any, str]:
+            raise AssertionError("ladder should be skipped")
+
+        monkeypatch.setattr("scrapper_tool.ladder.request_with_ladder", spy_ladder)
+        monkeypatch.setattr(http_server, "_hostile_available", lambda: False)
+        _install_fake_render(monkeypatch, html=_PRODUCT_HTML)
+
+        async with _client(app_no_auth) as client:
+            await client.post("/scrape", json={"url": "https://walled.test/p"})
+            metrics_resp = await client.get("/metrics")
+        if metrics_resp.status_code != 200:
+            pytest.skip("prometheus-client not installed")
+        assert 'scrapper_policy_skips_total{start_tier="render"}' in metrics_resp.text

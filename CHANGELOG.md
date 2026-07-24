@@ -36,6 +36,14 @@ All notable changes to `scrapper-tool` are recorded here. Format follows [Keep a
   additive and only dragged other packages back.
 
 ### Added
+- **Observability for the intelligence tiers.** `/metrics` gains
+  `scrapper_challenge_detected_total` (by bot vendor),
+  `scrapper_recipe_events_total` (hit / learned / drift), and
+  `scrapper_policy_skips_total` (by the tier per-domain memory started at) — so
+  the payoff of challenge detection, learn-once/replay, and the self-tuning
+  cascade is visible on a dashboard rather than inferred from latency. Derived
+  from the escalation log the cascade already produces, so no call site is
+  re-instrumented.
 - **Per-domain tier memory — the self-tuning cascade.** `/scrape` and MCP
   `auto_scrape` now remember which tier reached content on each domain and start
   there next time, skipping the tiers a domain has repeatedly proven it doesn't

@@ -676,7 +676,10 @@ def _build_app(
             "``scrapper_pattern_used_total``, "
             "``scrapper_responses_structured_total``, "
             "``scrapper_responses_unstructured_total``, "
-            "``scrapper_user_data_dir_reused_total``. "
+            "``scrapper_user_data_dir_reused_total``, "
+            "``scrapper_challenge_detected_total`` (by vendor), "
+            "``scrapper_recipe_events_total`` (hit/learned/drift), "
+            "``scrapper_policy_skips_total`` (by start tier). "
             "Histograms: ``scrapper_pattern_duration_seconds`` (per step+outcome), "
             "``scrapper_cascade_steps`` (per request). "
             "Returns 503 when ``prometheus-client`` isn't installed (older "
@@ -1054,6 +1057,27 @@ def _get_prometheus_registry() -> Any:
             "Number of /scrape calls that reused a caller-provided persistent profile dir.",
             registry=registry,
         ),
+        # v1.6.0 F3 — the cascade-intelligence tiers, so their payoff is visible
+        # on a dashboard rather than inferred from latency.
+        "challenge_detected": Counter(
+            "scrapper_challenge_detected_total",
+            "Number of /scrape calls where a bot-vendor interstitial was detected, by vendor.",
+            labelnames=["vendor"],
+            registry=registry,
+        ),
+        "recipe_events": Counter(
+            "scrapper_recipe_events_total",
+            "Recipe cache outcomes: hit (replay served), learned, drift (evicted).",
+            labelnames=["event"],
+            registry=registry,
+        ),
+        "policy_skips": Counter(
+            "scrapper_policy_skips_total",
+            "Number of /scrape calls where per-domain memory skipped cheaper tiers, "
+            "by the tier it started at.",
+            labelnames=["start_tier"],
+            registry=registry,
+        ),
     }
     cache = (registry, metrics)
     _get_prometheus_registry._cache = cache  # type: ignore[attr-defined]
@@ -1083,6 +1107,12 @@ def _observe_cascade(payload: dict[str, Any] | None, *, exception: bool = False)
     else:
         metrics["responses_unstructured"].labels(pattern=pattern).inc()
 
+    vendor = payload.get("challenge_detected")
+    if vendor:
+        metrics["challenge_detected"].labels(vendor=str(vendor)).inc()
+    if pattern == "replay":
+        metrics["recipe_events"].labels(event="hit").inc()
+
     log: list[dict[str, Any]] = payload.get("escalation_log") or []
     for entry in log:
         step = entry.get("step", "unknown")
@@ -1091,6 +1121,15 @@ def _observe_cascade(payload: dict[str, Any] | None, *, exception: bool = False)
         metrics["pattern_duration_seconds"].labels(step=step, outcome=outcome).observe(
             float(duration)
         )
+        # The escalation log is the single source of truth for the intelligence
+        # tiers, so derive their counters from it rather than re-instrumenting
+        # each call site.
+        if step == "policy" and outcome == "skipped":
+            metrics["policy_skips"].labels(start_tier=pattern).inc()
+        elif step == "recipe":
+            # reason ∈ {learned, drift}; the "hit" event is counted above from
+            # pattern_used == "replay" so it isn't double-counted here.
+            metrics["recipe_events"].labels(event=entry.get("reason", "unknown")).inc()
     metrics["cascade_steps_total"].observe(len(log))
 
 
@@ -1406,7 +1445,13 @@ async def _do_replay_step(
     r_start = time.perf_counter()
     try:
         from scrapper_tool.recipe.replay import try_replay  # noqa: PLC0415
+        from scrapper_tool.recipe.store import cache_key, get_store  # noqa: PLC0415
 
+        # Snapshot whether a recipe existed *before* the attempt, so a None
+        # result after one did is distinguishable as drift (site changed) rather
+        # than a plain cold miss — try_replay evicts on drift, so this is the
+        # only moment the two can be told apart.
+        had_recipe = get_store().get(cache_key(req.url, req.schema_json)) is not None
         outcome = await try_replay(
             req.url,
             fetch=_make_ladder_fetch(req),
@@ -1417,6 +1462,11 @@ async def _do_replay_step(
         _logger.warning("scrape.replay.failed", url=req.url, error=str(exc)[:160])
         return None
     if outcome is None:
+        if had_recipe:
+            # The recipe stopped matching and was evicted; the cascade re-derives.
+            log.append(
+                _build_log_entry("recipe", outcome="rejected", reason="drift", duration_s=0.0)
+            )
         return None
 
     attempts.append("replay")
@@ -1507,7 +1557,7 @@ def _learn_recipe(req: Any, html: str, data: Any, *, source_tier: str) -> None:
     try:
         from scrapper_tool.recipe.replay import learn_from_success  # noqa: PLC0415
 
-        learn_from_success(
+        recipe = learn_from_success(
             req.url,
             html,
             data,
@@ -1518,6 +1568,11 @@ def _learn_recipe(req: Any, html: str, data: Any, *, source_tier: str) -> None:
             # matches raw HTML replays without a browser.
             cheap_html=req.__dict__.get("_a_b_c_html"),
         )
+        if recipe is not None:
+            # A "recipe" log row so _observe_cascade counts the learn without
+            # this module reaching into the metrics registry.
+            log: list[dict[str, Any]] = req.__dict__.setdefault("_escalation_log", [])
+            log.append(_build_log_entry("recipe", outcome="won", reason="learned", duration_s=0.0))
     except Exception as exc:  # an optimisation for next time; never fail now
         _logger.debug("scrape.learn.failed", url=req.url, error=str(exc)[:160])
 

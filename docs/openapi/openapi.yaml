@@ -65,9 +65,11 @@ paths:
       summary: Prometheus exposition (v1.4.0+)
       description: 'Standard Prometheus text-format exposition. Counters: ``scrapper_pattern_used_total``,
         ``scrapper_responses_structured_total``, ``scrapper_responses_unstructured_total``,
-        ``scrapper_user_data_dir_reused_total``. Histograms: ``scrapper_pattern_duration_seconds``
-        (per step+outcome), ``scrapper_cascade_steps`` (per request). Returns 503
-        when ``prometheus-client`` isn''t installed (older [http] extras).'
+        ``scrapper_user_data_dir_reused_total``, ``scrapper_challenge_detected_total``
+        (by vendor), ``scrapper_recipe_events_total`` (hit/learned/drift), ``scrapper_policy_skips_total``
+        (by start tier). Histograms: ``scrapper_pattern_duration_seconds`` (per step+outcome),
+        ``scrapper_cascade_steps`` (per request). Returns 503 when ``prometheus-client``
+        isn''t installed (older [http] extras).'
       operationId: metrics
       responses:
         '200':
