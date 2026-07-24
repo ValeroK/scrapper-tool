@@ -39,6 +39,7 @@ follow SemVer: breaking changes will only land in a new major version.
 from __future__ import annotations
 
 from scrapper_tool.adapter import Adapter
+from scrapper_tool.cascade import crawl_site, scrape
 from scrapper_tool.errors import (
     AgentBlockedError,
     AgentError,
@@ -61,6 +62,9 @@ from scrapper_tool.http import (
 from scrapper_tool.ladder import (
     IMPERSONATE_LADDER,
     request_with_ladder,
+)
+from scrapper_tool.proxy import (
+    ProxyPool,
 )
 
 __version__ = "1.4.5"
@@ -110,6 +114,7 @@ __all__ = [
     "CaptchaSolveError",
     "ConfigurationError",
     "ParseError",
+    "ProxyPool",
     "ScrapingError",
     "VendorHTTPClient",
     "VendorHTTPError",
@@ -118,7 +123,9 @@ __all__ = [
     "agent_browse",
     "agent_extract",
     "agent_session",
+    "crawl_site",
     "request_with_ladder",
     "request_with_retry",
+    "scrape",
     "vendor_client",
 ]

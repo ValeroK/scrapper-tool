@@ -69,10 +69,11 @@ services:
       SCRAPPER_TOOL_AGENT_LLM: "${SCRAPPER_TOOL_AGENT_LLM:-ollama}"
       SCRAPPER_TOOL_AGENT_OLLAMA_URL: "${SCRAPPER_TOOL_AGENT_OLLAMA_URL:-http://host.docker.internal:11434}"
       SCRAPPER_TOOL_AGENT_MODEL: "${SCRAPPER_TOOL_AGENT_MODEL:-qwen3-vl:8b}"
-      # ---- LM Studio example ----
+      # ---- LM Studio example (OpenAI-compatible; port is user-configurable) ----
       # SCRAPPER_TOOL_AGENT_LLM=openai_compat
-      # SCRAPPER_TOOL_AGENT_OLLAMA_URL=http://host.docker.internal:1234
-      # SCRAPPER_TOOL_AGENT_MODEL=qwen3-vl-8b-instruct
+      # SCRAPPER_TOOL_AGENT_OLLAMA_URL=http://host.docker.internal:6543
+      # SCRAPPER_TOOL_AGENT_MODEL=google/gemma-4-e4b
+      # (the backend appends /v1; MODEL must match an id from GET /v1/models)
       #
       # ---- Browser backend ----
       SCRAPPER_TOOL_AGENT_BROWSER: "${SCRAPPER_TOOL_AGENT_BROWSER:-patchright}"
@@ -227,3 +228,27 @@ services:
         "live and agent",
         "-v",
       ]
+
+  # Obscura — experimental lightweight CDP-server headless browser.
+  # Opt-in via `docker compose --profile obscura up`. Point the app services
+  # at it with SCRAPPER_TOOL_AGENT_BROWSER=obscura and
+  # SCRAPPER_TOOL_AGENT_OBSCURA_CDP_URL=http://obscura:9222 (compose network).
+  obscura:
+    profiles: ["obscura"]
+    # Built from source WITH --features stealth (TLS impersonation + tracker
+    # blocking). The Hub image h4ckf0r0day/obscura:latest is NOT that build, so
+    # its --stealth flag only gives fingerprint consistency. Build with:
+    #   docker compose --profile obscura build
+    build:
+      context: .
+      dockerfile: Dockerfile.obscura
+    image: scrapper-tool-obscura:stealth
+    container_name: obscura
+    # --host 0.0.0.0 is REQUIRED: obscura defaults to 127.0.0.1 inside the
+    # container, which the compose network / published port can't reach.
+    command: ["serve", "--host", "0.0.0.0", "--port", "9222", "--stealth"]
+    # Published to host localhost only; other compose services reach it over
+    # the internal network at http://obscura:9222 regardless.
+    ports:
+      - "127.0.0.1:9222:9222"
+    restart: unless-stopped

@@ -23,21 +23,27 @@ from typing import Any, cast
 
 from pydantic import BaseModel, ValidationError
 
+from scrapper_tool._challenge import looks_like_block_message
 from scrapper_tool._logging import get_logger
 from scrapper_tool.agent.backends import (
     BrowserHandle,
+    BrowserLaunchOptions,
     get_behavior_policy,
     get_browser_backend,
     get_captcha_solver,
     get_fingerprint_generator,
     get_llm_backend,
     is_vision_model,
+    make_on_step_end,
 )
+from scrapper_tool.agent.backends.behavior import make_behavior_consumer
+from scrapper_tool.agent.backends.captcha_dom import make_captcha_consumer
 from scrapper_tool.agent.types import ActionTrace, AgentConfig, AgentResult
 from scrapper_tool.errors import (
     AgentBlockedError,
     AgentError,
     AgentTimeoutError,
+    ConfigurationError,
 )
 
 _logger = get_logger(__name__)
@@ -47,6 +53,25 @@ _BROWSER_USE_NOT_INSTALLED = (
     "browser-use is required for agent_browse. Install the [llm-agent] extra:\n"
     "    pip install scrapper-tool[llm-agent]"
 )
+
+_NO_CDP_FOR_E2 = """E2 (agent_browse) cannot drive the {backend!r} backend.
+
+browser-use 0.13 attaches to a browser over CDP only — it dropped the Playwright
+context/page handoff earlier versions used. Camoufox is a Firefox fork, and
+Firefox removed CDP in favour of WebDriver BiDi, so there is no endpoint for
+browser-use to attach to.
+
+This raises instead of falling back because browser-use SILENTLY ignores unknown
+kwargs: proceeding would launch a plain unpatched Chromium and run the
+interactive agent with no stealth at all, with nothing in the logs to say so.
+
+For interactive flows (login / pagination / dynamic forms) pick a CDP-capable
+backend:
+    browser='patchright'   # Chromium with stealth patches, launched locally
+    browser='obscura'      # Chromium over an external CDP server
+
+Camoufox stays the default for the render tier and E1, where it has the highest
+measured bypass rate and needs no CDP."""
 
 _MAX_SCREENSHOTS = 3
 _TARGET_SCREENSHOT_WIDTH = 1024
@@ -69,14 +94,27 @@ async def run_browse(
     llm = get_llm_backend(config)
     await llm.probe()
 
-    backend = get_browser_backend(config.browser)
+    backend = get_browser_backend(config.browser, cdp_url=config.obscura_cdp_url)
     fingerprint = get_fingerprint_generator(config.fingerprint)
     behavior = get_behavior_policy(config.behavior)
-    _ = get_captcha_solver(config)  # validated; browser-use handles via DOM hooks
+    solver = get_captcha_solver(config)
 
-    handle = await backend.launch(
+    # v1.6.0: hand the backend the full launch-options object. This is what
+    # finally threads ``user_data_dir`` (cf_clearance carry-forward) and the
+    # render/stealth knobs (virtual display, image blocking) into Camoufox —
+    # previously they never reached it.
+    launch_options = BrowserLaunchOptions(
         headful=config.headful,
         proxy=config.proxy,
+        user_data_dir=config.user_data_dir,
+        headless_mode=config.camoufox_headless_mode,
+        block_images=config.block_images,
+        fingerprint_preset=config.fingerprint_preset,
+        os=config.camoufox_os,
+        locale=config.camoufox_locale,
+    )
+    handle = await backend.launch(
+        options=launch_options,
         fingerprint=fingerprint,
         behavior=behavior,
     )
@@ -88,6 +126,8 @@ async def run_browse(
             schema=schema,
             config=config,
             llm_chat=llm.to_browser_use_llm(),
+            solver=solver,
+            behavior=behavior,
             started=started,
         )
     finally:
@@ -95,7 +135,7 @@ async def run_browse(
     return result
 
 
-async def _run_with_handle(  # noqa: PLR0912 — orchestrates the agent loop
+async def _run_with_handle(
     handle: BrowserHandle,
     *,
     url: str,
@@ -103,17 +143,29 @@ async def _run_with_handle(  # noqa: PLR0912 — orchestrates the agent loop
     schema: type[BaseModel] | dict[str, object] | None,
     config: AgentConfig,
     llm_chat: Any,
+    solver: Any,
+    behavior: Any,
     started: float,
 ) -> AgentResult:
     if handle.playwright_browser is None:
         msg = (
             f"browser backend {handle.name!r} does not expose a Playwright Browser; "
-            "agent_browse currently requires camoufox / patchright / scrapling."
+            "agent_browse requires a Playwright-drivable backend (camoufox / patchright / obscura)."
         )
         raise AgentError(msg)
 
+    if not handle.cdp_url:
+        # browser-use 0.13 attaches over CDP only, and it does so *silently*: the
+        # old `browser_context=` / `page=` kwargs are now ignored rather than
+        # rejected, so passing them builds a fresh unpatched Chromium and E2 runs
+        # with no stealth at all. That is the precise bug the v1.6.0 A1 work
+        # fixed, so failing here is deliberate — a silent stealth downgrade is
+        # worse than an error the operator can act on.
+        raise ConfigurationError(_NO_CDP_FOR_E2.format(backend=handle.name))
+
     try:
-        from browser_use import Agent, Browser, BrowserConfig  # noqa: PLC0415
+        from browser_use import Agent  # noqa: PLC0415
+        from browser_use.browser.session import BrowserSession  # noqa: PLC0415
     except ImportError as exc:  # pragma: no cover — covered by unit mock
         raise ImportError(_BROWSER_USE_NOT_INSTALLED) from exc
 
@@ -127,39 +179,40 @@ async def _run_with_handle(  # noqa: PLR0912 — orchestrates the agent loop
 
     use_vision = is_vision_model(config.model)
 
-    # Construct browser-use Browser around the running stealth browser.
-    # v1.3.0: thread the cascade-shared user_data_dir so cookies (cf_clearance)
-    # set by D / E1 carry forward to E2's browser-use session.
-    bu_config_kwargs: dict[str, Any] = {
-        "headless": not config.headful,
-        "disable_security": False,
-    }
-    if config.user_data_dir:
-        bu_config_kwargs["user_data_dir"] = config.user_data_dir
-    bu_browser = Browser(config=BrowserConfig(**bu_config_kwargs))
-    # browser-use exposes a `playwright_browser` injection point on newer
-    # versions; on older it accepts a callable. Try the modern API and
-    # fall back gracefully.
-    if hasattr(bu_browser, "playwright_browser"):
-        bu_browser.playwright_browser = handle.playwright_browser
+    # Attach browser-use to the LIVE browser our stealth backend launched, so it
+    # drives THAT one instead of starting its own default Chromium.
+    #
+    # The mechanism changed in browser-use 0.13: it no longer accepts a
+    # Playwright context/page and talks CDP directly. Passing `cdp_url` is what
+    # makes it treat the browser as external (it derives `is_local=False` from
+    # that), and `keep_alive=True` stops it tearing the browser down on finish —
+    # the lifecycle belongs to `handle.close()`, and letting both close it
+    # double-closes.
+    session = BrowserSession(cdp_url=handle.cdp_url, keep_alive=True)
+
+    agent: Any = Agent(
+        task=full_task,
+        llm=llm_chat,
+        browser_session=session,
+        use_vision=use_vision,
+        max_actions_per_step=4,
+    )
+
+    # Captcha + behavior ride an on_step_end hook: after every agent step
+    # the live page is checked for a challenge (mechanism-aware solve) and
+    # behavior shaping is applied. Consumer errors are swallowed inside the
+    # hook so they never abort the loop.
+    on_step_end = make_on_step_end(
+        make_captcha_consumer(solver),
+        make_behavior_consumer(behavior, full=True),
+    )
 
     try:
-        agent: Any = Agent(
-            task=full_task,
-            llm=llm_chat,
-            browser=bu_browser,
-            use_vision=use_vision,
-            max_actions_per_step=4,
-        )
-    except TypeError:  # pragma: no cover — defensive against API drift
-        # Older browser-use signatures may take fewer kwargs.
-        agent = Agent(task=full_task, llm=llm_chat, browser=bu_browser)
-
-    try:
-        history = await asyncio.wait_for(
-            agent.run(max_steps=config.max_steps),
-            timeout=config.timeout_s,
-        )
+        try:
+            run_coro = agent.run(max_steps=config.max_steps, on_step_end=on_step_end)
+        except TypeError:  # pragma: no cover — older browser-use lacks on_step_end
+            run_coro = agent.run(max_steps=config.max_steps)
+        history = await asyncio.wait_for(run_coro, timeout=config.timeout_s)
     except TimeoutError as exc:
         msg = f"agent_browse timed out after {config.timeout_s}s for {url}"
         raise AgentTimeoutError(msg) from exc
@@ -169,15 +222,9 @@ async def _run_with_handle(  # noqa: PLR0912 — orchestrates the agent loop
         if _looks_like_block(exc):
             raise AgentBlockedError(f"agent_browse blocked at {url}: {exc}") from exc
         raise AgentError(f"agent_browse failed at {url}: {exc}") from exc
-    finally:
-        try:
-            close = getattr(bu_browser, "close", None)
-            if close is not None:
-                result = close()
-                if hasattr(result, "__await__"):
-                    await result
-        except Exception as exc:
-            _logger.debug("agent.browse.bu_browser_close_failed", error=str(exc))
+    # NB: the browser is the backend's own (passed to browser-use as an existing
+    # context), so its lifecycle is owned by ``handle.close()`` in run_browse —
+    # we must NOT close it here or we'd double-close.
 
     duration = time.perf_counter() - started
     return _history_to_agent_result(
@@ -195,19 +242,13 @@ def _schema_for_prompt(schema: type[BaseModel] | dict[str, object]) -> str:
 
 
 def _looks_like_block(exc: Exception) -> bool:
-    text = str(exc).lower()
-    return any(
-        needle in text
-        for needle in (
-            "challenge",
-            "cloudflare",
-            "captcha",
-            "blocked",
-            "403",
-            "access denied",
-            "datadome",
-        )
-    )
+    """Does this exception look like an anti-bot block rather than a bug?
+
+    Shared with E1 via :func:`scrapper_tool._challenge.looks_like_block_message`
+    — the two tiers had byte-identical copies of this list, which is exactly the
+    kind of duplication that drifts the moment one of them learns a new vendor.
+    """
+    return looks_like_block_message(str(exc))
 
 
 # --- History → AgentResult conversion ------------------------------------

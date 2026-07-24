@@ -4,6 +4,232 @@ All notable changes to `scrapper-tool` are recorded here. Format follows [Keep a
 
 ## [Unreleased]
 
+### Changed (dependencies)
+- **browser-use 0.5.9 → 0.13.6 (BREAKING for E2).** 0.13 dropped the
+  `browser_context=` / `page=` handoff our stealth fix used and attaches over CDP
+  only — while *silently ignoring* the old kwargs rather than raising, so an
+  un-ported upgrade would have run E2 on an unpatched Chromium with no stealth
+  and no error. E2 now attaches via `BrowserSession(cdp_url=…, keep_alive=True)`.
+  Patchright launches with a debug port and Obscura passes its own CDP endpoint;
+  Camoufox has no CDP (it's Firefox → WebDriver BiDi), so E2 on Camoufox now
+  raises `ConfigurationError` naming the fix rather than silently downgrading.
+  Camoufox stays the default for the render tier and E1. Contract tests assert
+  the *real* installed browser-use API, since every mocked test passed against
+  the removed one.
+- **TLS impersonation ladder refreshed** to `chrome146 / chrome142 / safari260 /
+  firefox147 / chrome133a` (was `chrome133a / chrome124 / safari18_0 /
+  firefox135`) for curl_cffi 0.15, and the single-shot path to `chrome146`. A
+  stale ladder is itself a fingerprint — impersonating a Chrome build no real
+  user runs is as identifying as a bot UA. Two drift guards added: every rung is
+  checked against curl_cffi's own target list, and the lead profile against the
+  newest Chrome it ships.
+- **Stopped resolving pre-releases.** `prerelease = "allow"` (left over from when
+  Crawl4AI was pre-release only) was dragging the tree onto alphas — lxml 7.0a3,
+  pydantic 2.14a1, curl-cffi 0.16b1, mcp 2.0b2. Removed.
+- **Upgraded** mypy 1.20→2.3, fastapi 0.135→0.139, uvicorn 0.46→0.51, crawl4ai
+  0.9.0→0.9.2, selectolax 0.4.7→0.4.11, lxml 6.1.0→6.1.1, pillow 12.2→12.3, mcp
+  1.27→1.28, pytest 9.0→9.1, ruff 0.15.12→0.15.22. In the `[full]` environment
+  browser-use's exact pins hold pydantic at 2.12.5 and scrapling at 0.4.6
+  (accepted, not overridden — they guard browser-use's LLM-tool-call and CDP
+  paths); a `[hostile]`-only install still gets scrapling 0.4.11. browser-use's
+  exact `typing-extensions==4.15.0` pin *is* overridden (→≥4.16), as it's
+  additive and only dragged other packages back.
+
+### Added
+- **Agent Skill for driving scrapper-tool from an LLM.**
+  `skills/scrapper-tool/SKILL.md` is a portable, self-contained instruction file
+  (Agent Skills format) that teaches Claude, Cursor, or any agent which
+  entrypoint to call, how the auto-escalating cascade works, how to ask for
+  structured data, and how to read the result. Install instructions per tool in
+  `skills/README.md`. Also fixed a consistency slip the F1 work introduced:
+  `crawl_site()` (library) now defaults `respect_robots=True`, matching REST/MCP.
+- **One library entrypoint: `scrapper_tool.scrape` and `crawl_site`.** The whole
+  autonomous cascade — replay → HTTP ladder → Pattern D → render → E1 → (E2 if
+  `interactive`), with recipe learning, per-domain tier memory, challenge
+  detection, and proxy rotation — is now one `await scrape(url, schema=...)` call
+  with no REST sidecar or MCP server to stand up. It delegates to the same
+  cascade the `/scrape` endpoint runs (not a parallel implementation), so the
+  three surfaces can't drift; the cascade body's FastAPI imports are lazy, so the
+  library call needs no `[http]` extra. `crawl_site` streams `CrawlPage`s,
+  running that cascade per page.
+- **Observability for the intelligence tiers.** `/metrics` gains
+  `scrapper_challenge_detected_total` (by bot vendor),
+  `scrapper_recipe_events_total` (hit / learned / drift), and
+  `scrapper_policy_skips_total` (by the tier per-domain memory started at) — so
+  the payoff of challenge detection, learn-once/replay, and the self-tuning
+  cascade is visible on a dashboard rather than inferred from latency. Derived
+  from the escalation log the cascade already produces, so no call site is
+  re-instrumented.
+- **Per-domain tier memory — the self-tuning cascade.** `/scrape` and MCP
+  `auto_scrape` now remember which tier reached content on each domain and start
+  there next time, skipping the tiers a domain has repeatedly proven it doesn't
+  need (e.g. an Akamai/Cloudflare site where the ladder always 403s and only a
+  render works). On by default (`SCRAPPER_TOOL_DOMAIN_POLICY=0` disables), stored
+  under `<recipe dir>/policy/`. Deliberately conservative: it only skips *cheaper*
+  tiers (never jumps past a working one, so it can never produce a wrong answer,
+  only a faster one), requires two wins at the same tier before trusting a domain,
+  expires after 24h so a site that tightened *or relaxed* is re-discovered, and
+  only a real win teaches it — a blocked result never does. The replay tier still
+  runs first regardless.
+- **E1 renders through the Obscura CDP server when `browser="obscura"`.** Until
+  now that setting only validated the name — E1 still launched Crawl4AI's own
+  Chromium and the Obscura server was never touched. E1 now sets
+  `BrowserConfig(cdp_url=…, use_managed_browser=True)` (crawl4ai ignores `cdp_url`
+  without the managed flag) and drops the persistent profile, which is mutually
+  exclusive with a CDP attach. A contract test asserts the real crawl4ai
+  `BrowserConfig` still accepts these kwargs, so an upgrade that renames them
+  fails loudly instead of silently reverting to a local browser.
+- **`obscura_fetch` — dependency-light single-URL render** via
+  `obscura fetch --dump {html,text,links,markdown,…}`. No Playwright, no Camoufox
+  binary; `dump="markdown"` uses Obscura's built-in DOM→markdown as an E1-lite
+  for LLM-ready text. Single-page, so a non-zero exit raises rather than
+  returning an empty string an extractor would silently accept.
+- **Stealth-render cascade tier (no LLM).** `/scrape` and MCP `auto_scrape` now
+  try a stealth-browser render plus the existing deterministic extractors
+  between Pattern D and the LLM tiers, reported as `pattern_used="render"` with
+  `tokens_used=0`. On by default (`SCRAPPER_TOOL_RENDER_TIER=0` disables);
+  skipped without an entry in `pattern_attempts` when `[llm-agent]` is absent.
+  Measured motivation: one target returned 403 on all four TLS profiles while
+  rendering 1.35 MB of genuine content, and another went from 4 extractable
+  headlines to 212 once rendered — both then extractable with zero tokens, so
+  the LLM is now genuinely the last resort rather than the first escalation.
+  Success is judged on extracted content, not status code, so a 403 carrying a
+  real rendered DOM is a win. The cascade-resolved profile directory is shared
+  with the browser, carrying clearance cookies forward from earlier rungs, and
+  the rendered DOM becomes `intermediate_raw_text` when the LLM tier still runs.
+- **Site-level scraping: `/map` + `/crawl` (REST), `map_site` + `crawl_site`
+  (MCP).** `map` discovers URLs from sitemaps (via robots.txt `Sitemap:`
+  directives, falling back to `/sitemap.xml`) plus links on the seed page —
+  no browser, no LLM. `crawl` walks a site breadth-first running the **full auto
+  cascade per page**, so every page inherits recipe replay, the render tier,
+  challenge detection, and proxy rotation, and the recipe learned on page one
+  makes the rest of the crawl cheap. Bounded by depth / max_pages / concurrency,
+  with `hit_page_limit`, `hit_depth_limit`, and `queued_but_unvisited` reported so
+  a bounded crawl is never mistaken for a complete one. Page HTML is omitted
+  unless requested (a 50-page crawl of rendered pages is tens of MB of JSON).
+- **`respect_robots` is now actually enforced.** The setting has existed since
+  v1.0 and defaulted to True, but nothing read it beyond a startup log line. The
+  crawler honours robots.txt by default, including `Crawl-delay` — fractional
+  values included, which Python's own `RobotFileParser` silently discards because
+  it parses that directive with `int()`. Status handling follows RFC 9309: 4xx
+  (including the 403 anti-bot systems often serve for robots.txt) means no rules
+  published; 5xx or unreachable is a full disallow. Fetched once per origin per
+  hour. A hostile `Crawl-delay` is capped at 10s of real waiting.
+- **Learn-once / replay (`pattern_used="replay"`).** When an expensive tier
+  succeeds, the cascade derives the CSS selectors that would have produced the
+  same data for free, verifies them against that page, and caches the recipe per
+  domain. The next request for that domain replays it — a fetch plus a
+  selectolax parse instead of a browser launch or an LLM call. On by default
+  (`SCRAPPER_TOOL_RECIPE_CACHE=0` disables; `SCRAPPER_TOOL_RECIPE_DIR` relocates
+  the cache). Wired into both REST `/scrape` and MCP `auto_scrape`.
+  - Recipes carry the tier they were learned from, so a render-learned recipe is
+    replayed with a render rather than silently returning nothing over a raw
+    fetch — and when its selectors provably also match the body A/B/C already
+    fetched, it is downgraded to a fetch recipe so future replays skip the
+    browser entirely.
+  - Drift self-heals: a recipe that stops matching is evicted and the normal
+    cascade re-derives a fresh one.
+  - No recipe is derived for JSON-LD/microdata wins (Pattern B already handles
+    those deterministically) or for pages whose only handles are build-generated
+    class hashes. Refusing costs one full-price request; a wrong recipe would
+    cost correctness.
+- **Challenge detection now steers escalation, and is reported.** Every
+  `/scrape` and `auto_scrape` response carries `challenge_detected` — the bot
+  vendor that walled us (`cloudflare`, `radware`, `datadome`, `perimeterx`,
+  `akamai`, `kasada`, `incapsula`, `unknown`) or null. Previously the
+  heuristics were private to `http_server`, Cloudflare-only, and used solely to
+  pick a Scrapling retry strategy; MCP had none at all. On a non-Cloudflare
+  wall the cascade now skips Pattern D and goes straight to the render tier,
+  because Scrapling's only anti-bot weapon (`solve_cloudflare`) doesn't apply
+  and D would spend a browser launch re-fetching the same interstitial. A
+  Cloudflare wall still runs D — that is what it is for.
+- **Obscura browser backend (experimental).** `browser="obscura"` connects to
+  an external Obscura CDP server (`obscura serve`) via Playwright
+  `connect_over_cdp`, returning a real Playwright browser that drives E2
+  (`agent_browse`) directly. Lightweight (~30 MB RAM) alternative to Camoufox.
+  Configured via `SCRAPPER_TOOL_AGENT_OBSCURA_CDP_URL` (default
+  `ws://127.0.0.1:9222`). Non-default and benchmark-gated — measure its real
+  detection rate via the `canary` CLI before trusting it on protected sites. A
+  profile-gated `obscura` service is included in `docker-compose.yml`.
+
+### Fixed
+- **European decimal commas no longer multiply prices by 100.** Pattern C stripped
+  every comma before parsing, so `"19,99"` became `Decimal("1999")` — silent, with
+  no error and a plausible-looking number. Pattern B had the mirror-image bug:
+  it handed the raw string to `Decimal()`, so the US `"1,299.99"` raised and the
+  price came back as `None`. Both now use one shared parser
+  (`scrapper_tool._money.parse_price`) that infers the separator from the
+  string's shape: with both present the last one is the decimal (`1,299.99` and
+  `1.299,99` both give 1299.99); a lone comma with 1-2 trailing digits is a
+  decimal, three is a thousands group. Space/NBSP/apostrophe grouping is handled,
+  and `decimal_sep="."`/`","` forces an interpretation when the locale is known.
+  The one irreducibly ambiguous case — a lone dot with three digits, `"1.299"` —
+  keeps the US reading, and is documented rather than guessed.
+- **A bad per-call backend name returns 503, not 500.** The browser, LLM,
+  fingerprint, behavior, and captcha resolvers raised bare `ValueError` on an
+  unknown name, which surfaced as an unhandled 500. They now raise
+  `ConfigurationError`, which the REST layer already maps to 503 — a
+  misconfiguration the caller can fix, not a server fault.
+- **The anti-bot block heuristic is no longer duplicated.** E1 and E2 carried
+  byte-identical copies of a substring list, so teaching one about a new vendor
+  left the other behind. Both now call
+  `scrapper_tool._challenge.looks_like_block_message`, which reuses the same
+  per-vendor signature table the cascade uses (a navigation error often carries
+  the wall's own hostname) and adds the generic 429 / rate-limit wording that
+  neither copy had.
+
+### Added (batch)
+- **`batch_fetch` via the `obscura` CLI** (`scrapper_tool.crawl.batch`) — renders
+  many URLs in one process via `obscura scrape --concurrency`. A fast path for
+  bulk retrieval of pages already known to be unprotected; it gives up the TLS
+  ladder, recipe replay, challenge detection, proxy rotation, and per-page
+  escalation, so `crawl()` remains the right call for anything else. Output is
+  parsed tolerantly (array, single object, or JSON Lines; alternative field
+  names) and a non-zero exit still returns the records that did parse, with
+  unparsed and never-returned URLs both reported rather than dropped.
+
+- **A CSS-shaped `schema_json` now wins at tier 1.** The A/B/C tier ran only the
+  JSON-LD and microdata extractors, so a caller supplying a CSS schema always fell
+  through to Pattern D and paid for Scrapling's browser at minimum — even on a
+  plain server-rendered listing whose raw markup had everything the selectors
+  needed. Tier 1 now runs the same extractor pipeline as the tiers below it, and
+  its response carries the extracted rows in `data`.
+
+### Changed
+- **BREAKING (cascade behaviour): E2 no longer runs automatically.** A blocked
+  E1 used to auto-escalate into the browser-use agent loop on every `mode=auto`
+  scrape. E2 is the most expensive tier by a wide margin and the only thing it
+  can do that the render tier can't is *interact* — a page that is simply walled
+  will wall the agent too, just slower and for many more tokens. Pass
+  `interactive: true` (REST `/scrape`) or `interactive=True` (MCP
+  `auto_scrape`) for targets that genuinely need login / pagination / dynamic
+  forms. Otherwise the cascade stops at E1 and returns E1's blocked result,
+  which carries the escalation log and any partial content. An explicit REST
+  `mode="browse"` is a direct request for E2 and is never gated. To restore the
+  old behaviour, set `interactive: true` on the calls that relied on it.
+- **Captcha solver cascade is now actually wired into Pattern E.** Previously
+  `get_captcha_solver(config)` was constructed and discarded (`_ =`) in both E1
+  and E2, so `.solve()` never ran — only Camoufox's built-in `humanize` defeated
+  Turnstile. The solver now runs on the live page via a browser-use
+  `on_step_end` hook (E2) and a Crawl4AI `after_goto` hook (E1), through a new
+  mechanism-aware DOM helper (`captcha_dom`): stealth auto-pass first, in-context
+  handling preferred for Turnstile, foreign-token injection only for
+  portable-token kinds (reCAPTCHA / hCaptcha).
+- **Behavior policy is now wired in** the same way (page-level settle/scroll
+  shaping in E2; a minimal pre-return settle in E1). Previously discarded.
+- **MCP `auto_scrape` now uses the same accept logic as REST `/scrape`.** The
+  two surfaces shared a cascade in name only — MCP always escalated to an LLM
+  call whenever a schema was supplied, even when Pattern B/C/D produced a valid
+  signal. Both now delegate to one shared `classify_extraction_success`
+  (extracted from REST's classifier; REST behavior is unchanged).
+
+### Removed
+- **Zendriver and Botasaurus browser backends** (and their `zendriver-backend` /
+  `botasaurus-backend` extras). Both returned `playwright_browser=None`, so
+  `agent_browse` raised `AgentError` at runtime for them — they were never
+  drivable via Pattern E. The lightweight/CDP niche they aimed at is now filled
+  by the Obscura backend.
+
 ## [1.4.2] - 2026-05-06
 
 Hotfix release. v1.4.0/v1.4.1's extractor registry bootstrap had a

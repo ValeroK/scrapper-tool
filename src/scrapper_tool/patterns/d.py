@@ -1,7 +1,7 @@
 """Pattern D — Hostile sites (Cloudflare Turnstile, Akamai EVA, Distil, …).
 
 Last-resort path when the M2 anti-bot ladder
-(``chrome133a → chrome124 → safari18_0 → firefox135``) has been
+(``chrome146 → chrome142 → safari260 → firefox147``) has been
 exhausted with all-403 responses. Backed by `Scrapling`_, which ships
 a Playwright-based fetcher with built-in Turnstile auto-solve and
 behavioural-fingerprint mimicry.
@@ -28,8 +28,8 @@ Decision tree
 
 Before reaching for Pattern D, confirm:
 
-1. M2's ladder genuinely returns 403 on **every** profile (chrome133a /
-   chrome124 / safari18_0 / firefox135). Capture the 403/200 matrix in
+1. M2's ladder genuinely returns 403 on **every** profile (chrome146 /
+   chrome142 / safari260 / firefox147). Capture the 403/200 matrix in
    your adapter notes — future debuggers need it.
 2. The vendor's challenge is a **JS-behavioural** one (Cloudflare
    Turnstile, Akamai sensor-data, Distil) rather than just a stale TLS

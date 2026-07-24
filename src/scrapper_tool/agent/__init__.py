@@ -11,8 +11,7 @@ Two modes:
 
 Both modes share a pluggable backend stack:
 
-- BrowserBackend: Camoufox (default), Patchright, Zendriver, Botasaurus,
-  Scrapling.
+- BrowserBackend: Camoufox (default), Patchright, Scrapling.
 - LLMBackend: Ollama (default), llama.cpp, vLLM, generic OpenAI-compat.
 - CaptchaSolver: free OSS cascade (CamoufoxAuto → Theyka) → optional
   paid (CapSolver / NopeCHA / 2Captcha) when ``captcha_api_key`` is set.

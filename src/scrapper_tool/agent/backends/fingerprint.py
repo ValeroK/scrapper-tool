@@ -1,8 +1,8 @@
 """Per-session fingerprint generation for non-Camoufox browser backends.
 
 Camoufox patches the Firefox engine at the C++ level and brings its own
-fingerprint surface. Patchright / Zendriver / Botasaurus drive a
-stock-ish Chromium and need an injected fingerprint (UA, Accept-*,
+fingerprint surface. Patchright (and other Chromium-class backends) drive
+a stock-ish Chromium and need an injected fingerprint (UA, Accept-*,
 Sec-CH-UA, viewport, screen, fonts, Canvas/WebGL/AudioContext noise) to
 look like a real browser.
 
@@ -16,6 +16,7 @@ from __future__ import annotations
 from typing import Protocol
 
 from scrapper_tool._logging import get_logger
+from scrapper_tool.errors import ConfigurationError
 
 _logger = get_logger(__name__)
 
@@ -24,8 +25,8 @@ class GeneratedFingerprint:
     """Bundled output of a fingerprint generator.
 
     Backend-agnostic — backends pick the bits they understand:
-    Patchright applies ``user_agent`` / ``viewport`` / ``locale`` to a
-    Playwright context, Zendriver applies them via CDP overrides, etc.
+    Patchright / Obscura apply ``user_agent`` / ``viewport`` / ``locale``
+    to a Playwright context, etc.
     """
 
     __slots__ = ("headers", "init_scripts", "locale", "user_agent", "viewport")
@@ -154,7 +155,7 @@ def get_fingerprint_generator(name: str) -> FingerprintGenerator:
     if name == "none":
         return NoOpGenerator()
     msg = f"Unknown fingerprint generator: {name!r}. Choices: 'browserforge', 'none'."
-    raise ValueError(msg)
+    raise ConfigurationError(msg)
 
 
 __all__ = [

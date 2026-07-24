@@ -85,7 +85,7 @@
           "operational"
         ],
         "summary": "Prometheus exposition (v1.4.0+)",
-        "description": "Standard Prometheus text-format exposition. Counters: ``scrapper_pattern_used_total``, ``scrapper_responses_structured_total``, ``scrapper_responses_unstructured_total``, ``scrapper_user_data_dir_reused_total``. Histograms: ``scrapper_pattern_duration_seconds`` (per step+outcome), ``scrapper_cascade_steps`` (per request). Returns 503 when ``prometheus-client`` isn't installed (older [http] extras).",
+        "description": "Standard Prometheus text-format exposition. Counters: ``scrapper_pattern_used_total``, ``scrapper_responses_structured_total``, ``scrapper_responses_unstructured_total``, ``scrapper_user_data_dir_reused_total``, ``scrapper_challenge_detected_total`` (by vendor), ``scrapper_recipe_events_total`` (hit/learned/drift), ``scrapper_policy_skips_total`` (by start tier). Histograms: ``scrapper_pattern_duration_seconds`` (per step+outcome), ``scrapper_cascade_steps`` (per request). Returns 503 when ``prometheus-client`` isn't installed (older [http] extras).",
         "operationId": "metrics",
         "responses": {
           "200": {
@@ -105,7 +105,7 @@
           "scraping"
         ],
         "summary": "Pattern A/B/C \u2014 TLS-impersonation ladder fetch",
-        "description": "Walks the impersonation ladder (chrome133a / chrome124 / safari18_0 / firefox135) until a profile returns non-403/503. With extract_structured=true (default), also runs Pattern B (extruct JSON-LD / microdata) and Pattern C (microdata price).",
+        "description": "Walks the impersonation ladder (chrome146 / chrome142 / safari260 / firefox147 / chrome133a) until a profile returns non-403/503. With extract_structured=true (default), also runs Pattern B (extruct JSON-LD / microdata) and Pattern C (microdata price).",
         "operationId": "fetch",
         "requestBody": {
           "content": {
@@ -294,6 +294,104 @@
           }
         ]
       }
+    },
+    "/map": {
+      "post": {
+        "tags": [
+          "scraping"
+        ],
+        "summary": "Discover URLs on a site",
+        "description": "Combines sitemap discovery (via robots.txt Sitemap: directives, falling back to /sitemap.xml) with links extracted from the seed page fetched through the impersonation ladder. Cheap \u2014 no browser, no LLM. Reports truncation explicitly rather than silently capping.",
+        "operationId": "map",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/MapRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "type": "object",
+                  "title": "Response Map"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "APIKeyHeader": []
+          }
+        ]
+      }
+    },
+    "/crawl": {
+      "post": {
+        "tags": [
+          "scraping"
+        ],
+        "summary": "Crawl a site, running the full cascade per page",
+        "description": "Breadth-first traversal from a seed URL. Each page runs the same auto cascade as /scrape, so every page benefits from recipe replay, the render tier, and proxy rotation. robots.txt is honoured by default (including Crawl-delay). Bounded by depth, max_pages, and concurrency; the response reports what the bounds left unvisited.",
+        "operationId": "crawl",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CrawlRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "type": "object",
+                  "title": "Response Crawl"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "APIKeyHeader": []
+          }
+        ]
+      }
     }
   },
   "components": {
@@ -381,6 +479,101 @@
         ],
         "title": "BrowseRequest",
         "description": "Body of POST /browse."
+      },
+      "CrawlRequest": {
+        "properties": {
+          "url": {
+            "type": "string",
+            "title": "Url",
+            "description": "Seed URL"
+          },
+          "schema_json": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "items": {},
+                "type": "array"
+              },
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Schema Json",
+            "description": "Passed to each page's cascade run, exactly as /scrape takes it"
+          },
+          "depth": {
+            "type": "integer",
+            "maximum": 10.0,
+            "minimum": 0.0,
+            "title": "Depth",
+            "description": "Link-following depth; 0 visits only the seed",
+            "default": 2
+          },
+          "max_pages": {
+            "type": "integer",
+            "maximum": 1000.0,
+            "minimum": 1.0,
+            "title": "Max Pages",
+            "description": "Hard cap on pages visited. Reported when hit.",
+            "default": 50
+          },
+          "concurrency": {
+            "type": "integer",
+            "maximum": 32.0,
+            "minimum": 1.0,
+            "title": "Concurrency",
+            "description": "Pages fetched in parallel",
+            "default": 4
+          },
+          "same_domain": {
+            "type": "boolean",
+            "title": "Same Domain",
+            "description": "Stay on the seed's host and its subdomains",
+            "default": true
+          },
+          "respect_robots": {
+            "type": "boolean",
+            "title": "Respect Robots",
+            "description": "Honour robots.txt, including Crawl-delay. Only set False for sites you own or are authorised to crawl \u2014 a crawler visits pages nobody asked for, which is exactly what robots.txt governs.",
+            "default": true
+          },
+          "interactive": {
+            "type": "boolean",
+            "title": "Interactive",
+            "description": "Allow per-page escalation to E2 (see /scrape's interactive)",
+            "default": false
+          },
+          "include_html": {
+            "type": "boolean",
+            "title": "Include Html",
+            "description": "Include each page's raw HTML in the response. Off by default because a 50-page crawl of rendered pages is tens of megabytes of JSON.",
+            "default": false
+          },
+          "timeout_s": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Timeout S",
+            "description": "Per-page timeout"
+          }
+        },
+        "type": "object",
+        "required": [
+          "url"
+        ],
+        "title": "CrawlRequest",
+        "description": "Body of POST /crawl \u2014 recursive traversal running the cascade per page."
       },
       "ExtractRequest": {
         "properties": {
@@ -538,6 +731,59 @@
         "type": "object",
         "title": "HTTPValidationError"
       },
+      "MapRequest": {
+        "properties": {
+          "url": {
+            "type": "string",
+            "title": "Url",
+            "description": "Seed URL; its site is what gets mapped"
+          },
+          "max_urls": {
+            "type": "integer",
+            "maximum": 10000.0,
+            "minimum": 1.0,
+            "title": "Max Urls",
+            "description": "Cap on returned URLs. Truncation is reported via `truncated` and `dropped_by_limit` rather than silently applied.",
+            "default": 200
+          },
+          "same_domain": {
+            "type": "boolean",
+            "title": "Same Domain",
+            "description": "Restrict to the seed's host and its subdomains. False follows links anywhere, which on a page with outbound links means the whole web.",
+            "default": true
+          },
+          "include_sitemap": {
+            "type": "boolean",
+            "title": "Include Sitemap",
+            "description": "Read sitemaps declared in robots.txt (and /sitemap.xml)",
+            "default": true
+          },
+          "fetch_seed": {
+            "type": "boolean",
+            "title": "Fetch Seed",
+            "description": "Fetch the seed page through the impersonation ladder to extract its links. False makes this sitemap-only \u2014 no page request at all.",
+            "default": true
+          },
+          "timeout_s": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Timeout S",
+            "description": "Per-request timeout for the seed fetch"
+          }
+        },
+        "type": "object",
+        "required": [
+          "url"
+        ],
+        "title": "MapRequest",
+        "description": "Body of POST /map \u2014 URL discovery."
+      },
       "ScrapeRequest": {
         "properties": {
           "url": {
@@ -651,6 +897,12 @@
             "type": "boolean",
             "title": "Force Llm Extract",
             "description": "Pre-v1.1.2 behaviour: with ``mode=auto`` and ``schema_json`` set, always escalate to E1 even when A/B/C returned a readable page. From v1.1.2 the default is to accept A/B/C as success when the page returned 200 + any structured signal, letting the caller post-process from the raw fetch instead of paying for an LLM call. Set ``force_llm_extract=true`` to opt back in to the old always-escalate behaviour.",
+            "default": false
+          },
+          "interactive": {
+            "type": "boolean",
+            "title": "Interactive",
+            "description": "Whether this target needs a multi-step agent (NEW v1.6.0). E2 (browser-use) is the most expensive tier by a wide margin and only earns its cost on genuinely interactive flows \u2014 login, pagination, dynamic forms. With interactive=false (default) a blocked E1 stops and returns the blocked result rather than auto-escalating into an agent loop that will hit the same wall, slower. Set true when the page really does require interaction.",
             "default": false
           },
           "hostile_fallback": {

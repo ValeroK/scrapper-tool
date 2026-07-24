@@ -21,13 +21,13 @@ from scrapper_tool.agent.backends.behavior import (
     get_behavior_policy,
 )
 from scrapper_tool.agent.backends.browser import (
-    BotasaurusBackend,
     BrowserBackend,
     BrowserHandle,
+    BrowserLaunchOptions,
     CamoufoxBackend,
+    ObscuraBackend,
     PatchrightBackend,
     ScraplingBackend,
-    ZendriverBackend,
     get_browser_backend,
     open_browser,
 )
@@ -59,13 +59,18 @@ from scrapper_tool.agent.backends.llm import (
     get_llm_backend,
     is_vision_model,
 )
+from scrapper_tool.agent.backends.page_hooks import (
+    get_e2_page,
+    make_after_goto,
+    make_on_step_end,
+)
 
 __all__ = [
     "AutoCascadeSolver",
     "BehaviorPolicy",
-    "BotasaurusBackend",
     "BrowserBackend",
     "BrowserHandle",
+    "BrowserLaunchOptions",
     "BrowserforgeGenerator",
     "CamoufoxAutoSolver",
     "CamoufoxBackend",
@@ -81,6 +86,7 @@ __all__ = [
     "NoOpGenerator",
     "NoSolver",
     "NopechaSolver",
+    "ObscuraBackend",
     "OffPolicy",
     "OllamaBackend",
     "OpenAICompatBackend",
@@ -89,12 +95,14 @@ __all__ = [
     "TheykaSolver",
     "TwoCaptchaSolver",
     "VLLMBackend",
-    "ZendriverBackend",
     "get_behavior_policy",
     "get_browser_backend",
     "get_captcha_solver",
+    "get_e2_page",
     "get_fingerprint_generator",
     "get_llm_backend",
     "is_vision_model",
+    "make_after_goto",
+    "make_on_step_end",
     "open_browser",
 ]

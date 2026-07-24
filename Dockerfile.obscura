@@ -1,0 +1,87 @@
+# syntax=docker/dockerfile:1
+# Obscura built WITH the `stealth` feature — the whole point of this file.
+#
+# The published Docker Hub image (h4ckf0r0day/obscura:latest) is NOT compiled
+# with `--features stealth`, so its runtime `--stealth` flag only gives
+# fingerprint consistency: no TLS/JA3 impersonation and no tracker blocking.
+# That is measurably weaker — it was defeated by a Radware bot-wall that
+# Camoufox passed. Building from source with the feature enabled unlocks:
+#
+#   - TLS impersonation (JA3/JA4)
+#   - 3,520 blocked tracker/analytics/fingerprinting domains
+#   - per-session GPU/screen/canvas/audio/battery randomization
+#   - navigator.webdriver = undefined, native-function masking
+#
+# Build (heavy — V8 compiles from source, ~5 min+ and a large builder layer):
+#   docker build -f Dockerfile.obscura -t scrapper-tool-obscura:stealth .
+# Or via compose:
+#   docker compose --profile obscura build
+#
+# Then point the app at it:
+#   SCRAPPER_TOOL_AGENT_BROWSER=obscura
+#   SCRAPPER_TOOL_AGENT_OBSCURA_CDP_URL=http://obscura:9222
+#
+# NB: benchmark before trusting it on protected targets — see
+# scripts/e2e/bench_obscura.py and docs/research/2026-camoufox-obscura-capabilities.md.
+
+FROM rust:1-bookworm AS builder
+
+# V8 is compiled from source by the JS-engine crate on a cold build: needs a
+# C++ toolchain, python3 (GN/ninja driver), and clang/libclang for bindgen.
+RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
+    --mount=type=cache,target=/var/lib/apt,sharing=locked \
+    apt-get update && apt-get install -y --no-install-recommends \
+        ca-certificates \
+        clang \
+        cmake \
+        git \
+        libclang-dev \
+        pkg-config \
+        python3
+
+# Defaults to `main` for the newest stealth code. NB: main's Cargo version reads
+# 0.1.0 while the published release is 0.1.10, so `main` is not the release tag —
+# pin a tag for reproducible builds:
+#   docker build -f Dockerfile.obscura --build-arg OBSCURA_REF=v0.1.10 ...
+ARG OBSCURA_REF=main
+WORKDIR /src
+RUN git clone --depth 1 --branch "${OBSCURA_REF}" https://github.com/h4ckf0r0day/obscura.git .
+
+# Cache the cargo registry + target dir across builds. Cache mounts are NOT
+# persisted into the image, so the binaries are copied out to /out inside the
+# same RUN step.
+RUN --mount=type=cache,target=/usr/local/cargo/registry \
+    --mount=type=cache,target=/src/target,sharing=locked \
+    cargo build --release --features stealth \
+    && mkdir -p /out \
+    && cp target/release/obscura target/release/obscura-worker /out/
+
+# ---- runtime ----------------------------------------------------------------
+
+FROM debian:bookworm-slim AS runtime
+
+LABEL org.opencontainers.image.title="scrapper-tool-obscura (stealth build)" \
+      org.opencontainers.image.description="Obscura headless browser compiled with --features stealth (TLS impersonation + tracker blocking) for scrapper-tool's obscura backend." \
+      org.opencontainers.image.source="https://github.com/h4ckf0r0day/obscura" \
+      org.opencontainers.image.licenses="Apache-2.0"
+
+RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
+    --mount=type=cache,target=/var/lib/apt,sharing=locked \
+    apt-get update && apt-get install -y --no-install-recommends \
+        ca-certificates \
+        curl
+
+# `obscura scrape` requires the worker binary to sit beside the main one.
+COPY --from=builder /out/obscura /usr/local/bin/obscura
+COPY --from=builder /out/obscura-worker /usr/local/bin/obscura-worker
+
+RUN useradd --uid 1000 --create-home obscura
+USER obscura
+
+# CDP WebSocket server.
+EXPOSE 9222
+
+# --host 0.0.0.0 is REQUIRED in a container: obscura defaults to 127.0.0.1,
+# which the published port / compose network cannot reach.
+ENTRYPOINT ["obscura"]
+CMD ["serve", "--host", "0.0.0.0", "--port", "9222", "--stealth"]

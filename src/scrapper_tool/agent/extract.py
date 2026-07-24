@@ -24,6 +24,7 @@ from typing import Any, cast
 
 from pydantic import BaseModel, ValidationError
 
+from scrapper_tool._challenge import looks_like_block_message
 from scrapper_tool._logging import get_logger
 from scrapper_tool.agent.backends import (
     get_behavior_policy,
@@ -31,7 +32,10 @@ from scrapper_tool.agent.backends import (
     get_captcha_solver,
     get_fingerprint_generator,
     get_llm_backend,
+    make_after_goto,
 )
+from scrapper_tool.agent.backends.behavior import make_behavior_consumer
+from scrapper_tool.agent.backends.captcha_dom import make_captcha_consumer
 from scrapper_tool.agent.types import ActionTrace, AgentConfig, AgentResult
 from scrapper_tool.errors import (
     AgentBlockedError,
@@ -73,16 +77,15 @@ async def run_extract(
     llm = get_llm_backend(config)
     await llm.probe()
 
-    # Captcha solver and behavior policy aren't directly used by Crawl4AI
-    # in this implementation (Crawl4AI doesn't expose mid-render captcha
-    # hooks consistently across versions). They're constructed here to
-    # validate config — captcha handling for E1 happens via Camoufox's
-    # silent auto-pass when the browser backend is Camoufox, and via the
-    # browse-mode path otherwise.
-    _ = get_captcha_solver(config)
-    _ = get_behavior_policy(config.behavior)
+    # Captcha + behavior are wired into Crawl4AI via its ``after_goto``
+    # strategy hook (crawl4ai 0.9+ exposes a full hook system). The solver
+    # runs mechanism-aware on the live page right after navigation; behavior
+    # is a minimal pre-return settle for E1 (single render — full shaping
+    # only pays off in E2's multi-step loop).
+    solver = get_captcha_solver(config)
+    behavior = get_behavior_policy(config.behavior)
     _ = get_fingerprint_generator(config.fingerprint)
-    _ = get_browser_backend(config.browser)  # validate name
+    _ = get_browser_backend(config.browser, cdp_url=config.obscura_cdp_url)  # validate name
 
     try:
         from crawl4ai import (  # noqa: PLC0415
@@ -129,16 +132,7 @@ async def run_extract(
     # pass it to Crawl4AI's BrowserConfig so cookies (cf_clearance) persist
     # on disk between launches against the same dir. Crawl4AI honors
     # user_data_dir only when use_persistent_context=True — both must be set.
-    browser_cfg_kwargs: dict[str, Any] = {
-        "headless": not config.headful,
-        "browser_type": _crawl4ai_browser_type(config.browser),
-        "proxy": config.proxy,
-        "verbose": False,
-    }
-    if config.user_data_dir:
-        browser_cfg_kwargs["user_data_dir"] = config.user_data_dir
-        browser_cfg_kwargs["use_persistent_context"] = True
-    browser_cfg = BrowserConfig(**browser_cfg_kwargs)
+    browser_cfg = BrowserConfig(**_browser_cfg_kwargs(config))
     run_cfg = CrawlerRunConfig(
         cache_mode=CacheMode.BYPASS,
         extraction_strategy=extraction_strategy,
@@ -147,9 +141,20 @@ async def run_extract(
     )
 
     try:
+        after_goto = make_after_goto(
+            make_captcha_consumer(solver),
+            make_behavior_consumer(behavior, full=False),
+        )
 
         async def _run() -> Any:
             async with AsyncWebCrawler(config=browser_cfg) as crawler:
+                # crawl4ai 0.9+ hook system — run captcha/behavior on the
+                # live page right after navigation. Guard on presence so a
+                # future API change degrades instead of crashing.
+                strategy = getattr(crawler, "crawler_strategy", None)
+                set_hook = getattr(strategy, "set_hook", None)
+                if callable(set_hook):
+                    set_hook("after_goto", after_goto)
                 return await crawler.arun(url=url, config=run_cfg)
 
         result = await asyncio.wait_for(_run(), timeout=config.timeout_s)
@@ -198,6 +203,41 @@ def _looks_like_css_schema(schema: dict[str, object]) -> bool:
     return "baseSelector" in schema and "fields" in schema
 
 
+def _browser_cfg_kwargs(config: AgentConfig) -> dict[str, Any]:
+    """Assemble Crawl4AI ``BrowserConfig`` kwargs for E1.
+
+    Two backend-specific branches:
+
+    * ``user_data_dir`` — a persistent on-disk profile so cf_clearance survives
+      between launches. Crawl4AI honours it only with ``use_persistent_context``.
+    * ``browser="obscura"`` — E3: render THROUGH the running Obscura server
+      rather than Crawl4AI's own Chromium. Crawl4AI honours ``cdp_url`` only with
+      ``use_managed_browser`` (otherwise it launches its own and the endpoint is
+      silently ignored), and that attach is mutually exclusive with a persistent
+      profile — the external browser owns its own — so the profile is dropped.
+    """
+    kwargs: dict[str, Any] = {
+        "headless": not config.headful,
+        "browser_type": _crawl4ai_browser_type(config.browser),
+        "proxy": config.proxy,
+        "verbose": False,
+    }
+    if config.user_data_dir:
+        kwargs["user_data_dir"] = config.user_data_dir
+        kwargs["use_persistent_context"] = True
+    if config.browser == "obscura":
+        from scrapper_tool.agent.backends.browser import (  # noqa: PLC0415
+            resolve_obscura_cdp_url,
+        )
+
+        kwargs["cdp_url"] = resolve_obscura_cdp_url(config.obscura_cdp_url)
+        kwargs["use_managed_browser"] = True
+        kwargs.pop("user_data_dir", None)
+        kwargs.pop("use_persistent_context", None)
+        _logger.info("agent.extract.obscura_cdp", cdp_url=kwargs["cdp_url"])
+    return kwargs
+
+
 def _crawl4ai_browser_type(name: str) -> str:
     """Map our backend name to Crawl4AI's ``browser_type`` argument.
 
@@ -211,26 +251,22 @@ def _crawl4ai_browser_type(name: str) -> str:
         "camoufox": "firefox",
         "patchright": "chromium",
         "scrapling": "chromium",
-        "zendriver": "chromium",
-        "botasaurus": "chromium",
+        # Obscura is Chromium-class. E1 now renders THROUGH the running Obscura
+        # server via BrowserConfig(cdp_url=…, use_managed_browser=True) — see
+        # run_extract — so browser_type is only the fallback shape if that
+        # attach path is ever bypassed.
+        "obscura": "chromium",
     }.get(name, "chromium")
 
 
 def _looks_like_block(exc: Exception) -> bool:
-    """Heuristic — does the exception look like an anti-bot block?"""
-    text = str(exc).lower()
-    return any(
-        needle in text
-        for needle in (
-            "challenge",
-            "cloudflare",
-            "captcha",
-            "blocked",
-            "403",
-            "access denied",
-            "datadome",
-        )
-    )
+    """Does this exception look like an anti-bot block rather than a bug?
+
+    Shared with E1 via :func:`scrapper_tool._challenge.looks_like_block_message`
+    — the two tiers had byte-identical copies of this list, which is exactly the
+    kind of duplication that drifts the moment one of them learns a new vendor.
+    """
+    return looks_like_block_message(str(exc))
 
 
 def _crawl4ai_result_to_agent(

@@ -65,9 +65,10 @@ from scrapper_tool.errors import (  # noqa: E402
     ScrapingError,
     VendorHTTPError,
 )
+from scrapper_tool.ladder import IMPERSONATE_LADDER  # noqa: E402
 
 if TYPE_CHECKING:
-    from collections.abc import Sequence
+    from collections.abc import Awaitable, Callable, Sequence
 
 
 # ---------------------------------------------------------------------------
@@ -136,6 +137,18 @@ class ScrapeRequest(BaseModel):
             "post-process from the raw fetch instead of paying for an LLM "
             "call. Set ``force_llm_extract=true`` to opt back in to the old "
             "always-escalate behaviour."
+        ),
+    )
+    interactive: bool = Field(
+        False,
+        description=(
+            "Whether this target needs a multi-step agent (NEW v1.6.0). E2 "
+            "(browser-use) is the most expensive tier by a wide margin and only "
+            "earns its cost on genuinely interactive flows — login, pagination, "
+            "dynamic forms. With interactive=false (default) a blocked E1 stops "
+            "and returns the blocked result rather than auto-escalating into an "
+            "agent loop that will hit the same wall, slower. Set true when the "
+            "page really does require interaction."
         ),
     )
     hostile_fallback: bool = Field(
@@ -220,6 +233,75 @@ class BrowseRequest(BaseModel):
     max_steps: int | None = None
     timeout_s: float | None = None
     headful: bool = False
+
+
+class MapRequest(BaseModel):
+    """Body of POST /map — URL discovery."""
+
+    url: str = Field(..., description="Seed URL; its site is what gets mapped")
+    max_urls: int = Field(
+        200,
+        ge=1,
+        le=10_000,
+        description=(
+            "Cap on returned URLs. Truncation is reported via `truncated` and "
+            "`dropped_by_limit` rather than silently applied."
+        ),
+    )
+    same_domain: bool = Field(
+        True,
+        description=(
+            "Restrict to the seed's host and its subdomains. False follows links "
+            "anywhere, which on a page with outbound links means the whole web."
+        ),
+    )
+    include_sitemap: bool = Field(
+        True, description="Read sitemaps declared in robots.txt (and /sitemap.xml)"
+    )
+    fetch_seed: bool = Field(
+        True,
+        description=(
+            "Fetch the seed page through the impersonation ladder to extract its "
+            "links. False makes this sitemap-only — no page request at all."
+        ),
+    )
+    timeout_s: float | None = Field(None, description="Per-request timeout for the seed fetch")
+
+
+class CrawlRequest(BaseModel):
+    """Body of POST /crawl — recursive traversal running the cascade per page."""
+
+    model_config = ConfigDict(protected_namespaces=())
+
+    url: str = Field(..., description="Seed URL")
+    schema_json: dict[str, Any] | list[Any] | str | None = Field(  # type: ignore[assignment]
+        None, description="Passed to each page's cascade run, exactly as /scrape takes it"
+    )
+    depth: int = Field(2, ge=0, le=10, description="Link-following depth; 0 visits only the seed")
+    max_pages: int = Field(
+        50, ge=1, le=1_000, description="Hard cap on pages visited. Reported when hit."
+    )
+    concurrency: int = Field(4, ge=1, le=32, description="Pages fetched in parallel")
+    same_domain: bool = Field(True, description="Stay on the seed's host and its subdomains")
+    respect_robots: bool = Field(
+        True,
+        description=(
+            "Honour robots.txt, including Crawl-delay. Only set False for sites "
+            "you own or are authorised to crawl — a crawler visits pages nobody "
+            "asked for, which is exactly what robots.txt governs."
+        ),
+    )
+    interactive: bool = Field(
+        False, description="Allow per-page escalation to E2 (see /scrape's interactive)"
+    )
+    include_html: bool = Field(
+        False,
+        description=(
+            "Include each page's raw HTML in the response. Off by default because "
+            "a 50-page crawl of rendered pages is tens of megabytes of JSON."
+        ),
+    )
+    timeout_s: float | None = Field(None, description="Per-page timeout")
 
 
 _logger = get_logger(__name__)
@@ -340,9 +422,36 @@ def _browser_binary_present(browser: str) -> bool:  # noqa: PLR0911
             return False
         return False
 
+    if browser == "obscura":
+        # Obscura is an external CDP server (sidecar), not a local binary.
+        # Probe the configured endpoint with a short TCP connect.
+        return _obscura_endpoint_reachable()
+
     # Unknown browser — be conservative and report False so /ready
     # surfaces the configuration mistake rather than silently passing.
     return False
+
+
+def _obscura_endpoint_reachable(timeout_s: float = 0.5) -> bool:
+    """Best-effort TCP reachability probe for the Obscura CDP endpoint.
+
+    Reads ``SCRAPPER_TOOL_AGENT_OBSCURA_CDP_URL`` (default
+    ``http://127.0.0.1:9222``) and attempts a short blocking connect. Returns
+    False on any failure so ``/ready`` reports ``degraded`` rather than
+    crashing.
+    """
+    import socket  # noqa: PLC0415
+    from urllib.parse import urlparse  # noqa: PLC0415
+
+    url = os.environ.get("SCRAPPER_TOOL_AGENT_OBSCURA_CDP_URL", "http://127.0.0.1:9222")
+    parsed = urlparse(url)
+    host = parsed.hostname or "127.0.0.1"
+    port = parsed.port or 9222
+    try:
+        with socket.create_connection((host, port), timeout=timeout_s):
+            return True
+    except OSError:
+        return False
 
 
 def _agent_runnable(browser: str) -> bool:
@@ -567,7 +676,10 @@ def _build_app(
             "``scrapper_pattern_used_total``, "
             "``scrapper_responses_structured_total``, "
             "``scrapper_responses_unstructured_total``, "
-            "``scrapper_user_data_dir_reused_total``. "
+            "``scrapper_user_data_dir_reused_total``, "
+            "``scrapper_challenge_detected_total`` (by vendor), "
+            "``scrapper_recipe_events_total`` (hit/learned/drift), "
+            "``scrapper_policy_skips_total`` (by start tier). "
             "Histograms: ``scrapper_pattern_duration_seconds`` (per step+outcome), "
             "``scrapper_cascade_steps`` (per request). "
             "Returns 503 when ``prometheus-client`` isn't installed (older "
@@ -603,8 +715,9 @@ def _build_app(
         tags=["scraping"],
         summary="Pattern A/B/C — TLS-impersonation ladder fetch",
         description=(
-            "Walks the impersonation ladder (chrome133a / chrome124 / safari18_0 / firefox135) "
-            "until a profile returns non-403/503. With extract_structured=true (default), "
+            "Walks the impersonation ladder ("
+            + " / ".join(IMPERSONATE_LADDER)
+            + ") until a profile returns non-403/503. With extract_structured=true (default), "
             "also runs Pattern B (extruct JSON-LD / microdata) and Pattern C (microdata price)."
         ),
     )
@@ -658,6 +771,39 @@ def _build_app(
         req: BrowseRequest, _: None = Depends(_check_api_key)
     ) -> dict[str, Any]:
         return await _do_browse(req)
+
+    @app.post(
+        "/map",
+        operation_id="map",
+        tags=["scraping"],
+        summary="Discover URLs on a site",
+        description=(
+            "Combines sitemap discovery (via robots.txt Sitemap: directives, "
+            "falling back to /sitemap.xml) with links extracted from the seed "
+            "page fetched through the impersonation ladder. Cheap — no browser, "
+            "no LLM. Reports truncation explicitly rather than silently capping."
+        ),
+    )
+    async def map_endpoint(req: MapRequest, _: None = Depends(_check_api_key)) -> dict[str, Any]:
+        return await _do_map(req)
+
+    @app.post(
+        "/crawl",
+        operation_id="crawl",
+        tags=["scraping"],
+        summary="Crawl a site, running the full cascade per page",
+        description=(
+            "Breadth-first traversal from a seed URL. Each page runs the same "
+            "auto cascade as /scrape, so every page benefits from recipe replay, "
+            "the render tier, and proxy rotation. robots.txt is honoured by "
+            "default (including Crawl-delay). Bounded by depth, max_pages, and "
+            "concurrency; the response reports what the bounds left unvisited."
+        ),
+    )
+    async def crawl_endpoint(
+        req: CrawlRequest, _: None = Depends(_check_api_key)
+    ) -> dict[str, Any]:
+        return await _do_crawl(req)
 
     return app
 
@@ -743,17 +889,17 @@ _CF_CHALLENGE_SIGNATURES: tuple[str, ...] = (
 
 
 def _is_cf_challenge_body(html: str, status_code: int) -> bool:
-    """True when the response looks like a Cloudflare challenge page."""
-    if (
-        status_code in _CF_CHALLENGE_STATUS_CODES
-        and html
-        and len(html) < _CF_CHALLENGE_BODY_MAX_BYTES
-    ):
-        return True
-    if not html:
-        return False
-    head = html[:_CF_BODY_SCAN_BYTES].lower()
-    return any(sig.lower() in head for sig in _CF_CHALLENGE_SIGNATURES)
+    """True when the response looks like a Cloudflare challenge page.
+
+    v1.6.0: delegates to the shared detector (``scrapper_tool._challenge``) so MCP
+    and the render tier use the same heuristics. Deliberately still the
+    Cloudflare-only variant — this decides whether Pattern D retries with
+    Scrapling's CF-specific ``solve_cloudflare``, so broadening it would make
+    Scrapling attempt a CF solve against non-CF vendors.
+    """
+    from scrapper_tool._challenge import is_cf_challenge_body  # noqa: PLC0415
+
+    return is_cf_challenge_body(html, status_code)
 
 
 # v1.4.0 — auto-SPA detection. After D + extractors return zero signal,
@@ -776,11 +922,14 @@ def _looks_like_spa_shell(html: str) -> bool:
     markers. Not perfect — the network_idle retry will still find no
     signal if the page is genuinely empty, but auto-SPA's cost is low
     (just one extra Scrapling fetch) so the FP rate is acceptable.
+
+    v1.6.0: delegates to the shared detector. NB this size-capped check misses
+    *large* unhydrated pages (a 419 KB shell full of ``{displayTitle}``
+    placeholders sails past it) — ``_challenge.looks_unhydrated`` covers that case.
     """
-    if not html or len(html) > _SPA_SHELL_MAX_BYTES:
-        return False
-    head = html[:_CF_BODY_SCAN_BYTES].lower()
-    return any(sig.lower() in head for sig in _SPA_SHELL_SIGNATURES)
+    from scrapper_tool._challenge import looks_like_spa_shell  # noqa: PLC0415
+
+    return looks_like_spa_shell(html)
 
 
 async def _do_fetch(req: Any) -> dict[str, Any]:
@@ -908,6 +1057,27 @@ def _get_prometheus_registry() -> Any:
             "Number of /scrape calls that reused a caller-provided persistent profile dir.",
             registry=registry,
         ),
+        # v1.6.0 F3 — the cascade-intelligence tiers, so their payoff is visible
+        # on a dashboard rather than inferred from latency.
+        "challenge_detected": Counter(
+            "scrapper_challenge_detected_total",
+            "Number of /scrape calls where a bot-vendor interstitial was detected, by vendor.",
+            labelnames=["vendor"],
+            registry=registry,
+        ),
+        "recipe_events": Counter(
+            "scrapper_recipe_events_total",
+            "Recipe cache outcomes: hit (replay served), learned, drift (evicted).",
+            labelnames=["event"],
+            registry=registry,
+        ),
+        "policy_skips": Counter(
+            "scrapper_policy_skips_total",
+            "Number of /scrape calls where per-domain memory skipped cheaper tiers, "
+            "by the tier it started at.",
+            labelnames=["start_tier"],
+            registry=registry,
+        ),
     }
     cache = (registry, metrics)
     _get_prometheus_registry._cache = cache  # type: ignore[attr-defined]
@@ -937,6 +1107,12 @@ def _observe_cascade(payload: dict[str, Any] | None, *, exception: bool = False)
     else:
         metrics["responses_unstructured"].labels(pattern=pattern).inc()
 
+    vendor = payload.get("challenge_detected")
+    if vendor:
+        metrics["challenge_detected"].labels(vendor=str(vendor)).inc()
+    if pattern == "replay":
+        metrics["recipe_events"].labels(event="hit").inc()
+
     log: list[dict[str, Any]] = payload.get("escalation_log") or []
     for entry in log:
         step = entry.get("step", "unknown")
@@ -945,6 +1121,15 @@ def _observe_cascade(payload: dict[str, Any] | None, *, exception: bool = False)
         metrics["pattern_duration_seconds"].labels(step=step, outcome=outcome).observe(
             float(duration)
         )
+        # The escalation log is the single source of truth for the intelligence
+        # tiers, so derive their counters from it rather than re-instrumenting
+        # each call site.
+        if step == "policy" and outcome == "skipped":
+            metrics["policy_skips"].labels(start_tier=pattern).inc()
+        elif step == "recipe":
+            # reason ∈ {learned, drift}; the "hit" event is counted above from
+            # pattern_used == "replay" so it isn't double-counted here.
+            metrics["recipe_events"].labels(event=entry.get("reason", "unknown")).inc()
     metrics["cascade_steps_total"].observe(len(log))
 
 
@@ -1005,26 +1190,22 @@ def _classify_extraction_success(
     non-empty dict) counts as a structured signal, regardless of
     whether B/C also matched.
     """
-    page_readable = _is_http_ok(status_code) and bool(text)
-    css_has_signal = bool(css_data) if css_data is not None else False
-    has_any_signal = (
-        product is not None or microdata_price is not None or bool(json_ld) or css_has_signal
+    # v1.5.0: logic moved verbatim to the shared classifier so REST and the
+    # MCP auto_scrape cascade use one identical accept rule. REST behavior is
+    # unchanged — this is a pure delegation.
+    from scrapper_tool._classify import classify_extraction_success  # noqa: PLC0415
+
+    return classify_extraction_success(
+        mode=req.mode,
+        schema_json=req.schema_json,
+        force_llm_extract=getattr(req, "force_llm_extract", False),
+        status_code=status_code,
+        text=text,
+        product=product,
+        microdata_price=microdata_price,
+        json_ld=json_ld,
+        css_data=css_data,
     )
-
-    if req.mode == "fetch":
-        return True
-    if getattr(req, "force_llm_extract", False) and req.schema_json is not None:
-        return False
-    # v1.4.0: when caller supplied a CSS-shaped schema, the CSS
-    # extractor's success is the canonical signal. CSS rows alone are
-    # enough; B/C fallback is bonus.
-    from scrapper_tool._extractors.css import looks_like_css_schema  # noqa: PLC0415
-
-    if looks_like_css_schema(req.schema_json):
-        return css_has_signal or (page_readable and has_any_signal)
-    if req.schema_json is None:
-        return product is not None or microdata_price is not None or css_has_signal
-    return page_readable and has_any_signal
 
 
 def _is_e_tier_structured(data: object | None, blocked: bool) -> bool:
@@ -1248,6 +1429,421 @@ async def _d_fetch_with_smart_defaults(req: Any) -> tuple[str, int, str]:
     return html, status_code, final_url
 
 
+async def _do_replay_step(
+    req: Any,
+    attempts: list[str],
+    start: float,
+) -> dict[str, Any] | None:
+    """Tier 0 — replay this domain's learned recipe. No browser, no LLM.
+
+    The cheapest possible outcome: a fetch plus a selectolax parse, reproducing
+    what previously cost a browser launch or an LLM call. Returns None on any
+    miss so the normal cascade runs — including on drift, where the stale recipe
+    is evicted first so the cascade's re-derivation replaces it.
+    """
+    log: list[dict[str, Any]] = req.__dict__.setdefault("_escalation_log", [])
+    r_start = time.perf_counter()
+    try:
+        from scrapper_tool.recipe.replay import try_replay  # noqa: PLC0415
+        from scrapper_tool.recipe.store import cache_key, get_store  # noqa: PLC0415
+
+        # Snapshot whether a recipe existed *before* the attempt, so a None
+        # result after one did is distinguishable as drift (site changed) rather
+        # than a plain cold miss — try_replay evicts on drift, so this is the
+        # only moment the two can be told apart.
+        had_recipe = get_store().get(cache_key(req.url, req.schema_json)) is not None
+        outcome = await try_replay(
+            req.url,
+            fetch=_make_ladder_fetch(req),
+            render=_make_render_fetch(req),
+            schema_json=req.schema_json,
+        )
+    except Exception as exc:  # cache problems must never break a scrape
+        _logger.warning("scrape.replay.failed", url=req.url, error=str(exc)[:160])
+        return None
+    if outcome is None:
+        if had_recipe:
+            # The recipe stopped matching and was evicted; the cascade re-derives.
+            log.append(
+                _build_log_entry("recipe", outcome="rejected", reason="drift", duration_s=0.0)
+            )
+        return None
+
+    attempts.append("replay")
+    rows: Any = outcome.rows if outcome.recipe.multi_row else outcome.rows[0]
+    log.append(
+        _build_log_entry(
+            "replay",
+            outcome="won",
+            reason="ok",
+            duration_s=time.perf_counter() - r_start,
+            detail=f"recipe from {outcome.recipe.source_tier}; {len(outcome.rows)} row(s)",
+        )
+    )
+    _logger.info("scrape.replay.win", url=req.url, rows=len(outcome.rows))
+    return {
+        "url": outcome.final_url,
+        "pattern_used": "replay",
+        "pattern_attempts": attempts,
+        "escalation_log": list(log),
+        "product": None,
+        "data": rows,
+        "raw_text": outcome.html,
+        "intermediate_raw_text": None,
+        "json_ld": None,
+        "microdata_price": None,
+        "rendered_markdown": None,
+        "screenshots": None,
+        "tokens_used": 0,
+        "steps_used": 0,
+        "blocked": False,
+        "error": None,
+        "hostile_skipped": False,
+        "is_structured": True,
+        "duration_s": time.perf_counter() - start,
+    }
+
+
+def _make_ladder_fetch(req: Any) -> Callable[[], Awaitable[tuple[str, int, str]]]:
+    """A zero-arg HTTP fetch for replaying an ``a_b_c``-learned recipe."""
+
+    async def fetch() -> tuple[str, int, str]:
+        from scrapper_tool.ladder import request_with_ladder  # noqa: PLC0415
+
+        response, _profile = await request_with_ladder(
+            "GET", req.url, timeout=req.timeout_s or 30.0
+        )
+        return response.text or "", response.status_code, str(response.url)
+
+    return fetch
+
+
+def _make_render_fetch(req: Any) -> Callable[[], Awaitable[tuple[str, int, str]]] | None:
+    """A zero-arg render for replaying a browser-learned recipe, if possible."""
+    if not _render_tier_enabled():
+        return None
+
+    async def render() -> tuple[str, int, str]:
+        from scrapper_tool.agent import AgentConfig  # noqa: PLC0415
+        from scrapper_tool.agent.backends.browser import BrowserLaunchOptions  # noqa: PLC0415
+        from scrapper_tool.patterns.render import render_html  # noqa: PLC0415
+
+        cfg = AgentConfig.from_env().merged(**_build_overrides(req))
+        result = await render_html(
+            req.url,
+            browser=cfg.browser,
+            timeout_s=cfg.timeout_s,
+            options=BrowserLaunchOptions(
+                headful=cfg.headful,
+                proxy=cfg.proxy,
+                user_data_dir=cfg.user_data_dir,
+                headless_mode=cfg.camoufox_headless_mode,
+                block_images=cfg.block_images,
+                fingerprint_preset=cfg.fingerprint_preset,
+                os=cfg.camoufox_os,
+                locale=cfg.camoufox_locale,
+            ),
+            cdp_url=cfg.obscura_cdp_url,
+        )
+        return result.html, result.status, result.final_url
+
+    return render
+
+
+def _learn_recipe(req: Any, html: str, data: Any, *, source_tier: str) -> None:
+    """Teach the cache from a tier that just succeeded. Never raises."""
+    if not html or not data:
+        return
+    try:
+        from scrapper_tool.recipe.replay import learn_from_success  # noqa: PLC0415
+
+        recipe = learn_from_success(
+            req.url,
+            html,
+            data,
+            source_tier=source_tier,
+            schema_json=req.schema_json,
+            # If A/B/C already fetched a body, let the learner check whether the
+            # selectors work against it too — a browser-learned recipe that also
+            # matches raw HTML replays without a browser.
+            cheap_html=req.__dict__.get("_a_b_c_html"),
+        )
+        if recipe is not None:
+            # A "recipe" log row so _observe_cascade counts the learn without
+            # this module reaching into the metrics registry.
+            log: list[dict[str, Any]] = req.__dict__.setdefault("_escalation_log", [])
+            log.append(_build_log_entry("recipe", outcome="won", reason="learned", duration_s=0.0))
+    except Exception as exc:  # an optimisation for next time; never fail now
+        _logger.debug("scrape.learn.failed", url=req.url, error=str(exc)[:160])
+
+
+def _note_challenge(req: Any, log: list[dict[str, Any]], html: str, status_code: int) -> str | None:
+    """Record which bot vendor walled us, if any. Returns the vendor name.
+
+    Stashed on the request so the final payload can surface
+    ``challenge_detected`` regardless of which tier ends up winning — knowing a
+    page was walled is the single most useful thing for tuning a target, and it
+    was previously invisible.
+    """
+    from scrapper_tool._challenge import is_interstitial  # noqa: PLC0415
+
+    vendor = is_interstitial(html, status_code)
+    if vendor is None:
+        return None
+    req.__dict__["_challenge_detected"] = vendor
+    _logger.info("scrape.challenge_detected", url=req.url, vendor=vendor)
+    log.append(
+        _build_log_entry(
+            "challenge",
+            outcome="rejected",
+            reason="blocked",
+            duration_s=0.0,
+            detail=f"{vendor} interstitial (status={status_code})",
+        )
+    )
+    return vendor
+
+
+def _should_skip_d_for_challenge(req: Any) -> bool:
+    """Whether a detected challenge makes Pattern D a waste of ~30 s.
+
+    Not a blanket skip. Scrapling's anti-bot weapon is ``solve_cloudflare``,
+    which is Cloudflare-specific, so:
+
+    * Cloudflare wall -> **run D**. That's precisely what it's for.
+    * Any other vendor (Radware, DataDome, PerimeterX, Akamai, Kasada,
+      Incapsula) -> **skip D** and go straight to the render tier. Scrapling has
+      no solver for these, so D would burn a browser launch to re-fetch the same
+      interstitial the ladder already got.
+    * Nothing detected -> run D as before (unchanged behaviour).
+    """
+    vendor = req.__dict__.get("_challenge_detected")
+    return bool(vendor) and vendor != "cloudflare"
+
+
+def _tier_rank(tier: str) -> int:
+    """Cost rank of a cascade tier (see recipe.policy.TIER_ORDER)."""
+    from scrapper_tool.recipe.policy import tier_rank  # noqa: PLC0415
+
+    return tier_rank(tier)
+
+
+def _policy_start_rank(req: Any) -> int:
+    """Lowest tier rank worth attempting for this URL, per the domain policy.
+
+    0 (start from A/B/C) unless a *confident* policy has learned this domain
+    needs a more expensive tier, in which case the cheaper ones are skipped.
+    Stashes the chosen rank on the request so the deterministic-tier step can
+    read it without a second lookup, and logs the skip for observability.
+    """
+    try:
+        from scrapper_tool.recipe.policy import (  # noqa: PLC0415
+            domain_policy_enabled,
+            get_policy_store,
+        )
+
+        if not domain_policy_enabled():
+            return 0
+        policy = get_policy_store().get(req.url)
+    except Exception as exc:  # a policy problem must never break a scrape
+        _logger.debug("scrape.policy.lookup_failed", url=req.url, error=str(exc)[:120])
+        return 0
+    if policy is None:
+        return 0
+    rank = policy.start_tier_rank()
+    req.__dict__["_policy_start_rank"] = rank
+    if rank > 0:
+        log: list[dict[str, Any]] = req.__dict__.setdefault("_escalation_log", [])
+        log.append(
+            _build_log_entry(
+                "policy",
+                outcome="skipped",
+                reason="ok",
+                duration_s=0.0,
+                detail=(
+                    f"domain learned to start at {policy.best_tier} "
+                    f"({policy.observations} obs); skipping cheaper tiers"
+                ),
+            )
+        )
+        _logger.info(
+            "scrape.policy.skip",
+            url=req.url,
+            best_tier=policy.best_tier,
+            observations=policy.observations,
+        )
+    return rank
+
+
+def _record_policy(payload: dict[str, Any] | None, req: Any) -> None:
+    """After a scrape, remember which tier reached content on this domain.
+
+    Best-effort: any failure is swallowed, because learning is an optimisation
+    for next time and must never affect the result the caller already has.
+    """
+    if payload is None:
+        return
+    tier = payload.get("pattern_used")
+    if not isinstance(tier, str) or payload.get("blocked"):
+        return
+    try:
+        from scrapper_tool.recipe.policy import (  # noqa: PLC0415
+            domain_policy_enabled,
+            get_policy_store,
+        )
+
+        if not domain_policy_enabled():
+            return
+        get_policy_store().record(
+            req.url, tier, challenge_vendor=req.__dict__.get("_challenge_detected")
+        )
+    except Exception as exc:
+        _logger.debug("scrape.policy.record_failed", url=req.url, error=str(exc)[:120])
+
+
+def _render_tier_enabled() -> bool:
+    """Render tier is on by default; ``SCRAPPER_TOOL_RENDER_TIER=0`` disables it."""
+    raw = os.environ.get("SCRAPPER_TOOL_RENDER_TIER")
+    if raw is None or not raw.strip():
+        return True
+    return raw.strip().lower() in {"1", "true", "yes", "on"}
+
+
+async def _do_render_step(
+    req: Any,
+    attempts: list[str],
+    start: float,
+) -> tuple[dict[str, Any] | None, BaseException | None]:
+    """Stealth-browser render tier — rendered HTML + deterministic extract, NO LLM.
+
+    Sits between Pattern D and the LLM tiers. Measured value: on a target where
+    the HTTP ladder got 403 on all four TLS profiles, a single Camoufox render
+    returned 1.35 MB of real content; on another, rendering turned 4 extractable
+    headlines into 212. Both without an LLM call, so this is strictly cheaper and
+    more reliable than escalating to E1/E2.
+
+    Returns ``(response, error)`` — response when the render produced an accepted
+    signal, else None so the cascade falls through to the LLM tiers.
+    """
+    log: list[dict[str, Any]] = req.__dict__.setdefault("_escalation_log", [])
+    if not _render_tier_enabled():
+        return None, None
+
+    # Resolve imports BEFORE claiming an attempt. Mirrors Pattern D's
+    # `hostile_skipped` convention: a tier that could not even start must not
+    # appear in `pattern_attempts`, or the log implies a render was tried.
+    try:
+        from scrapper_tool.agent import AgentConfig  # noqa: PLC0415
+        from scrapper_tool.agent.backends.browser import BrowserLaunchOptions  # noqa: PLC0415
+        from scrapper_tool.patterns.render import render_html  # noqa: PLC0415
+    except ImportError as exc:
+        _logger.info("scrape.render.skipped_no_extra", url=req.url, error=str(exc)[:160])
+        log.append(
+            _build_log_entry(
+                "render",
+                outcome="skipped",
+                reason="extra_missing",
+                duration_s=0.0,
+                detail="[llm-agent] extra not installed",
+            )
+        )
+        return None, None
+
+    attempts.append("render")
+    r_start = time.perf_counter()
+    try:
+        # Same config path as the E tiers, so `_build_overrides` carries the
+        # cascade-resolved profile dir (clearance cookies from earlier rungs)
+        # and per-request browser/timeout overrides through unchanged.
+        cfg = AgentConfig.from_env().merged(**_build_overrides(req))
+        options = BrowserLaunchOptions(
+            headful=cfg.headful,
+            proxy=cfg.proxy,
+            user_data_dir=cfg.user_data_dir,
+            headless_mode=cfg.camoufox_headless_mode,
+            block_images=cfg.block_images,
+            fingerprint_preset=cfg.fingerprint_preset,
+            os=cfg.camoufox_os,
+            locale=cfg.camoufox_locale,
+        )
+        result = await render_html(
+            req.url,
+            browser=cfg.browser,
+            timeout_s=cfg.timeout_s,
+            options=options,
+            cdp_url=cfg.obscura_cdp_url,
+        )
+    except Exception as exc:
+        _logger.warning("scrape.render.failed", url=req.url, error=str(exc)[:200])
+        log.append(
+            _build_log_entry(
+                "render",
+                outcome="failed",
+                reason="exception",
+                duration_s=time.perf_counter() - r_start,
+                detail=f"{type(exc).__name__}: {exc!s}"[:200],
+            )
+        )
+        return None, exc
+
+    html, status_code, final_url = result.html, result.status, result.final_url
+    req.__dict__["_render_intermediate_html"] = html
+
+    css_data, product, json_ld, microdata_price = _run_d_extractors(req, html, final_url)
+    success = _classify_extraction_success(
+        req,
+        status_code=status_code,
+        text=html,
+        product=product,
+        microdata_price=microdata_price,
+        json_ld=json_ld,
+        css_data=css_data,
+    )
+
+    duration = time.perf_counter() - r_start
+    if not success:
+        _logger.info("scrape.render.no_signal", url=req.url, status_code=status_code)
+        log.append(
+            _build_log_entry(
+                "render",
+                outcome="rejected",
+                reason="no_signal",
+                duration_s=duration,
+                detail=f"status={status_code}; rendered {len(html)} bytes, no signal",
+            )
+        )
+        return None, None
+
+    _logger.info("scrape.render.win", url=req.url, status_code=status_code, bytes=len(html))
+    log.append(_build_log_entry("render", outcome="won", reason="ok", duration_s=duration))
+    # Learn from the expensive win so the next page on this domain replays free.
+    _learn_recipe(req, html, css_data or product, source_tier="render")
+    return (
+        {
+            "url": final_url,
+            "pattern_used": "render",
+            "pattern_attempts": attempts,
+            "escalation_log": list(log),
+            "product": product,
+            "data": css_data,
+            "raw_text": html,
+            "intermediate_raw_text": html,
+            "json_ld": json_ld,
+            "microdata_price": microdata_price,
+            "rendered_markdown": None,
+            "screenshots": None,
+            "tokens_used": 0,  # the point of this tier: zero LLM
+            "steps_used": 0,
+            "blocked": False,
+            "error": None,
+            "hostile_skipped": False,
+            "is_structured": True,
+            "duration_s": time.perf_counter() - start,
+        },
+        None,
+    )
+
+
 def _run_d_extractors(
     req: Any, html: str, final_url: str
 ) -> tuple[
@@ -1321,8 +1917,15 @@ async def _do_scrape_e_tier(
     mode=hostile (after D fails with hostile_fallback=True), and mode=extract.
 
     Honors mode="extract" — when set, raises rather than continuing to E2.
+
+    v1.6.0: also honors ``interactive``. E2 is the most expensive tier by a wide
+    margin, and auto-escalating into it on *any* blocked E1 spends an agent loop
+    to hit the same wall more slowly. Unless the caller says the target needs
+    interaction, the cascade now stops at E1 and returns the blocked result.
+    An explicit ``mode="browse"`` is a direct request for E2 and is never gated.
     """
     log: list[dict[str, Any]] = req.__dict__.setdefault("_escalation_log", [])
+    blocked_e1: Any = None
 
     # ----- E1 (Pattern E extract) -----
     if req.mode in ("auto", "extract", "hostile"):
@@ -1349,6 +1952,18 @@ async def _do_scrape_e_tier(
                 log.append(
                     _build_log_entry("e1", outcome="won", reason="ok", duration_s=e1_duration)
                 )
+                # The highest-value thing to learn from: this is the tier that
+                # costs real money per page, and a recipe replaces it entirely.
+                # Learn against the DOM an earlier tier captured — E1 returns
+                # markdown, and selectors have to be derived from the real HTML.
+                _learn_recipe(
+                    req,
+                    req.__dict__.get("_render_intermediate_html")
+                    or req.__dict__.get("_d_intermediate_html")
+                    or "",
+                    result.data,
+                    source_tier="render" if req.__dict__.get("_render_intermediate_html") else "d",
+                )
                 return _scrape_response_from_agent(
                     result, attempts, start, mode="e1", hostile_skipped=hostile_skipped, req=req
                 )
@@ -1362,6 +1977,7 @@ async def _do_scrape_e_tier(
                 )
             )
             last_error = AgentBlockedError(result.error or "blocked")
+            blocked_e1 = result
         except AgentBlockedError as exc:
             log.append(
                 _build_log_entry(
@@ -1378,6 +1994,29 @@ async def _do_scrape_e_tier(
         if isinstance(last_error, BaseException):
             raise last_error
         raise ScrapingError("/scrape mode=extract failed without an exception (unreachable)")
+
+    # ----- E2 gate: interactive tasks only -----
+    # mode="browse" is a direct request for E2, so it bypasses the gate.
+    if req.mode != "browse" and not getattr(req, "interactive", False):
+        log.append(
+            _build_log_entry(
+                "e2",
+                outcome="skipped",
+                reason="no_signal",
+                duration_s=0.0,
+                detail="interactive=false; E2 reserved for login/pagination/form flows",
+            )
+        )
+        if blocked_e1 is not None:
+            # Hand back E1's blocked result — the caller gets the escalation log
+            # and whatever partial content E1 did see, which is strictly more
+            # useful than a bare error.
+            return _scrape_response_from_agent(
+                blocked_e1, attempts, start, mode="e1", hostile_skipped=hostile_skipped, req=req
+            )
+        if isinstance(last_error, BaseException):
+            raise last_error
+        raise ScrapingError("/scrape exhausted the cascade without an exception (unreachable)")
 
     # ----- E2 (Pattern E browse) -----
     attempts.append("e2")
@@ -1526,6 +2165,12 @@ async def _do_scrape(req: Any) -> dict[str, Any]:
     raised = False
     try:
         payload = await _do_scrape_inner(req, attempts, start)
+        # Surfaced here rather than in each tier's return: the vendor that
+        # walled us is worth reporting no matter which tier eventually won.
+        payload["challenge_detected"] = req.__dict__.get("_challenge_detected")
+        # F2: remember which tier reached content so the next request for this
+        # domain can start there. One place, so every winning tier is recorded.
+        _record_policy(payload, req)
         return payload
     except BaseException:
         raised = True
@@ -1553,8 +2198,21 @@ async def _do_scrape_inner(req: Any, attempts: list[str], start: float) -> dict[
     # without us threading it explicitly.
     log: list[dict[str, Any]] = req.__dict__.setdefault("_escalation_log", [])
 
+    # ----- Replay (tier 0 — cached recipe, no browser, no LLM) -----------
+    if req.mode == "auto":
+        replayed = await _do_replay_step(req, attempts, start)
+        if replayed is not None:
+            return replayed
+
+    # v1.6.0 F2 — per-domain tier memory. If this domain has repeatedly needed a
+    # more expensive tier (the ladder always 403s, only render gets through),
+    # skip the tiers we've learned are doomed. Purely a starting hint: the
+    # cascade still falls through from wherever it starts, and replay above ran
+    # regardless. mode="fetch" is exempt — it's an explicit "A/B/C only" request.
+    start_rank = _policy_start_rank(req) if req.mode == "auto" else 0
+
     # ----- A/B/C -----
-    if req.mode in ("auto", "fetch"):
+    if req.mode in ("auto", "fetch") and start_rank <= _tier_rank("a_b_c"):
         attempts.append("a_b_c")
         a_b_c_start = time.perf_counter()
         try:
@@ -1564,7 +2222,17 @@ async def _do_scrape_inner(req: Any, attempts: list[str], start: float) -> dict[
                 "GET", req.url, timeout=req.timeout_s or 30.0
             )
             text = response.text or ""
-            product, json_ld, microdata_price = _extract_b_c(text, str(response.url))
+            # Kept for the recipe learner: if a later tier's selectors also
+            # match this raw body, its recipe can replay without a browser.
+            req.__dict__["_a_b_c_html"] = text
+            # Same extractor pipeline as D and render, which crucially includes
+            # the CSS extractor when the caller supplied a CSS-shaped schema.
+            # Running only B/C here meant every CSS-schema request escalated past
+            # the cheapest tier — paying for Scrapling's browser at minimum —
+            # even when the raw HTML already had everything the selectors need.
+            css_data, product, json_ld, microdata_price = _run_d_extractors(
+                req, text, str(response.url)
+            )
 
             success = _classify_extraction_success(
                 req,
@@ -1573,6 +2241,7 @@ async def _do_scrape_inner(req: Any, attempts: list[str], start: float) -> dict[
                 product=product,
                 microdata_price=microdata_price,
                 json_ld=json_ld,
+                css_data=css_data,
             )
 
             a_b_c_duration = time.perf_counter() - a_b_c_start
@@ -1587,7 +2256,7 @@ async def _do_scrape_inner(req: Any, attempts: list[str], start: float) -> dict[
                     "pattern_attempts": attempts,
                     "escalation_log": list(log),
                     "product": product,
-                    "data": None,
+                    "data": css_data,
                     "raw_text": text,
                     "intermediate_raw_text": None,
                     "json_ld": json_ld,
@@ -1602,13 +2271,17 @@ async def _do_scrape_inner(req: Any, attempts: list[str], start: float) -> dict[
                     "is_structured": True,
                     "duration_s": time.perf_counter() - start,
                 }
+            vendor = _note_challenge(req, log, text, response.status_code)
             log.append(
                 _build_log_entry(
                     "a_b_c",
                     outcome="rejected",
                     reason="no_signal",
                     duration_s=a_b_c_duration,
-                    detail=f"status={response.status_code}; classifier rejected",
+                    detail=(
+                        f"status={response.status_code}; "
+                        + (f"{vendor} challenge page" if vendor else "classifier rejected")
+                    ),
                 )
             )
         except BlockedError as exc:
@@ -1640,16 +2313,150 @@ async def _do_scrape_inner(req: Any, attempts: list[str], start: float) -> dict[
             raise last_error
         raise ScrapingError("/scrape mode=fetch failed without an exception (unreachable)")
 
-    # ----- D (Pattern D — Scrapling) ------------------------------------
+    # ----- Deterministic tiers: Pattern D, then stealth render (no LLM) -----
     if req.mode == "auto":
-        d_response, d_error, hostile_skipped = await _do_d_step(req, attempts, start)
-        if d_response is not None:
-            return d_response
-        if d_error is not None:
-            last_error = d_error
+        det_response, last_error, hostile_skipped = await _do_deterministic_tiers(
+            req, attempts, start, last_error
+        )
+        if det_response is not None:
+            return det_response
 
     # ----- E1 → E2 escalation -----
     return await _do_scrape_e_tier(req, attempts, start, hostile_skipped, last_error)
+
+
+async def _do_deterministic_tiers(
+    req: Any,
+    attempts: list[str],
+    start: float,
+    last_error: BaseException | None,
+) -> tuple[dict[str, Any] | None, BaseException | None, bool]:
+    """Run the no-LLM tiers between the HTTP ladder and the agent tiers.
+
+    Pattern D (Scrapling) then the stealth render, in cost order. Grouped
+    because they answer the same question — "can we get this
+    deterministically?" — and because either failing must still let the next one
+    try. Returns ``(response, last_error, hostile_skipped)``; a None response
+    means keep escalating to E1.
+    """
+    log: list[dict[str, Any]] = req.__dict__.setdefault("_escalation_log", [])
+    hostile_skipped = False
+    # F2: the per-domain policy may have learned this domain needs render (or an
+    # LLM tier), in which case D is doomed and worth skipping.
+    start_rank = int(req.__dict__.get("_policy_start_rank", 0))
+
+    if start_rank > _tier_rank("d"):
+        pass  # policy says skip D — see _policy_start_rank
+    elif _should_skip_d_for_challenge(req):
+        # A wall Scrapling can't solve — don't spend ~30 s proving it.
+        log.append(
+            _build_log_entry(
+                "d",
+                outcome="skipped",
+                reason="blocked",
+                duration_s=0.0,
+                detail=(
+                    f"{req.__dict__['_challenge_detected']} challenge; "
+                    "Scrapling only solves Cloudflare"
+                ),
+            )
+        )
+    else:
+        d_response, d_error, hostile_skipped = await _do_d_step(req, attempts, start)
+        if d_response is not None:
+            return d_response, last_error, hostile_skipped
+        if d_error is not None:
+            last_error = d_error
+
+    if start_rank <= _tier_rank("render"):
+        r_response, r_error = await _do_render_step(req, attempts, start)
+        if r_response is not None:
+            return r_response, last_error, hostile_skipped
+        if r_error is not None:
+            last_error = r_error
+    return None, last_error, hostile_skipped
+
+
+async def _do_map(req: MapRequest) -> dict[str, Any]:
+    """POST /map — discover URLs on the seed's site."""
+    from scrapper_tool.crawl.map import make_ladder_fetch, map_site  # noqa: PLC0415
+
+    start = time.perf_counter()
+    result = await map_site(
+        req.url,
+        max_urls=req.max_urls,
+        same_domain=req.same_domain,
+        include_sitemap=req.include_sitemap,
+        fetch=make_ladder_fetch(req.timeout_s or 30.0) if req.fetch_seed else None,
+    )
+    return {
+        "seed": result.seed,
+        "urls": result.urls,
+        "count": len(result.urls),
+        "from_sitemap": result.from_sitemap,
+        "from_links": result.from_links,
+        "truncated": result.truncated,
+        "dropped_by_limit": result.dropped_by_limit,
+        "sitemaps_read": list(result.sitemaps_read),
+        "duration_s": round(time.perf_counter() - start, 3),
+    }
+
+
+async def _do_crawl(req: CrawlRequest) -> dict[str, Any]:
+    """POST /crawl — traverse the site, running the full cascade per page.
+
+    Each page goes through ``_do_scrape``, so a crawl inherits recipe replay,
+    the render tier, challenge detection, and proxy rotation for free — and the
+    recipe learned on page one makes the rest of the crawl cheap.
+    """
+    from scrapper_tool.crawl.crawl import crawl_to_list  # noqa: PLC0415
+
+    start = time.perf_counter()
+
+    async def scrape_one(url: str) -> dict[str, Any]:
+        page_req = ScrapeRequest(
+            url=url,
+            schema_json=req.schema_json,
+            interactive=req.interactive,
+            timeout_s=req.timeout_s,
+        )
+        return await _do_scrape(page_req)
+
+    pages, stats = await crawl_to_list(
+        req.url,
+        scrape=scrape_one,
+        depth=req.depth,
+        max_pages=req.max_pages,
+        concurrency=req.concurrency,
+        same_domain=req.same_domain,
+        respect_robots=req.respect_robots,
+    )
+
+    results: list[dict[str, Any]] = []
+    for page in pages:
+        payload = dict(page.payload or {})
+        if not req.include_html:
+            # A 50-page crawl of rendered pages is tens of MB of HTML; the
+            # extracted data is what a crawl is for.
+            payload.pop("raw_text", None)
+            payload.pop("intermediate_raw_text", None)
+        results.append(
+            {
+                "url": page.url,
+                "depth": page.depth,
+                "ok": page.ok,
+                "error": page.error,
+                "skipped_reason": page.skipped_reason,
+                "result": payload or None,
+            }
+        )
+
+    return {
+        "seed": req.url,
+        "pages": results,
+        "stats": stats.as_dict(),
+        "duration_s": round(time.perf_counter() - start, 3),
+    }
 
 
 def _scrape_response_from_agent(
@@ -1664,9 +2471,9 @@ def _scrape_response_from_agent(
     """Convert an :class:`AgentResult` into the /scrape response shape.
 
     v1.4.0: ``req`` (optional, default None for back-compat) is read for
-    ``intermediate_raw_text`` (D's HTML when D ran prior) and the
-    ``escalation_log`` accumulator. Both default to None / empty when
-    no req is threaded.
+    ``intermediate_raw_text`` (the best pre-LLM HTML captured by an earlier
+    tier) and the ``escalation_log`` accumulator. Both default to None / empty
+    when no req is threaded.
     """
     import base64  # noqa: PLC0415
 
@@ -1674,7 +2481,14 @@ def _scrape_response_from_agent(
     if result.screenshots:
         screenshots = [base64.b64encode(s).decode("ascii") for s in result.screenshots[:3]]
 
-    intermediate = req.__dict__.get("_d_intermediate_html") if req is not None else None
+    # Prefer the render tier's HTML when it ran — it's strictly richer than D's
+    # (rendered DOM vs a possibly-unhydrated fetch), and it's the debugging
+    # artefact you want when the LLM tier is being asked why it was needed.
+    intermediate = None
+    if req is not None:
+        intermediate = req.__dict__.get("_render_intermediate_html") or req.__dict__.get(
+            "_d_intermediate_html"
+        )
     log: list[dict[str, Any]] = (
         list(req.__dict__.get("_escalation_log", [])) if req is not None else []
     )
@@ -1820,6 +2634,15 @@ def _check_browser_module(browser: str) -> str:  # noqa: PLR0911 — one return 
     if browser == "scrapling":
         try:
             import scrapling  # noqa: F401, PLC0415
+
+            return "ok"
+        except ImportError:
+            return "missing"
+    if browser == "obscura":
+        # Obscura needs Playwright (to connect over CDP) plus a reachable
+        # external server. The module check just verifies the client lib.
+        try:
+            import playwright  # noqa: F401, PLC0415
 
             return "ok"
         except ImportError:

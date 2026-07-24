@@ -28,7 +28,7 @@ inference time, and real solver credits if you opt in).
 | Captcha cascade — Tier 1 (Theyka) | Library |
 | Captcha cascade — Tier 2 paid (CapSolver) | Optional, gated |
 | Behavior policy: humanlike / fast / off | Library |
-| Browser backends: Camoufox / Patchright / Zendriver / Botasaurus / Scrapling | Library |
+| Browser backends: Camoufox / Patchright / Scrapling / Obscura (Zendriver + Botasaurus removed in v1.5.0) | Library |
 | Fingerprint generator: Browserforge | Library |
 | TLS impersonation ladder | All three modes |
 | MCP server stdio framing | MCP mode |

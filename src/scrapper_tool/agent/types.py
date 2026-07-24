@@ -74,7 +74,8 @@ class AgentResult(BaseModel):
 CaptchaSolverName = Literal[
     "auto", "camoufox-auto", "theyka", "capsolver", "nopecha", "twocaptcha", "none"
 ]
-BrowserBackendName = Literal["camoufox", "patchright", "zendriver", "scrapling", "botasaurus"]
+BrowserBackendName = Literal["camoufox", "patchright", "scrapling", "obscura"]
+CamoufoxDisplayName = Literal["headless", "virtual"]
 LLMBackendName = Literal["ollama", "llama_cpp", "vllm", "openai_compat"]
 BehaviorName = Literal["humanlike", "fast", "off"]
 FingerprintName = Literal["browserforge", "none"]
@@ -107,6 +108,24 @@ class AgentConfig(BaseModel):
     # callers of agent_extract / agent_browse can also pass it via
     # SCRAPPER_TOOL_AGENT_USER_DATA_DIR for cross-call session sharing.
     user_data_dir: str | None = None
+    # v1.5.0: CDP WebSocket URL for the Obscura backend (experimental Rust
+    # headless browser run as an external ``obscura serve`` sidecar). Only
+    # consulted when ``browser="obscura"``. Defaults to the conventional
+    # local endpoint when unset.
+    obscura_cdp_url: str | None = None
+    # v1.6.0 render/stealth knobs. Camoufox-native — ignored by the other
+    # backends. ``virtual`` runs under an Xvfb virtual display, which is
+    # stealthier than pure headless (the Docker image ships xvfb).
+    camoufox_headless_mode: CamoufoxDisplayName = "headless"
+    # Drop image requests — large speed/bandwidth win when only text/DOM matters.
+    # WARNING: Camoufox reports this can cause detection issues on major WAFs.
+    # Enable for unprotected / speed-critical scrapes, NOT for hard targets.
+    block_images: bool = False
+    # Use a real bundled fingerprint instead of a generated one (Camoufox 0.5+).
+    fingerprint_preset: bool = False
+    # Target-audience matching, e.g. os="windows", locale="he-IL".
+    camoufox_os: str | None = None
+    camoufox_locale: str | None = None
 
     # --- LLM backend
     llm: LLMBackendName = "ollama"
@@ -150,6 +169,18 @@ class AgentConfig(BaseModel):
                 "headful": _envbool(env.get("SCRAPPER_TOOL_AGENT_HEADFUL"), default=False),
                 "proxy": env.get("SCRAPPER_TOOL_AGENT_PROXY") or None,
                 "user_data_dir": env.get("SCRAPPER_TOOL_AGENT_USER_DATA_DIR") or None,
+                "obscura_cdp_url": env.get("SCRAPPER_TOOL_AGENT_OBSCURA_CDP_URL") or None,
+                "camoufox_headless_mode": env.get(
+                    "SCRAPPER_TOOL_AGENT_CAMOUFOX_DISPLAY", "headless"
+                ),
+                "block_images": _envbool(
+                    env.get("SCRAPPER_TOOL_AGENT_BLOCK_IMAGES"), default=False
+                ),
+                "fingerprint_preset": _envbool(
+                    env.get("SCRAPPER_TOOL_AGENT_FINGERPRINT_PRESET"), default=False
+                ),
+                "camoufox_os": env.get("SCRAPPER_TOOL_AGENT_CAMOUFOX_OS") or None,
+                "camoufox_locale": env.get("SCRAPPER_TOOL_AGENT_CAMOUFOX_LOCALE") or None,
                 "llm": env.get("SCRAPPER_TOOL_AGENT_LLM", "ollama"),
                 "model": env.get("SCRAPPER_TOOL_AGENT_MODEL", "qwen3-vl:8b"),
                 "ollama_url": env.get("SCRAPPER_TOOL_AGENT_OLLAMA_URL", "http://localhost:11434"),
@@ -189,6 +220,7 @@ __all__ = [
     "AgentResult",
     "BehaviorName",
     "BrowserBackendName",
+    "CamoufoxDisplayName",
     "CaptchaSolverName",
     "FingerprintName",
     "LLMBackendName",

@@ -41,8 +41,8 @@ class TestFakeResponse:
 
 class TestFakeCurlSession:
     def test_reset_clears_class_state(self) -> None:
-        FakeCurlSession.STATUS_FOR_PROFILE = {"chrome133a": 200}
-        FakeCurlSession.INSTANCES.append(FakeCurlSession(impersonate="chrome133a"))
+        FakeCurlSession.STATUS_FOR_PROFILE = {"chrome146": 200}
+        FakeCurlSession.INSTANCES.append(FakeCurlSession(impersonate="chrome146"))
         FakeCurlSession.reset()
         assert FakeCurlSession.STATUS_FOR_PROFILE == {}
         assert FakeCurlSession.INSTANCES == []
@@ -50,9 +50,9 @@ class TestFakeCurlSession:
     @pytest.mark.asyncio
     async def test_request_returns_configured_status(self) -> None:
         FakeCurlSession.reset()
-        FakeCurlSession.STATUS_FOR_PROFILE = {"chrome133a": 403}
-        FakeCurlSession.RESPONSE_TEXT_FOR_PROFILE = {"chrome133a": "blocked"}
-        session = FakeCurlSession(impersonate="chrome133a")
+        FakeCurlSession.STATUS_FOR_PROFILE = {"chrome146": 403}
+        FakeCurlSession.RESPONSE_TEXT_FOR_PROFILE = {"chrome146": "blocked"}
+        session = FakeCurlSession(impersonate="chrome146")
         resp = await session.request("GET", "https://example.test/x")
         assert resp.status_code == 403
         assert resp.text == "blocked"

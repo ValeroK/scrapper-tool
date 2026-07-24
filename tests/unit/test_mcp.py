@@ -13,7 +13,7 @@ End-to-end transport tests live in
 Tools exercised
 ---------------
 
-- ``fetch_with_ladder`` — happy path (chrome133a wins) + blocked path
+- ``fetch_with_ladder`` — happy path (chrome146 wins) + blocked path
   (all-403 → BlockedError → returns ``blocked: True``).
 - ``extract_product`` — JSON-LD Product → ProductOffer dict; no
   Product block → returns null.
@@ -48,6 +48,7 @@ pytest.importorskip(
 
 from scrapper_tool import ladder as ladder_module
 from scrapper_tool import mcp as mcp_module
+from scrapper_tool.ladder import IMPERSONATE_LADDER
 from scrapper_tool.testing import FakeCurlSession
 
 # ---- Fixtures -------------------------------------------------------------
@@ -93,18 +94,18 @@ def _get_tool(server: object, name: str) -> object:
 
 class TestFetchWithLadder:
     @pytest.mark.asyncio
-    async def test_happy_path_chrome133a_wins(
+    async def test_happy_path_chrome146_wins(
         self,
         server: object,
         fake_curl: type[FakeCurlSession],
     ) -> None:
-        fake_curl.STATUS_FOR_PROFILE = {"chrome133a": 200}
-        fake_curl.RESPONSE_TEXT_FOR_PROFILE = {"chrome133a": "<html>ok</html>"}
+        fake_curl.STATUS_FOR_PROFILE = {"chrome146": 200}
+        fake_curl.RESPONSE_TEXT_FOR_PROFILE = {"chrome146": "<html>ok</html>"}
         tool = _get_tool(server, "fetch_with_ladder")
 
         result = await tool.fn(url="https://example.test/x")  # type: ignore[attr-defined]
         assert result["status"] == 200
-        assert result["winning_profile"] == "chrome133a"
+        assert result["winning_profile"] == "chrome146"
         assert result["blocked"] is False
         assert "<html>ok</html>" in result["body"]
         assert result["truncated"] is False
@@ -115,12 +116,7 @@ class TestFetchWithLadder:
         server: object,
         fake_curl: type[FakeCurlSession],
     ) -> None:
-        fake_curl.STATUS_FOR_PROFILE = {
-            "chrome133a": 403,
-            "chrome124": 403,
-            "safari18_0": 403,
-            "firefox135": 403,
-        }
+        fake_curl.STATUS_FOR_PROFILE = dict.fromkeys(IMPERSONATE_LADDER, 403)
         tool = _get_tool(server, "fetch_with_ladder")
 
         result = await tool.fn(url="https://example.test/blocked")  # type: ignore[attr-defined]
@@ -194,10 +190,10 @@ class TestCanaryTool:
         server: object,
         fake_curl: type[FakeCurlSession],
     ) -> None:
-        fake_curl.STATUS_FOR_PROFILE = {"chrome133a": 200}
+        fake_curl.STATUS_FOR_PROFILE = {"chrome146": 200}
         tool = _get_tool(server, "canary")
         result = await tool.fn(url="https://example.test/x")  # type: ignore[attr-defined]
-        assert result["winning_profile"] == "chrome133a"
+        assert result["winning_profile"] == "chrome146"
         assert result["exit_code"] == 0
 
     @pytest.mark.asyncio
@@ -231,8 +227,8 @@ class TestFetchWithLadderStructured:
             '"sku":"X1","offers":{"@type":"Offer","price":"19.99","priceCurrency":"USD"}}'
             "</script></head><body></body></html>"
         )
-        fake_curl.STATUS_FOR_PROFILE = {"chrome133a": 200}
-        fake_curl.RESPONSE_TEXT_FOR_PROFILE = {"chrome133a": product_html}
+        fake_curl.STATUS_FOR_PROFILE = {"chrome146": 200}
+        fake_curl.RESPONSE_TEXT_FOR_PROFILE = {"chrome146": product_html}
 
         tool = _get_tool(server, "fetch_with_ladder")
         result = await tool.fn(  # type: ignore[attr-defined]
@@ -250,8 +246,8 @@ class TestFetchWithLadderStructured:
         server: object,
         fake_curl: type[FakeCurlSession],
     ) -> None:
-        fake_curl.STATUS_FOR_PROFILE = {"chrome133a": 200}
-        fake_curl.RESPONSE_TEXT_FOR_PROFILE = {"chrome133a": "<html>plain</html>"}
+        fake_curl.STATUS_FOR_PROFILE = {"chrome146": 200}
+        fake_curl.RESPONSE_TEXT_FOR_PROFILE = {"chrome146": "<html>plain</html>"}
 
         tool = _get_tool(server, "fetch_with_ladder")
         result = await tool.fn(url="https://example.test/p")  # type: ignore[attr-defined]
@@ -272,8 +268,8 @@ class TestAutoScrape:
             '"sku":"Y1","offers":{"@type":"Offer","price":"29.99","priceCurrency":"USD"}}'
             "</script></head><body></body></html>"
         )
-        fake_curl.STATUS_FOR_PROFILE = {"chrome133a": 200}
-        fake_curl.RESPONSE_TEXT_FOR_PROFILE = {"chrome133a": product_html}
+        fake_curl.STATUS_FOR_PROFILE = {"chrome146": 200}
+        fake_curl.RESPONSE_TEXT_FOR_PROFILE = {"chrome146": product_html}
 
         tool = _get_tool(server, "auto_scrape")
         result = await tool.fn(url="https://example.test/p")  # type: ignore[attr-defined]
@@ -283,6 +279,33 @@ class TestAutoScrape:
         assert result["product"]["name"] == "Widget Y"
         assert result["blocked"] is False
         assert result["hostile_skipped"] is False
+
+    @pytest.mark.asyncio
+    async def test_auto_scrape_accepts_a_b_c_with_schema(
+        self,
+        server: object,
+        fake_curl: type[FakeCurlSession],
+    ) -> None:
+        # v1.5.0 parity fix: with a schema supplied AND a B/C signal present,
+        # MCP must accept A/B/C (like REST /scrape) instead of always burning
+        # an LLM call (E1). Regression guard for the MCP/REST divergence.
+        product_html = (
+            '<html><head><script type="application/ld+json">'
+            '{"@context":"https://schema.org","@type":"Product","name":"Widget Z",'
+            '"sku":"Z1","offers":{"@type":"Offer","price":"9.99","priceCurrency":"USD"}}'
+            "</script></head><body></body></html>"
+        )
+        fake_curl.STATUS_FOR_PROFILE = {"chrome146": 200}
+        fake_curl.RESPONSE_TEXT_FOR_PROFILE = {"chrome146": product_html}
+
+        tool = _get_tool(server, "auto_scrape")
+        result = await tool.fn(  # type: ignore[attr-defined]
+            url="https://example.test/p",
+            schema_json={"type": "object", "properties": {"name": {"type": "string"}}},
+        )
+        # No LLM call — accepted at A/B/C, not escalated to E1.
+        assert result["pattern_used"] == "a_b_c"
+        assert result["product"]["name"] == "Widget Z"
 
 
 # ---- v1.1.3: auto_scrape now invokes Pattern D between A/B/C and E1 ------
@@ -332,12 +355,7 @@ class TestAutoScrapeWithPatternD:
     ) -> None:
         # All A/B/C profiles return 403 -> raises BlockedError -> cascade
         # advances to D. Mock D to return a readable product page.
-        fake_curl.STATUS_FOR_PROFILE = {
-            "chrome133a": 403,
-            "chrome124": 403,
-            "safari18_0": 403,
-            "firefox135": 403,
-        }
+        fake_curl.STATUS_FOR_PROFILE = dict.fromkeys(IMPERSONATE_LADDER, 403)
         product_html = (
             '<html><head><script type="application/ld+json">'
             '{"@context":"https://schema.org","@type":"Product","name":"Widget Z",'
@@ -375,7 +393,10 @@ class TestAutoScrapeWithPatternD:
         import builtins
         import sys
 
-        sys.modules.pop("scrapper_tool.patterns.d", None)
+        # Use monkeypatch so pytest restores sys.modules after the test —
+        # a raw pop/assign here leaks a fake ``scrapper_tool.agent`` into
+        # later tests (breaks test_http_server when it runs after this file).
+        monkeypatch.delitem(sys.modules, "scrapper_tool.patterns.d", raising=False)
         real_import = builtins.__import__
 
         def patched_import(
@@ -392,12 +413,7 @@ class TestAutoScrapeWithPatternD:
         monkeypatch.setattr(builtins, "__import__", patched_import)
 
         # A/B/C blocked → cascade tries D (skipped) → E1.
-        fake_curl.STATUS_FOR_PROFILE = {
-            "chrome133a": 403,
-            "chrome124": 403,
-            "safari18_0": 403,
-            "firefox135": 403,
-        }
+        fake_curl.STATUS_FOR_PROFILE = dict.fromkeys(IMPERSONATE_LADDER, 403)
 
         # Mock the agent layer so E1 returns a result.
         from unittest.mock import AsyncMock
@@ -422,7 +438,7 @@ class TestAutoScrapeWithPatternD:
         )
         agent_module.agent_extract = AsyncMock(return_value=fake_result)
         agent_module.agent_browse = AsyncMock(return_value=fake_result)
-        sys.modules["scrapper_tool.agent"] = agent_module
+        monkeypatch.setitem(sys.modules, "scrapper_tool.agent", agent_module)
 
         tool = _get_tool(server, "auto_scrape")
         result = await tool.fn(url="https://protected.com/p")  # type: ignore[attr-defined]
@@ -431,6 +447,442 @@ class TestAutoScrapeWithPatternD:
             "When [hostile] is missing, the D step appends nothing to attempts"
         )
         assert result["hostile_skipped"] is True
+
+
+# ---- B2: stealth-render tier (MCP parity with REST) -----------------------
+
+
+_RENDER_PRODUCT_HTML = (
+    '<html><head><script type="application/ld+json">'
+    '{"@context":"https://schema.org","@type":"Product","name":"Rendered Widget",'
+    '"sku":"R1","offers":{"@type":"Offer","price":"12.34","priceCurrency":"USD"}}'
+    "</script></head><body></body></html>"
+)
+
+
+def _install_fake_render_mcp(
+    monkeypatch: pytest.MonkeyPatch,
+    *,
+    html: str = _RENDER_PRODUCT_HTML,
+    status: int = 200,
+    error: BaseException | None = None,
+) -> None:
+    """Enable the render tier (off by default in tests) with a fake browser."""
+    import scrapper_tool.patterns.render as render_mod
+
+    monkeypatch.setenv("SCRAPPER_TOOL_RENDER_TIER", "1")
+
+    async def fake_render_html(url: str, **_kwargs: Any) -> Any:
+        if error is not None:
+            raise error
+        return render_mod.RenderResult(html=html, status=status, final_url=url)
+
+    monkeypatch.setattr(render_mod, "render_html", fake_render_html)
+
+
+class TestAutoScrapeRenderTier:
+    """The MCP cascade must have the same tiers as REST, in the same order.
+
+    REST and MCP have drifted before (Pattern D was reachable from one and not
+    the other for a whole release), so parity gets pinned explicitly rather than
+    assumed.
+    """
+
+    @pytest.mark.asyncio
+    async def test_render_wins_before_the_llm_tier(
+        self,
+        server: object,
+        fake_curl: type[FakeCurlSession],
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        fake_curl.STATUS_FOR_PROFILE = dict.fromkeys(IMPERSONATE_LADDER, 403)
+        monkeypatch.setattr(mcp_module, "_try_pattern_d_for_auto_scrape", _skip_d_for_auto_scrape)
+        _install_fake_render_mcp(monkeypatch)
+
+        tool = _get_tool(server, "auto_scrape")
+        result = await tool.fn(url="https://walled.com/p")  # type: ignore[attr-defined]
+
+        assert result["pattern_used"] == "render"
+        assert result["pattern_attempts"] == ["a_b_c", "render"]
+        assert result["product"]["name"] == "Rendered Widget"
+        assert result["blocked"] is False
+        assert result["is_structured"] is True
+
+    @pytest.mark.asyncio
+    async def test_render_accepts_a_403_carrying_real_content(
+        self,
+        server: object,
+        fake_curl: type[FakeCurlSession],
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """Same store.mopar.com case the REST tier pins — content, not status."""
+        fake_curl.STATUS_FOR_PROFILE = dict.fromkeys(IMPERSONATE_LADDER, 403)
+        monkeypatch.setattr(mcp_module, "_try_pattern_d_for_auto_scrape", _skip_d_for_auto_scrape)
+        _install_fake_render_mcp(monkeypatch, status=403)
+
+        tool = _get_tool(server, "auto_scrape")
+        result = await tool.fn(url="https://walled.com/p")  # type: ignore[attr-defined]
+
+        assert result["pattern_used"] == "render"
+        assert result["product"]["name"] == "Rendered Widget"
+
+    @pytest.mark.asyncio
+    async def test_render_without_signal_escalates_to_e1(
+        self,
+        server: object,
+        fake_curl: type[FakeCurlSession],
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        import sys
+
+        fake_curl.STATUS_FOR_PROFILE = dict.fromkeys(IMPERSONATE_LADDER, 403)
+        monkeypatch.setattr(mcp_module, "_try_pattern_d_for_auto_scrape", _skip_d_for_auto_scrape)
+        _install_fake_render_mcp(monkeypatch, html="<html><body>nothing</body></html>")
+
+        agent_module = _fake_agent_module_for_e1()
+        monkeypatch.setitem(sys.modules, "scrapper_tool.agent", agent_module)
+
+        tool = _get_tool(server, "auto_scrape")
+        result = await tool.fn(url="https://walled.com/p")  # type: ignore[attr-defined]
+
+        assert result["pattern_used"] == "e1"
+        assert result["pattern_attempts"] == ["a_b_c", "render", "e1"]
+
+    @pytest.mark.asyncio
+    async def test_render_failure_falls_through_to_e1(
+        self,
+        server: object,
+        fake_curl: type[FakeCurlSession],
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        import sys
+
+        fake_curl.STATUS_FOR_PROFILE = dict.fromkeys(IMPERSONATE_LADDER, 403)
+        monkeypatch.setattr(mcp_module, "_try_pattern_d_for_auto_scrape", _skip_d_for_auto_scrape)
+        _install_fake_render_mcp(monkeypatch, error=RuntimeError("camoufox crashed"))
+
+        agent_module = _fake_agent_module_for_e1()
+        monkeypatch.setitem(sys.modules, "scrapper_tool.agent", agent_module)
+
+        tool = _get_tool(server, "auto_scrape")
+        result = await tool.fn(url="https://walled.com/p")  # type: ignore[attr-defined]
+
+        assert result["pattern_used"] == "e1"
+        assert result["pattern_attempts"] == ["a_b_c", "render", "e1"]
+
+    @pytest.mark.asyncio
+    async def test_tier_can_be_disabled(
+        self,
+        server: object,
+        fake_curl: type[FakeCurlSession],
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        import sys
+
+        fake_curl.STATUS_FOR_PROFILE = dict.fromkeys(IMPERSONATE_LADDER, 403)
+        monkeypatch.setattr(mcp_module, "_try_pattern_d_for_auto_scrape", _skip_d_for_auto_scrape)
+        _install_fake_render_mcp(monkeypatch)
+        monkeypatch.setenv("SCRAPPER_TOOL_RENDER_TIER", "0")
+
+        agent_module = _fake_agent_module_for_e1()
+        monkeypatch.setitem(sys.modules, "scrapper_tool.agent", agent_module)
+
+        tool = _get_tool(server, "auto_scrape")
+        result = await tool.fn(url="https://walled.com/p")  # type: ignore[attr-defined]
+
+        assert result["pattern_attempts"] == ["a_b_c", "e1"]
+
+
+async def _skip_d_for_auto_scrape(*_args: Any, **_kwargs: Any) -> tuple[None, None, bool]:
+    """Stand in for a missing [hostile] extra: D contributes nothing."""
+    return None, None, True
+
+
+def _fake_agent_module_for_e1() -> MagicMock:
+    """A ``scrapper_tool.agent`` stand-in whose E1 extract always succeeds."""
+    fake_result = MagicMock()
+    fake_result.mode = "extract"
+    fake_result.data = {"name": "Salvaged"}
+    fake_result.final_url = "https://walled.com/p"
+    fake_result.rendered_markdown = "# Salvaged"
+    fake_result.screenshots = None
+    fake_result.actions = []
+    fake_result.tokens_used = 10
+    fake_result.steps_used = 1
+    fake_result.blocked = False
+    fake_result.error = None
+    fake_result.duration_s = 1.0
+
+    agent_module = MagicMock()
+    agent_module.AgentConfig = MagicMock()
+    agent_module.AgentConfig.from_env = MagicMock(
+        return_value=MagicMock(merged=lambda **_: MagicMock())
+    )
+
+    async def fake_extract(*_args: Any, **_kwargs: Any) -> Any:
+        return fake_result
+
+    agent_module.agent_extract = fake_extract
+    return agent_module
+
+
+# ---- F2: per-domain tier memory (MCP parity) ------------------------------
+
+
+class TestAutoScrapePolicySkip:
+    """MCP must self-tune the same way REST does: a domain that has repeatedly
+    needed render stops paying for the ladder on every call."""
+
+    @pytest.mark.asyncio
+    async def test_confident_policy_skips_the_ladder(
+        self, server: object, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from datetime import UTC, datetime
+
+        from scrapper_tool.recipe.policy import DomainPolicy, get_policy_store
+
+        get_policy_store()._write(  # type: ignore[attr-defined]
+            "walled.test",
+            DomainPolicy(
+                domain="walled.test",
+                best_tier="render",
+                updated_at=datetime.now(UTC).isoformat(),
+                observations=3,
+            ),
+        )
+
+        async def spy_ladder(method: str, url: str, **kwargs: Any) -> Any:
+            raise AssertionError("ladder must be skipped when policy says render")
+
+        monkeypatch.setattr(mcp_module, "request_with_ladder", spy_ladder)
+        monkeypatch.setattr(mcp_module, "_try_pattern_d_for_auto_scrape", _skip_d_for_auto_scrape)
+
+        product = (
+            '<html><head><script type="application/ld+json">'
+            '{"@context":"https://schema.org","@type":"Product","name":"W",'
+            '"offers":{"@type":"Offer","price":"9.99","priceCurrency":"USD"}}'
+            "</script></head><body></body></html>"
+        )
+
+        import scrapper_tool.patterns.render as render_mod
+
+        monkeypatch.setenv("SCRAPPER_TOOL_RENDER_TIER", "1")
+
+        async def fake_render(url: str, **_kwargs: Any) -> Any:
+            return render_mod.RenderResult(html=product, status=200, final_url=url)
+
+        monkeypatch.setattr(render_mod, "render_html", fake_render)
+
+        tool = _get_tool(server, "auto_scrape")
+        result = await tool.fn(url="https://walled.test/p")  # type: ignore[attr-defined]
+
+        assert result["pattern_used"] == "render"
+        assert "a_b_c" not in result["pattern_attempts"]
+
+    @pytest.mark.asyncio
+    async def test_an_ab_c_win_is_recorded(
+        self, server: object, fake_curl: type[FakeCurlSession], monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from scrapper_tool.recipe.policy import get_policy_store
+
+        fake_curl.STATUS_FOR_PROFILE = {"chrome146": 200}
+        fake_curl.RESPONSE_TEXT_FOR_PROFILE = {
+            "chrome146": (
+                '<html><head><script type="application/ld+json">'
+                '{"@context":"https://schema.org","@type":"Product","name":"W",'
+                '"offers":{"@type":"Offer","price":"1.00","priceCurrency":"USD"}}'
+                "</script></head><body></body></html>"
+            )
+        }
+
+        tool = _get_tool(server, "auto_scrape")
+        await tool.fn(url="https://plain.test/p")  # type: ignore[attr-defined]
+
+        policy = get_policy_store().get("https://plain.test/p")
+        assert policy is not None
+        assert policy.best_tier == "a_b_c"
+
+
+# ---- B3: challenge detection drives escalation (MCP parity) ---------------
+
+
+_RADWARE_WALL = (
+    "<html><head><title>Loading</title></head><body>"
+    "<script>window.location='https://validate.perfdrive.com/xyz'</script>"
+    "</body></html>"
+)
+_CF_WALL = "<html><head><title>Just a moment...</title></head><body></body></html>"
+
+
+class TestAutoScrapeChallengeDetection:
+    """MCP had no challenge detection at all before B3 — REST's was private.
+
+    Same rule as REST: Cloudflare still goes through Pattern D (Scrapling can
+    solve it), every other vendor skips straight to the render tier.
+    """
+
+    @pytest.mark.asyncio
+    async def test_non_cloudflare_wall_skips_d_and_renders(
+        self,
+        server: object,
+        fake_curl: type[FakeCurlSession],
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        fake_curl.STATUS_FOR_PROFILE = {"chrome146": 200}
+        fake_curl.RESPONSE_TEXT_FOR_PROFILE = {"chrome146": _RADWARE_WALL}
+        # D is available and would run — the point is that it doesn't.
+        import scrapper_tool.patterns.d as d_mod
+
+        def fake_hostile_client(**_kwargs: object) -> _FakeMcpFetcher:
+            raise AssertionError("Pattern D must be skipped on a non-Cloudflare wall")
+
+        monkeypatch.setattr(d_mod, "hostile_client", fake_hostile_client)
+        _install_fake_render_mcp(monkeypatch)
+
+        tool = _get_tool(server, "auto_scrape")
+        result = await tool.fn(url="https://walled.com/p")  # type: ignore[attr-defined]
+
+        assert result["challenge_detected"] == "radware"
+        assert result["pattern_used"] == "render"
+        assert result["pattern_attempts"] == ["a_b_c", "render"]
+
+    @pytest.mark.asyncio
+    async def test_cloudflare_wall_still_runs_d(
+        self,
+        server: object,
+        fake_curl: type[FakeCurlSession],
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        fake_curl.STATUS_FOR_PROFILE = {"chrome146": 200}
+        fake_curl.RESPONSE_TEXT_FOR_PROFILE = {"chrome146": _CF_WALL}
+        import scrapper_tool.patterns.d as d_mod
+
+        def fake_hostile_client(**_kwargs: object) -> _FakeMcpFetcher:
+            return _FakeMcpFetcher(_FakeMcpScraplingResponse(html=_RENDER_PRODUCT_HTML))
+
+        monkeypatch.setattr(d_mod, "hostile_client", fake_hostile_client)
+
+        tool = _get_tool(server, "auto_scrape")
+        result = await tool.fn(url="https://cf.com/p")  # type: ignore[attr-defined]
+
+        assert result["challenge_detected"] == "cloudflare"
+        assert result["pattern_used"] == "d"
+        assert result["pattern_attempts"] == ["a_b_c", "d"]
+
+    @pytest.mark.asyncio
+    async def test_no_challenge_reports_null(
+        self,
+        server: object,
+        fake_curl: type[FakeCurlSession],
+    ) -> None:
+        fake_curl.STATUS_FOR_PROFILE = {"chrome146": 200}
+        fake_curl.RESPONSE_TEXT_FOR_PROFILE = {"chrome146": _RENDER_PRODUCT_HTML}
+
+        tool = _get_tool(server, "auto_scrape")
+        result = await tool.fn(url="https://plain.com/p")  # type: ignore[attr-defined]
+
+        assert result["pattern_used"] == "a_b_c"
+        assert result["challenge_detected"] is None
+
+
+# ---- B4: E2 is gated behind interactive=true (MCP parity) -----------------
+
+
+def _fake_agent_module_e1_blocked(*, browse_result: Any = None) -> MagicMock:
+    """A ``scrapper_tool.agent`` stand-in whose E1 always reports blocked."""
+    blocked = MagicMock()
+    blocked.mode = "extract"
+    blocked.data = None
+    blocked.final_url = "https://protected.com/p"
+    blocked.rendered_markdown = None
+    blocked.screenshots = None
+    blocked.actions = []
+    blocked.tokens_used = 10
+    blocked.steps_used = 1
+    blocked.blocked = True
+    blocked.error = "hit a captcha"
+    blocked.duration_s = 1.0
+
+    agent_module = MagicMock()
+    agent_module.AgentConfig = MagicMock()
+    agent_module.AgentConfig.from_env = MagicMock(return_value=MagicMock())
+
+    async def fake_extract(*_args: Any, **_kwargs: Any) -> Any:
+        return blocked
+
+    async def fake_browse(*_args: Any, **_kwargs: Any) -> Any:
+        if browse_result is None:
+            raise AssertionError("E2 must not run without interactive=true")
+        return browse_result
+
+    agent_module.agent_extract = fake_extract
+    agent_module.agent_browse = fake_browse
+    return agent_module
+
+
+class TestAutoScrapeE2Gate:
+    """MCP parity for the interactive gate — and MCP's first E2 coverage at all."""
+
+    @staticmethod
+    def _all_blocked(fake_curl: type[FakeCurlSession], monkeypatch: pytest.MonkeyPatch) -> None:
+        fake_curl.STATUS_FOR_PROFILE = dict.fromkeys(IMPERSONATE_LADDER, 403)
+        monkeypatch.setattr(mcp_module, "_try_pattern_d_for_auto_scrape", _skip_d_for_auto_scrape)
+        monkeypatch.setenv("SCRAPPER_TOOL_RENDER_TIER", "0")
+
+    @pytest.mark.asyncio
+    async def test_blocked_e1_stops_without_interactive(
+        self,
+        server: object,
+        fake_curl: type[FakeCurlSession],
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        import sys
+
+        self._all_blocked(fake_curl, monkeypatch)
+        monkeypatch.setitem(sys.modules, "scrapper_tool.agent", _fake_agent_module_e1_blocked())
+
+        tool = _get_tool(server, "auto_scrape")
+        result = await tool.fn(url="https://protected.com/p")  # type: ignore[attr-defined]
+
+        assert result["pattern_attempts"] == ["a_b_c", "e1"]
+        assert result["pattern_used"] == "e1"
+        assert result["blocked"] is True
+
+    @pytest.mark.asyncio
+    async def test_blocked_e1_escalates_with_interactive(
+        self,
+        server: object,
+        fake_curl: type[FakeCurlSession],
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        import sys
+
+        self._all_blocked(fake_curl, monkeypatch)
+        browsed = MagicMock()
+        browsed.mode = "browse"
+        browsed.data = {"name": "Reached via agent"}
+        browsed.final_url = "https://protected.com/p"
+        browsed.rendered_markdown = None
+        browsed.screenshots = None
+        browsed.actions = []
+        browsed.tokens_used = 900
+        browsed.steps_used = 5
+        browsed.blocked = False
+        browsed.error = None
+        browsed.duration_s = 9.0
+        monkeypatch.setitem(
+            sys.modules,
+            "scrapper_tool.agent",
+            _fake_agent_module_e1_blocked(browse_result=browsed),
+        )
+
+        tool = _get_tool(server, "auto_scrape")
+        result = await tool.fn(  # type: ignore[attr-defined]
+            url="https://protected.com/p", interactive=True
+        )
+
+        assert result["pattern_used"] == "e2"
+        assert result["pattern_attempts"] == ["a_b_c", "e1", "e2"]
 
 
 # ---- Truncation -----------------------------------------------------------
@@ -474,8 +926,8 @@ class TestAutoScrapeIsStructured:
             '"sku":"Y1","offers":{"@type":"Offer","price":"29.99","priceCurrency":"USD"}}'
             "</script></head><body></body></html>"
         )
-        fake_curl.STATUS_FOR_PROFILE = {"chrome133a": 200}
-        fake_curl.RESPONSE_TEXT_FOR_PROFILE = {"chrome133a": product_html}
+        fake_curl.STATUS_FOR_PROFILE = {"chrome146": 200}
+        fake_curl.RESPONSE_TEXT_FOR_PROFILE = {"chrome146": product_html}
 
         tool = _get_tool(server, "auto_scrape")
         result = await tool.fn(url="https://example.test/p")  # type: ignore[attr-defined]
@@ -490,12 +942,7 @@ class TestAutoScrapeIsStructured:
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
         # All A/B/C profiles 403 -> BlockedError -> D step.
-        fake_curl.STATUS_FOR_PROFILE = {
-            "chrome133a": 403,
-            "chrome124": 403,
-            "safari18_0": 403,
-            "firefox135": 403,
-        }
+        fake_curl.STATUS_FOR_PROFILE = dict.fromkeys(IMPERSONATE_LADDER, 403)
         product_html = (
             '<html><head><script type="application/ld+json">'
             '{"@context":"https://schema.org","@type":"Product","name":"Widget Z",'
@@ -771,7 +1218,8 @@ class TestAutoScrapeHostileOnly:
         import builtins
         import sys
 
-        sys.modules.pop("scrapper_tool.patterns.d", None)
+        # monkeypatch.delitem so pytest restores the real module afterwards.
+        monkeypatch.delitem(sys.modules, "scrapper_tool.patterns.d", raising=False)
         real_import = builtins.__import__
 
         def patched_import(
@@ -812,12 +1260,7 @@ class TestAutoScrapeSharedProfileDir:
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
         # All A/B/C profiles 403 -> BlockedError -> D step.
-        fake_curl.STATUS_FOR_PROFILE = {
-            "chrome133a": 403,
-            "chrome124": 403,
-            "safari18_0": 403,
-            "firefox135": 403,
-        }
+        fake_curl.STATUS_FOR_PROFILE = dict.fromkeys(IMPERSONATE_LADDER, 403)
         captured_kwargs: dict[str, object] = {}
         product_html = (
             '<html><head><script type="application/ld+json">'
@@ -860,12 +1303,7 @@ class TestAutoScrapeSharedProfileDir:
         monkeypatch: pytest.MonkeyPatch,
         tmp_path: Any,
     ) -> None:
-        fake_curl.STATUS_FOR_PROFILE = {
-            "chrome133a": 403,
-            "chrome124": 403,
-            "safari18_0": 403,
-            "firefox135": 403,
-        }
+        fake_curl.STATUS_FOR_PROFILE = dict.fromkeys(IMPERSONATE_LADDER, 403)
         captured_kwargs: dict[str, object] = {}
         caller_dir = str(tmp_path / "vendor-tasca-profile")
         product_html = (

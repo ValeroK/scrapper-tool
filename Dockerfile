@@ -118,9 +118,10 @@ ENV PATH="/app/.venv/bin:${PATH}" \
     SCRAPPER_TOOL_AGENT_BROWSER=patchright \
     SCRAPPER_TOOL_AGENT_HEADFUL=0 \
     # Default LLM endpoint = host machine's port 11434 (Ollama default).
-    # Override at runtime to point at LM Studio (1234), llama.cpp (8080),
-    # vLLM (8000), or a remote server. The container does NOT bundle an
-    # LLM — bring your own.
+    # Override at runtime to point at LM Studio, llama.cpp (8080), vLLM
+    # (8000), or a remote server. For LM Studio set LLM=openai_compat and
+    # OLLAMA_URL=http://host.docker.internal:<lmstudio-port> (the backend
+    # appends /v1). The container does NOT bundle an LLM — bring your own.
     SCRAPPER_TOOL_AGENT_OLLAMA_URL=http://host.docker.internal:11434
 
 # Install OS-level Playwright runtime deps as root — needs apt-get.

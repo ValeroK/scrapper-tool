@@ -16,11 +16,11 @@ import httpx
 import pytest
 
 from scrapper_tool.agent.backends import (
-    BotasaurusBackend,
+    BrowserLaunchOptions,
     CamoufoxBackend,
+    ObscuraBackend,
     PatchrightBackend,
     ScraplingBackend,
-    ZendriverBackend,
     get_behavior_policy,
     get_browser_backend,
     get_captcha_solver,
@@ -37,7 +37,7 @@ from scrapper_tool.agent.backends.llm import (
     OpenAICompatBackend,
 )
 from scrapper_tool.agent.types import AgentConfig
-from scrapper_tool.errors import AgentLLMError
+from scrapper_tool.errors import AgentLLMError, ConfigurationError
 
 # --- Browser resolver -----------------------------------------------------
 
@@ -52,15 +52,95 @@ class TestBrowserResolver:
         cases: dict[str, type] = {
             "camoufox": CamoufoxBackend,
             "patchright": PatchrightBackend,
-            "zendriver": ZendriverBackend,
             "scrapling": ScraplingBackend,
-            "botasaurus": BotasaurusBackend,
         }
         for name, cls in cases.items():
             assert isinstance(get_browser_backend(name), cls)
 
+    def test_pruned_backends_are_rejected(self) -> None:
+        # Zendriver / Botasaurus were removed in v1.5.0 — they must no
+        # longer resolve (they raised AgentError at browse time anyway).
+        for name in ("zendriver", "botasaurus"):
+            with pytest.raises(ConfigurationError, match="Unknown browser backend"):
+                get_browser_backend(name)
+
+    def test_obscura_resolves_with_cdp_url(self) -> None:
+        backend = get_browser_backend("obscura", cdp_url="ws://host:9999")
+        assert isinstance(backend, ObscuraBackend)
+        assert backend.name == "obscura"
+        assert backend._cdp_url == "ws://host:9999"
+
+    def test_obscura_default_cdp_url(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.delenv("SCRAPPER_TOOL_AGENT_OBSCURA_CDP_URL", raising=False)
+        backend = get_browser_backend("obscura")
+        assert isinstance(backend, ObscuraBackend)
+        assert backend._cdp_url == "http://127.0.0.1:9222"
+
+    async def test_obscura_launch_connects_over_cdp(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        # Inject a fake playwright.async_api so launch() runs without a
+        # real server (kwargs-contract test — catches connect_over_cdp drift).
+        from unittest.mock import AsyncMock
+
+        browser = type("B", (), {"close": AsyncMock(), "new_context": AsyncMock()})()
+        connect = AsyncMock(return_value=browser)
+
+        class _Ctx:
+            async def __aenter__(self) -> Any:
+                return type(
+                    "PW", (), {"chromium": type("C", (), {"connect_over_cdp": connect})()}
+                )()
+
+            async def __aexit__(self, *a: Any) -> None:
+                return None
+
+        fake_api = types.ModuleType("playwright.async_api")
+        fake_api.async_playwright = _Ctx  # type: ignore[attr-defined]
+        monkeypatch.setitem(sys.modules, "playwright", types.ModuleType("playwright"))
+        monkeypatch.setitem(sys.modules, "playwright.async_api", fake_api)
+
+        backend = get_browser_backend("obscura", cdp_url="ws://host:9999")
+        handle = await backend.launch(
+            options=BrowserLaunchOptions(),
+            fingerprint=get_fingerprint_generator("none"),
+            behavior=get_behavior_policy("off"),
+        )
+        connect.assert_awaited_once_with("ws://host:9999")
+        assert handle.playwright_browser is browser
+        assert handle.name == "obscura"
+        await handle.close()
+        browser.close.assert_awaited_once()
+
+    async def test_obscura_launch_connect_failure_raises(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from unittest.mock import AsyncMock
+
+        connect = AsyncMock(side_effect=RuntimeError("no server"))
+
+        class _Ctx:
+            async def __aenter__(self) -> Any:
+                return type(
+                    "PW", (), {"chromium": type("C", (), {"connect_over_cdp": connect})()}
+                )()
+
+            async def __aexit__(self, *a: Any) -> None:
+                return None
+
+        fake_api = types.ModuleType("playwright.async_api")
+        fake_api.async_playwright = _Ctx  # type: ignore[attr-defined]
+        monkeypatch.setitem(sys.modules, "playwright", types.ModuleType("playwright"))
+        monkeypatch.setitem(sys.modules, "playwright.async_api", fake_api)
+
+        backend = get_browser_backend("obscura", cdp_url="ws://dead:1")
+        with pytest.raises(ImportError, match="Obscura CDP connect failed"):
+            await backend.launch(
+                options=BrowserLaunchOptions(),
+                fingerprint=get_fingerprint_generator("none"),
+                behavior=get_behavior_policy("off"),
+            )
+
     def test_unknown_backend_raises(self) -> None:
-        with pytest.raises(ValueError, match="Unknown browser backend"):
+        with pytest.raises(ConfigurationError, match="Unknown browser backend"):
             get_browser_backend("internet-explorer")
 
     def test_camoufox_install_error_message_is_helpful(self) -> None:
@@ -71,9 +151,160 @@ class TestBrowserResolver:
         assert "[llm-agent]" in browser_mod._CAMOUFOX_NOT_INSTALLED
         assert "camoufox fetch" in browser_mod._CAMOUFOX_NOT_INSTALLED
         assert "[llm-agent]" in browser_mod._PATCHRIGHT_NOT_INSTALLED
-        assert "[zendriver-backend]" in browser_mod._ZENDRIVER_NOT_INSTALLED
-        assert "[botasaurus-backend]" in browser_mod._BOTASAURUS_NOT_INSTALLED
         assert "[hostile]" in browser_mod._SCRAPLING_NOT_INSTALLED
+
+
+# --- Backend launch() kwargs contracts (API-drift protection) -------------
+
+
+class TestBackendLaunchContracts:
+    """Exercise each launch() against a mocked lazy dependency and assert the
+    exact kwargs handed to it. These fail loudly if camoufox / patchright /
+    scrapling rename or drop a launch parameter on upgrade.
+    """
+
+    async def test_camoufox_launch_kwargs(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        captured: dict[str, Any] = {}
+
+        class _AsyncCamoufox:
+            def __init__(self, **kwargs: Any) -> None:
+                captured.update(kwargs)
+
+            async def __aenter__(self) -> Any:
+                return object()
+
+            async def __aexit__(self, *a: Any) -> None:
+                return None
+
+        fake = types.ModuleType("camoufox.async_api")
+        fake.AsyncCamoufox = _AsyncCamoufox  # type: ignore[attr-defined]
+        monkeypatch.setitem(sys.modules, "camoufox", types.ModuleType("camoufox"))
+        monkeypatch.setitem(sys.modules, "camoufox.async_api", fake)
+
+        handle = await CamoufoxBackend().launch(
+            options=BrowserLaunchOptions(headful=False, proxy="http://p:8080"),
+            fingerprint=get_fingerprint_generator("none"),
+            behavior=get_behavior_policy("off"),
+        )
+        assert captured["headless"] is True
+        assert captured["humanize"] is True
+        assert captured["geoip"] is True
+        assert captured["proxy"] == {"server": "http://p:8080"}
+        assert handle.name == "camoufox"
+        # Knobs left at their defaults must NOT be passed at all.
+        assert "user_data_dir" not in captured
+        assert "block_images" not in captured
+        await handle.close()
+
+    async def test_camoufox_render_knobs_reach_asynccamoufox(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """v1.6.0 knobs: virtual display, persistent profile, image blocking.
+
+        The persistent-profile assertion is the regression guard for the bug where
+        ``user_data_dir`` was threaded through the cascade but never reached Camoufox,
+        silently breaking cf_clearance carry-forward for E2.
+        """
+        captured: dict[str, Any] = {}
+
+        class _AsyncCamoufox:
+            def __init__(self, **kwargs: Any) -> None:
+                captured.update(kwargs)
+
+            async def __aenter__(self) -> Any:
+                return object()
+
+            async def __aexit__(self, *a: Any) -> None:
+                return None
+
+        fake = types.ModuleType("camoufox.async_api")
+        fake.AsyncCamoufox = _AsyncCamoufox  # type: ignore[attr-defined]
+        monkeypatch.setitem(sys.modules, "camoufox", types.ModuleType("camoufox"))
+        monkeypatch.setitem(sys.modules, "camoufox.async_api", fake)
+
+        handle = await CamoufoxBackend().launch(
+            options=BrowserLaunchOptions(
+                headless_mode="virtual",
+                user_data_dir="/tmp/profile-x",
+                block_images=True,
+                fingerprint_preset=True,
+                os="windows",
+                locale="he-IL",
+            ),
+            fingerprint=get_fingerprint_generator("none"),
+            behavior=get_behavior_policy("off"),
+        )
+        assert captured["headless"] == "virtual"
+        assert captured["user_data_dir"] == "/tmp/profile-x"
+        assert captured["persistent_context"] is True  # must accompany user_data_dir
+        assert captured["block_images"] is True
+        assert captured["fingerprint_preset"] is True
+        assert captured["os"] == "windows"
+        assert captured["locale"] == "he-IL"
+        await handle.close()
+
+    async def test_patchright_launch_kwargs(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        from unittest.mock import AsyncMock
+
+        launched: dict[str, Any] = {}
+        browser = type("B", (), {"close": AsyncMock(), "new_context": AsyncMock()})()
+
+        class _Chromium:
+            async def launch(self, **kwargs: Any) -> Any:
+                launched.update(kwargs)
+                return browser
+
+        class _Ctx:
+            async def __aenter__(self) -> Any:
+                return type("PW", (), {"chromium": _Chromium()})()
+
+            async def __aexit__(self, *a: Any) -> None:
+                return None
+
+        fake = types.ModuleType("patchright.async_api")
+        fake.async_playwright = _Ctx  # type: ignore[attr-defined]
+        monkeypatch.setitem(sys.modules, "patchright", types.ModuleType("patchright"))
+        monkeypatch.setitem(sys.modules, "patchright.async_api", fake)
+
+        handle = await PatchrightBackend().launch(
+            options=BrowserLaunchOptions(headful=False, proxy="http://p:1"),
+            fingerprint=get_fingerprint_generator("none"),
+            behavior=get_behavior_policy("off"),
+        )
+        assert launched["headless"] is True
+        assert launched["proxy"] == {"server": "http://p:1"}
+        assert handle.playwright_browser is browser
+        await handle.close()
+
+    async def test_scrapling_launch_delegates_to_hostile_client(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        entered: dict[str, Any] = {}
+
+        class _Ctx:
+            async def __aenter__(self) -> Any:
+                return "fetcher"
+
+            async def __aexit__(self, *a: Any) -> None:
+                return None
+
+        def fake_hostile_client(*, headless: bool) -> Any:
+            entered["headless"] = headless
+            return _Ctx()
+
+        import scrapper_tool.patterns.d as d_mod
+
+        monkeypatch.setattr(d_mod, "hostile_client", fake_hostile_client)
+
+        handle = await ScraplingBackend().launch(
+            options=BrowserLaunchOptions(),
+            fingerprint=get_fingerprint_generator("none"),
+            behavior=get_behavior_policy("off"),
+        )
+        assert entered["headless"] is True
+        assert handle.playwright_browser is None
+        assert handle.raw == "fetcher"
+        await handle.close()
 
 
 # --- Fingerprint resolver -------------------------------------------------
@@ -92,7 +323,7 @@ class TestFingerprintResolver:
         assert fp.viewport == (1280, 800)
 
     def test_unknown_raises(self) -> None:
-        with pytest.raises(ValueError, match="Unknown fingerprint"):
+        with pytest.raises(ConfigurationError, match="Unknown fingerprint"):
             get_fingerprint_generator("evil")
 
     def test_browserforge_lazy_import_failure_is_helpful(
@@ -156,7 +387,7 @@ class TestBehaviorResolver:
             assert get_behavior_policy(name).name == name
 
     def test_unknown_raises(self) -> None:
-        with pytest.raises(ValueError, match="Unknown behavior policy"):
+        with pytest.raises(ConfigurationError, match="Unknown behavior policy"):
             get_behavior_policy("evil")
 
     @pytest.mark.asyncio
@@ -204,7 +435,7 @@ class TestLLMResolver:
 
     def test_unknown_raises(self) -> None:
         cfg = AgentConfig.model_construct(llm="evil")  # bypass validation
-        with pytest.raises(ValueError, match="Unknown LLM backend"):
+        with pytest.raises(ConfigurationError, match="Unknown LLM backend"):
             get_llm_backend(cfg)
 
     @pytest.mark.asyncio
@@ -385,6 +616,51 @@ class TestBehaviorHelpers:
             assert -50 <= x <= 250
             assert -50 <= y <= 250
 
+    async def test_behavior_consumer_humanlike_applies_shaping(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from unittest.mock import AsyncMock
+
+        from scrapper_tool.agent.backends.behavior import make_behavior_consumer
+
+        async def instant(_: float) -> None:
+            return None
+
+        monkeypatch.setattr("asyncio.sleep", instant)
+        policy = get_behavior_policy("humanlike")
+        page = type("P", (), {"evaluate": AsyncMock()})()
+        consumer = make_behavior_consumer(policy, full=True)
+        await consumer(page, url="https://e.example")
+        page.evaluate.assert_awaited()  # scroll shaping ran
+
+    async def test_behavior_consumer_off_is_noop(self) -> None:
+        from unittest.mock import AsyncMock
+
+        from scrapper_tool.agent.backends.behavior import make_behavior_consumer
+
+        policy = get_behavior_policy("off")
+        page = type("P", (), {"evaluate": AsyncMock()})()
+        consumer = make_behavior_consumer(policy, full=True)
+        await consumer(page, url="https://e.example")
+        page.evaluate.assert_not_awaited()  # off = no shaping
+
+    async def test_behavior_consumer_e1_minimal_no_scroll(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from unittest.mock import AsyncMock
+
+        from scrapper_tool.agent.backends.behavior import make_behavior_consumer
+
+        async def instant(_: float) -> None:
+            return None
+
+        monkeypatch.setattr("asyncio.sleep", instant)
+        policy = get_behavior_policy("humanlike")
+        page = type("P", (), {"evaluate": AsyncMock()})()
+        consumer = make_behavior_consumer(policy, full=False)
+        await consumer(page, url="https://e.example")
+        page.evaluate.assert_not_awaited()  # E1 = settle only, no scroll
+
 
 class TestVisionModelHeuristic:
     @pytest.mark.parametrize(
@@ -458,8 +734,67 @@ class TestCaptchaResolver:
 
     def test_unknown_solver_raises(self) -> None:
         cfg = AgentConfig.model_construct(captcha_solver="bogus", captcha_api_key=None)
-        with pytest.raises(ValueError, match="Unknown captcha solver"):
+        with pytest.raises(ConfigurationError, match="Unknown captcha solver"):
             get_captcha_solver(cfg)
+
+    @pytest.mark.parametrize(
+        ("fallback", "cls_name"),
+        [("nopecha", "NopechaSolver"), ("twocaptcha", "TwoCaptchaSolver")],
+    )
+    def test_auto_with_key_other_paid_fallbacks(self, fallback: str, cls_name: str) -> None:
+        from pydantic import SecretStr
+
+        import scrapper_tool.agent.backends.captcha as captcha_mod
+
+        cfg = AgentConfig(
+            captcha_solver="auto",
+            captcha_api_key=SecretStr("sk_test"),
+            captcha_paid_fallback=fallback,  # type: ignore[arg-type]
+        )
+        solver = get_captcha_solver(cfg)
+        tiers = solver._tiers  # type: ignore[attr-defined]
+        assert any(isinstance(t, getattr(captcha_mod, cls_name)) for t in tiers)
+
+    @pytest.mark.parametrize(
+        ("name", "cls_name"),
+        [
+            ("camoufox-auto", "CamoufoxAutoSolver"),
+            ("theyka", "TheykaSolver"),
+        ],
+    )
+    def test_single_name_free_solvers(self, name: str, cls_name: str) -> None:
+        import scrapper_tool.agent.backends.captcha as captcha_mod
+
+        cfg = AgentConfig(captcha_solver=name)  # type: ignore[arg-type]
+        solver = get_captcha_solver(cfg)
+        assert isinstance(solver, getattr(captcha_mod, cls_name))
+
+    @pytest.mark.parametrize("name", ["nopecha", "twocaptcha"])
+    def test_single_name_paid_solvers_with_key(self, name: str) -> None:
+        from pydantic import SecretStr
+
+        cfg = AgentConfig(captcha_solver=name, captcha_api_key=SecretStr("k"))  # type: ignore[arg-type]
+        solver = get_captcha_solver(cfg)
+        assert solver.name == name
+
+    async def test_theyka_solver_success(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        # Cover the TheykaSolver happy path (a lazy-imported turnstile_solver).
+        from unittest.mock import AsyncMock
+
+        from scrapper_tool.agent.backends.captcha import TheykaSolver
+
+        fake_mod = types.ModuleType("turnstile_solver")
+
+        class _Solver:
+            async def solve(self, *, url: str, sitekey: str) -> str:
+                return "theyka-token"
+
+        fake_mod.Solver = _Solver  # type: ignore[attr-defined]
+        monkeypatch.setitem(sys.modules, "turnstile_solver", fake_mod)
+
+        _ = AsyncMock  # keep import parity with sibling tests
+        token = await TheykaSolver().solve("turnstile", "0xKEY", "https://e.example")
+        assert token == "theyka-token"
 
 
 # --- Mocks ---------------------------------------------------------------
@@ -487,3 +822,42 @@ class MockResponse:
 
 # Silence unused-imports — referenced via class inspection in TestCaptchaResolver.
 _ = (AsyncMock, MagicMock)
+
+
+class TestDependencyCoexistence:
+    """Pins that the browser-use 0.13 upgrade forced, asserted so a future
+    upgrade that changes them is a visible decision rather than a surprise.
+
+    browser-use 0.13 pins pydantic and (transitively) playwright exactly, and in
+    the [full] environment those win over scrapling[fetchers]'s newer exact pins.
+    These are deliberately accepted, not overridden: the pins guard browser-use's
+    LLM-tool-call validation and CDP attach, the two paths where a silent minor
+    bump has historically broken it. If these assertions fail after an upgrade,
+    re-read whether the coexistence still holds before loosening them.
+    """
+
+    def test_pydantic_matches_browser_uses_pin(self) -> None:
+        pytest.importorskip("browser_use")
+        import importlib.metadata as md
+
+        # browser-use 0.13.x pins pydantic==2.12.5 exactly. We honour it rather
+        # than override, so the resolved version must be in the 2.12 line.
+        assert md.version("pydantic").startswith("2.12."), (
+            "pydantic moved off browser-use's pin — confirm E2 tool-calls still "
+            "validate before accepting the new version"
+        )
+
+    def test_typing_extensions_override_holds(self) -> None:
+        """We DO override browser-use's exact typing-extensions pin.
+
+        typing-extensions is additive by contract, so pinning it back would drag
+        scrapling and patchright backwards for no benefit. This asserts the
+        override in pyproject's [tool.uv] actually took effect.
+        """
+        import importlib.metadata as md
+
+        major, minor, *_ = md.version("typing-extensions").split(".")
+        assert (int(major), int(minor)) >= (4, 16), (
+            "the typing-extensions override was lost; scrapling/patchright will "
+            "have regressed with it"
+        )

@@ -73,9 +73,22 @@ lightly-protected sites where speed dominates, switch to **Patchright**.
 |---------|-------------|--------------|------------------|--------------|----------|
 | **camoufox** (default) | ~100% on 2026 benchmarks | ~200 MB | ~42 s | ~300 MB | Hard sites (CF Enterprise, DataDome, Akamai). |
 | patchright | ~67% reduction | ~120 MB | ~3-8 s | ~250 MB | Speed/throughput on lightly-protected sites. |
-| zendriver | ~75% (CF/DataDome/Akamai/CloudFront) | ~80 MB | ~5 s | small | When Patchright leaks AND Playwright API itself is the giveaway. CDP-direct. |
-| botasaurus | claims wide coverage | ~150 MB | varies | medium | Decorator-paradigm workflows. |
 | scrapling | depends on Pattern D config | ~150 MB | ~30 s | shared with `[hostile]` | Already have `[hostile]` and want to skip another browser dep. |
+| obscura (experimental) | unproven — benchmark first | ~30 MB | ~85 ms load | none (external sidecar) | High-volume/parallel batch where RAM per instance dominates. Connects over CDP; run `obscura serve`. |
+
+> Removed in v1.5.0: `zendriver` and `botasaurus`. Both returned no Playwright
+> browser, so `agent_browse` raised at runtime — they were never usable via
+> Pattern E. `obscura` fills the lightweight/CDP niche and actually drives the
+> agent loop (real Playwright browser over `connect_over_cdp`).
+
+**Choosing an E2 (`agent_browse`) backend — stealth vs. actions:** browser-use is
+CDP/Chromium-oriented. Camoufox (Firefox) has the best stealth and browser-use can
+navigate it, but browser-use's CDP-only actions (e.g. scroll-gesture) fail on
+Firefox, so interaction degrades. A Chromium/CDP backend (obscura / patchright)
+gets full browser-use action support at the cost of weaker stealth. For a hard
+*and* interaction-heavy target, a deterministic Camoufox script often beats the E2
+agent loop. See `docs/research/2026-e2-agent-framework.md` for the details and
+evidence.
 
 Configure via env:
 
@@ -109,6 +122,14 @@ export SCRAPPER_TOOL_AGENT_OLLAMA_URL=http://10.0.0.5:11434
 
 The captcha system runs a **2-tier free OSS cascade** by default; only escalates
 to a paid solver if `SCRAPPER_TOOL_CAPTCHA_KEY` is set.
+
+> **v1.5.0:** the cascade now runs on the live page in both E1 and E2 (via a
+> Crawl4AI `after_goto` hook and a browser-use `on_step_end` hook). It is
+> mechanism-aware: stealth auto-pass is tried first (most reliable for
+> Turnstile, whose token is environment-bound), then a solver token is injected
+> only for portable-token kinds (reCAPTCHA / hCaptcha). Behavioral/DataDome-JS
+> challenges that no token can satisfy surface as `blocked` rather than a silent
+> "pass". (Prior to v1.5.0 the solver was constructed but never invoked.)
 
 | Tier | Solver | Solves | Cost | License |
 |------|--------|--------|------|---------|

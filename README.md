@@ -53,7 +53,7 @@ Most scrapers are written from scratch every time, even though 90% of the work i
 `scrapper-tool` packages the parts that don't change per vendor, so you only write the parts that do.
 
 - **Pattern-first design.** Five named, documented extraction patterns (A–E) — pick the one DevTools points at, skip the rest.
-- **Anti-bot ladder built in.** Auto-walks `chrome133a → chrome124 → safari18_0 → firefox135` when a profile gets fingerprinted.
+- **Anti-bot ladder built in.** Auto-walks `chrome146 → chrome142 → safari260 → firefox147` when a profile gets fingerprinted.
 - **Deterministic tests.** Fixture-replay (`FakeCurlSession`, `replay_fixture`, golden snapshots) — no live HTTP in CI.
 - **Optional hostile mode.** Cloudflare Turnstile / Akamai EVA defeat path via [Scrapling](https://github.com/D4Vinci/Scrapling) — opt-in extra, no Playwright bloat by default.
 - **LLM-agent ready.** `v0.2.0+` ships an MCP server so Claude, AutoGen, LangChain, etc. can drive the scraper directly.
@@ -72,7 +72,7 @@ Web scraping in 2026 is dominated by five recurring patterns. This lib gives eac
 | **D — Hostile** | Cloudflare Turnstile, Akamai EVA, etc. defeat both default `httpx` and `curl_cffi`. | `patterns.d.hostile_client()` (via [Scrapling](https://github.com/D4Vinci/Scrapling)) — `pip install scrapper-tool[hostile]` | High — Playwright runtime, ≈400 MB image bloat. |
 | **E — LLM agent** *(v1.0.0+)* | Pattern D still gets blocked, OR the page needs interaction (login, multi-step nav, dynamic forms), OR there's no stable selector. | `agent_extract()` (Crawl4AI + Ollama) and `agent_browse()` (browser-use + Camoufox + Ollama) — `pip install scrapper-tool[llm-agent]` | Highest — local-LLM latency. Free at run-time (no API). See [Pattern E docs](docs/patterns/e-llm-agent.md). |
 
-Plus a four-profile **anti-bot ladder** (`chrome133a → chrome124 → safari18_0 → firefox135`) that auto-walks when a profile gets fingerprinted, and a `scrapper-tool canary` CLI for nightly fingerprint-health probes.
+Plus a five-profile **anti-bot ladder** (`chrome146 → chrome142 → safari260 → firefox147`) that auto-walks when a profile gets fingerprinted, and a `scrapper-tool canary` CLI for nightly fingerprint-health probes.
 
 ## Architecture
 
@@ -82,7 +82,7 @@ flowchart TD
     B --> C{TLS-sensitive?}
     C -- no --> D[httpx]
     C -- yes --> E[curl_cffi ladder]
-    E --> E1[chrome133a] --> E2[chrome124] --> E3[safari18_0] --> E4[firefox135]
+    E --> E1[chrome146] --> E2[chrome142] --> E3[safari260] --> E4[firefox147]
     D --> F[Response]
     E4 --> F
     F --> G{Pattern}
@@ -91,7 +91,7 @@ flowchart TD
     G -- C --> J[selectolax: microdata / CSS]
     G -- D --> K["Scrapling (Playwright + Turnstile)"]
     G -- "BlockedError + interactive" --> M["Pattern E: agent_extract / agent_browse"]
-    M --> M1["Stealth browser (Camoufox / Patchright / Zendriver)"]
+    M --> M1["Stealth browser (Camoufox / Patchright / Obscura)"]
     M1 --> M2["Local LLM (Ollama, qwen3-vl:8b)"]
     M2 --> M3["Captcha cascade (Camoufox auto → Theyka → paid)"]
     M3 --> L[Validated product data]
@@ -134,6 +134,28 @@ above, or pip with a constraints file pinning `lxml>=6.0.3`.
 
 ## Quickstart
 
+One call runs the whole autonomous cascade — replay → HTTP ladder → Pattern D →
+stealth render → LLM — escalating only as far as each site forces it, learning a
+cheap recipe from every expensive win, and remembering per-domain which tier
+works:
+
+```python
+import asyncio
+from scrapper_tool import scrape
+
+async def main() -> None:
+    result = await scrape("https://example-shop.test/product/123")
+    print(result["pattern_used"], result["product"])   # e.g. "a_b_c", {...}
+
+asyncio.run(main())
+```
+
+Pass a schema for structured extraction, or `interactive=True` for flows that
+need login / pagination. To crawl a whole site through the same cascade,
+`crawl_site(seed, depth=...)` streams a result per page.
+
+Prefer the low-level building blocks? They're still here:
+
 ```python
 import asyncio
 from scrapper_tool import vendor_client, request_with_retry
@@ -152,7 +174,7 @@ For TLS-sensitive vendors, flip one switch:
 
 ```python
 async with vendor_client(use_curl_cffi=True) as client:
-    ...   # walks chrome133a → chrome124 → safari → firefox until one returns 200
+    ...   # walks chrome146 → chrome142 → safari → firefox until one returns 200
 ```
 
 For protected sites (Cloudflare, DataDome, Akamai) where Pattern D fails, escalate to Pattern E:
@@ -201,6 +223,13 @@ See **[`docs/quickstart.md`](docs/quickstart.md)** for a 5-minute on-ramp coveri
 `scrapper-tool` ships an MCP server that exposes every pattern as a tool any
 MCP-aware client (Claude Desktop, Claude Code, OpenClaw, Hermes Agent, AutoGen,
 LangChain) can call.
+
+> **Teaching an agent to use it:** [`skills/scrapper-tool/SKILL.md`](skills/scrapper-tool/SKILL.md)
+> is a portable Agent Skill that gives an LLM the know-how to drive scrapper-tool
+> — which entrypoint to call, how the cascade escalates, and how to read the
+> result. Load it as a Claude skill, a Cursor rule, or plain context; see
+> [`skills/README.md`](skills/README.md). Pair it with the MCP server (know-how +
+> capability).
 
 ### Tools exposed
 
@@ -406,7 +435,7 @@ by default. Override in `.env` or environment to point elsewhere — see the
 | Browser: Patchright (Pattern E "fast mode") | ✅ pre-installed |
 | Browser: Playwright Chromium (Pattern D Scrapling) | ✅ pre-installed |
 | Browser: Camoufox (Pattern E best-stealth) | optional via `--build-arg INSTALL_CAMOUFOX=1` (+300 MB) |
-| Browser: Zendriver / Botasaurus | rebuild with the matching `--extra ...-backend` |
+| Browser: Obscura (experimental, lightweight CDP sidecar) | run `obscura serve` and set `SCRAPPER_TOOL_AGENT_OBSCURA_CDP_URL` (see `docker-compose.yml`) |
 | LLM: external Ollama / LM Studio / llama.cpp / vLLM | ✅ via `host.docker.internal` (see below). The image does NOT bundle an LLM. |
 | Captcha Tier 0 (Camoufox auto-pass) | ✅ when `INSTALL_CAMOUFOX=1` |
 | Captcha Tier 1 (Theyka) | ✅ pre-installed |

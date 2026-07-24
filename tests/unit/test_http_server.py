@@ -11,6 +11,7 @@ exercise. Real network calls (``request_with_ladder``, ``agent_extract``,
 
 from __future__ import annotations
 
+from datetime import UTC, datetime
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock
 
@@ -29,6 +30,7 @@ from scrapper_tool import (
     __version__,
     http_server,
 )
+from scrapper_tool.recipe.store import cache_key
 
 # --- Fixtures -------------------------------------------------------------
 
@@ -119,7 +121,7 @@ class TestFetch:
         self, app_no_auth: Any, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         async def fake_ladder(method: str, url: str, **kwargs: Any) -> tuple[Any, str]:
-            return _make_response(text=_PRODUCT_HTML, url=url), "chrome133a"
+            return _make_response(text=_PRODUCT_HTML, url=url), "chrome146"
 
         monkeypatch.setattr("scrapper_tool.ladder.request_with_ladder", fake_ladder)
 
@@ -128,7 +130,7 @@ class TestFetch:
         assert resp.status_code == 200
         body = resp.json()
         assert body["status_code"] == 200
-        assert body["profile"] == "chrome133a"
+        assert body["profile"] == "chrome146"
         assert body["product"] is not None
         assert body["product"]["name"] == "Widget"
         assert body["product"]["price"] == "19.99"
@@ -141,7 +143,7 @@ class TestFetch:
         self, app_no_auth: Any, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         async def fake_ladder(method: str, url: str, **kwargs: Any) -> tuple[Any, str]:
-            return _make_response(text=_PRODUCT_HTML), "chrome133a"
+            return _make_response(text=_PRODUCT_HTML), "chrome146"
 
         monkeypatch.setattr("scrapper_tool.ladder.request_with_ladder", fake_ladder)
 
@@ -182,7 +184,7 @@ class TestScrape:
         self, app_no_auth: Any, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         async def fake_ladder(method: str, url: str, **kwargs: Any) -> tuple[Any, str]:
-            return _make_response(text=_PRODUCT_HTML, url=url), "chrome133a"
+            return _make_response(text=_PRODUCT_HTML, url=url), "chrome146"
 
         monkeypatch.setattr("scrapper_tool.ladder.request_with_ladder", fake_ladder)
 
@@ -276,7 +278,12 @@ class TestScrape:
         monkeypatch.setitem(sys.modules, "scrapper_tool.agent", agent_module)
 
         async with _client(app_no_auth) as client:
-            resp = await client.post("/scrape", json={"url": "https://blocked.com"})
+            # interactive=true opts into E2, so "fully blocked" means all of
+            # a_b_c -> e1 -> e2 lost. Without it the cascade stops at E1 (see
+            # TestE2InteractiveGate).
+            resp = await client.post(
+                "/scrape", json={"url": "https://blocked.com", "interactive": True}
+            )
         assert resp.status_code == 422
         body = resp.json()
         assert body["error"] == "blocked"
@@ -343,7 +350,7 @@ class TestAuth:
         self, app_with_key: Any, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         async def fake_ladder(method: str, url: str, **kwargs: Any) -> tuple[Any, str]:
-            return _make_response(text="<html></html>", url=url), "chrome133a"
+            return _make_response(text="<html></html>", url=url), "chrome146"
 
         monkeypatch.setattr("scrapper_tool.ladder.request_with_ladder", fake_ladder)
 
@@ -571,7 +578,10 @@ class TestScrapeBrowseFallback:
         )
 
         async with _client(app_no_auth) as client:
-            resp = await client.post("/scrape", json={"url": "https://protected.com/p"})
+            # E2 is gated behind interactive=true from v1.6.0.
+            resp = await client.post(
+                "/scrape", json={"url": "https://protected.com/p", "interactive": True}
+            )
         assert resp.status_code == 200
         body = resp.json()
         assert body["pattern_used"] == "e2"
@@ -602,7 +612,7 @@ class TestScrapeBrowseFallback:
         self, app_no_auth: Any, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         async def fake_ladder(method: str, url: str, **kwargs: Any) -> tuple[Any, str]:
-            return _make_response(text="<html>plain</html>", url=url), "chrome133a"
+            return _make_response(text="<html>plain</html>", url=url), "chrome146"
 
         monkeypatch.setattr("scrapper_tool.ladder.request_with_ladder", fake_ladder)
 
@@ -1026,7 +1036,7 @@ class TestScrapeAutoNoOverescalation:
         # A/B/C returns a 200 page with JSON-LD. Pre-1.1.2: escalates to E1.
         # v1.1.2: stays on a_b_c (schema_json + page_readable + has_any_signal).
         async def fake_ladder(method: str, url: str, **kwargs: Any) -> tuple[Any, str]:
-            return _make_response(text=_PRODUCT_HTML, url=url), "chrome133a"
+            return _make_response(text=_PRODUCT_HTML, url=url), "chrome146"
 
         monkeypatch.setattr("scrapper_tool.ladder.request_with_ladder", fake_ladder)
 
@@ -1055,7 +1065,7 @@ class TestScrapeAutoNoOverescalation:
         # Opt-in to legacy behaviour: force_llm_extract=true → E1 even when
         # A/B/C had a readable page.
         async def fake_ladder(method: str, url: str, **kwargs: Any) -> tuple[Any, str]:
-            return _make_response(text=_PRODUCT_HTML, url=url), "chrome133a"
+            return _make_response(text=_PRODUCT_HTML, url=url), "chrome146"
 
         monkeypatch.setattr("scrapper_tool.ladder.request_with_ladder", fake_ladder)
         # Skip Pattern D so the assertion stays a 2-step cascade.
@@ -1112,7 +1122,7 @@ class TestScrapeAutoNoOverescalation:
         async def fake_ladder(method: str, url: str, **kwargs: Any) -> tuple[Any, str]:
             return (
                 _make_response(text="<html><body>nothing here</body></html>", url=url),
-                "chrome133a",
+                "chrome146",
             )
 
         monkeypatch.setattr("scrapper_tool.ladder.request_with_ladder", fake_ladder)
@@ -1326,7 +1336,7 @@ class TestScrapeWithPatternD:
         # force_llm_extract is to reach the LLM — D must inherit the same
         # opt-out and let the cascade reach E1.
         async def fake_ladder(method: str, url: str, **kwargs: Any) -> tuple[Any, str]:
-            return _make_response(text=_PRODUCT_HTML, url=url), "chrome133a"
+            return _make_response(text=_PRODUCT_HTML, url=url), "chrome146"
 
         monkeypatch.setattr("scrapper_tool.ladder.request_with_ladder", fake_ladder)
         _install_fake_hostile_client(
@@ -1427,6 +1437,959 @@ class TestScrapeWithPatternD:
         assert not any("hostile_not_installed" in w for w in warnings)
 
 
+# --- B2: stealth-render cascade tier ---------------------------------------
+
+
+def _install_fake_render(
+    monkeypatch: pytest.MonkeyPatch,
+    *,
+    html: str = _PRODUCT_HTML,
+    status: int = 200,
+    final_url: str = "https://walled.com/p",
+    error: BaseException | None = None,
+    calls: list[dict[str, Any]] | None = None,
+) -> None:
+    """Enable the render tier and replace ``render_html`` with a fake.
+
+    The tier is off by default in tests (see ``tests/conftest.py``) so nothing
+    launches a real browser; each render test opts back in explicitly.
+    """
+    import scrapper_tool.patterns.render as render_mod
+
+    monkeypatch.setenv("SCRAPPER_TOOL_RENDER_TIER", "1")
+
+    async def fake_render_html(url: str, **kwargs: Any) -> Any:
+        if calls is not None:
+            calls.append({"url": url, **kwargs})
+        if error is not None:
+            raise error
+        return render_mod.RenderResult(html=html, status=status, final_url=final_url)
+
+    monkeypatch.setattr(render_mod, "render_html", fake_render_html)
+
+
+class TestScrapeRenderTier:
+    """B2 — a stealth render sits between Pattern D and the LLM tiers.
+
+    The whole point is cost: rendering plus the deterministic extractors is both
+    cheaper and more reliable than an LLM. Measured on real targets: one site
+    403'd all four TLS profiles yet rendered 1.35 MB of genuine content, and
+    another turned 4 extractable headlines into 212. So a render that yields a
+    signal must WIN outright, with zero tokens spent — that's what these pin.
+    """
+
+    @pytest.mark.asyncio
+    async def test_render_wins_before_any_llm_tier(
+        self, app_no_auth: Any, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from scrapper_tool.errors import BlockedError
+
+        async def fake_ladder(method: str, url: str, **kwargs: Any) -> Any:
+            raise BlockedError("all profiles 403")
+
+        monkeypatch.setattr("scrapper_tool.ladder.request_with_ladder", fake_ladder)
+        monkeypatch.setattr(http_server, "_hostile_available", lambda: False)
+        _install_fake_render(monkeypatch)
+        # If the cascade reaches E1 despite a good render, this blows up loudly.
+        _mock_agent_module(monkeypatch, extract_side_effect=AssertionError("E1 must not run"))
+
+        async with _client(app_no_auth) as client:
+            resp = await client.post("/scrape", json={"url": "https://walled.com/p"})
+
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["pattern_used"] == "render"
+        assert body["pattern_attempts"] == ["a_b_c", "render"]
+        assert body["product"]["name"] == "Widget"
+        assert body["tokens_used"] == 0, "the render tier must not spend LLM tokens"
+        assert body["is_structured"] is True
+
+    @pytest.mark.asyncio
+    async def test_render_runs_after_d_not_before(
+        self, app_no_auth: Any, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Ordering is deliberate: Scrapling is cheaper than a full browser."""
+        from scrapper_tool.errors import BlockedError
+
+        async def fake_ladder(method: str, url: str, **kwargs: Any) -> Any:
+            raise BlockedError("blocked")
+
+        monkeypatch.setattr("scrapper_tool.ladder.request_with_ladder", fake_ladder)
+        # D runs but finds nothing extractable.
+        _install_fake_hostile_client(
+            monkeypatch, response=_FakeScraplingResponse(html="<html><body>nope</body></html>")
+        )
+        _install_fake_render(monkeypatch)
+
+        async with _client(app_no_auth) as client:
+            resp = await client.post("/scrape", json={"url": "https://walled.com/p"})
+
+        body = resp.json()
+        assert body["pattern_used"] == "render"
+        assert body["pattern_attempts"] == ["a_b_c", "d", "render"]
+
+    @pytest.mark.asyncio
+    async def test_render_without_signal_escalates_to_e1(
+        self, app_no_auth: Any, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from scrapper_tool.errors import BlockedError
+
+        async def fake_ladder(method: str, url: str, **kwargs: Any) -> Any:
+            raise BlockedError("blocked")
+
+        monkeypatch.setattr("scrapper_tool.ladder.request_with_ladder", fake_ladder)
+        monkeypatch.setattr(http_server, "_hostile_available", lambda: False)
+        _install_fake_render(monkeypatch, html="<html><body>no product here</body></html>")
+
+        fake_result = _fake_agent_result()
+        fake_result.final_url = "https://walled.com/p"
+        _mock_agent_module(monkeypatch, extract_result=fake_result)
+
+        async with _client(app_no_auth) as client:
+            resp = await client.post("/scrape", json={"url": "https://walled.com/p"})
+
+        body = resp.json()
+        assert body["pattern_used"] == "e1"
+        assert body["pattern_attempts"] == ["a_b_c", "render", "e1"]
+
+    @pytest.mark.asyncio
+    async def test_render_html_is_kept_as_intermediate_for_the_llm_tier(
+        self, app_no_auth: Any, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """When render can't close it out, its DOM is still the best artefact.
+
+        Richer than D's fetch, and it's what you read to answer "why did this
+        need an LLM?".
+        """
+        from scrapper_tool.errors import BlockedError
+
+        async def fake_ladder(method: str, url: str, **kwargs: Any) -> Any:
+            raise BlockedError("blocked")
+
+        monkeypatch.setattr("scrapper_tool.ladder.request_with_ladder", fake_ladder)
+        monkeypatch.setattr(http_server, "_hostile_available", lambda: False)
+        _install_fake_render(
+            monkeypatch, html="<html><body>rendered but unstructured</body></html>"
+        )
+
+        fake_result = _fake_agent_result()
+        fake_result.final_url = "https://walled.com/p"
+        _mock_agent_module(monkeypatch, extract_result=fake_result)
+
+        async with _client(app_no_auth) as client:
+            resp = await client.post("/scrape", json={"url": "https://walled.com/p"})
+
+        assert "rendered but unstructured" in resp.json()["intermediate_raw_text"]
+
+    @pytest.mark.asyncio
+    async def test_render_failure_falls_through_to_e1(
+        self, app_no_auth: Any, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from scrapper_tool.errors import BlockedError
+
+        async def fake_ladder(method: str, url: str, **kwargs: Any) -> Any:
+            raise BlockedError("blocked")
+
+        monkeypatch.setattr("scrapper_tool.ladder.request_with_ladder", fake_ladder)
+        monkeypatch.setattr(http_server, "_hostile_available", lambda: False)
+        _install_fake_render(monkeypatch, error=RuntimeError("camoufox crashed"))
+
+        fake_result = _fake_agent_result()
+        fake_result.final_url = "https://walled.com/p"
+        _mock_agent_module(monkeypatch, extract_result=fake_result)
+
+        async with _client(app_no_auth) as client:
+            resp = await client.post("/scrape", json={"url": "https://walled.com/p"})
+
+        body = resp.json()
+        assert body["pattern_used"] == "e1"
+        assert body["pattern_attempts"] == ["a_b_c", "render", "e1"]
+        render_rows = [r for r in body["escalation_log"] if r["step"] == "render"]
+        assert render_rows[0]["outcome"] == "failed"
+        assert "camoufox crashed" in render_rows[0]["detail"]
+
+    @pytest.mark.asyncio
+    async def test_render_accepts_a_403_carrying_real_content(
+        self, app_no_auth: Any, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """store.mopar.com: HTTP 403 with a genuine rendered DOM is a WIN.
+
+        Status is not the success signal for a rendered page — extracted content
+        is. Getting this backwards would throw away the exact case the render
+        tier exists to handle.
+        """
+        from scrapper_tool.errors import BlockedError
+
+        async def fake_ladder(method: str, url: str, **kwargs: Any) -> Any:
+            raise BlockedError("blocked")
+
+        monkeypatch.setattr("scrapper_tool.ladder.request_with_ladder", fake_ladder)
+        monkeypatch.setattr(http_server, "_hostile_available", lambda: False)
+        _install_fake_render(monkeypatch, status=403)
+
+        async with _client(app_no_auth) as client:
+            resp = await client.post("/scrape", json={"url": "https://walled.com/p"})
+
+        body = resp.json()
+        assert body["pattern_used"] == "render"
+        assert body["product"]["name"] == "Widget"
+        assert body["blocked"] is False
+
+    @pytest.mark.asyncio
+    async def test_profile_dir_is_shared_with_the_browser(
+        self, app_no_auth: Any, monkeypatch: pytest.MonkeyPatch, tmp_path: Any
+    ) -> None:
+        """Clearance cookies earned by earlier rungs must reach the render."""
+        from scrapper_tool.errors import BlockedError
+
+        async def fake_ladder(method: str, url: str, **kwargs: Any) -> Any:
+            raise BlockedError("blocked")
+
+        monkeypatch.setattr("scrapper_tool.ladder.request_with_ladder", fake_ladder)
+        monkeypatch.setattr(http_server, "_hostile_available", lambda: False)
+        calls: list[dict[str, Any]] = []
+        _install_fake_render(monkeypatch, calls=calls)
+
+        profile = str(tmp_path / "profile")
+        async with _client(app_no_auth) as client:
+            await client.post(
+                "/scrape",
+                json={"url": "https://walled.com/p", "persist_browser_profile_dir": profile},
+            )
+
+        assert calls[0]["options"].user_data_dir == profile
+
+    @pytest.mark.asyncio
+    async def test_tier_can_be_disabled(
+        self, app_no_auth: Any, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from scrapper_tool.errors import BlockedError
+
+        async def fake_ladder(method: str, url: str, **kwargs: Any) -> Any:
+            raise BlockedError("blocked")
+
+        monkeypatch.setattr("scrapper_tool.ladder.request_with_ladder", fake_ladder)
+        monkeypatch.setattr(http_server, "_hostile_available", lambda: False)
+        _install_fake_render(monkeypatch)
+        monkeypatch.setenv("SCRAPPER_TOOL_RENDER_TIER", "0")
+
+        fake_result = _fake_agent_result()
+        fake_result.final_url = "https://walled.com/p"
+        _mock_agent_module(monkeypatch, extract_result=fake_result)
+
+        async with _client(app_no_auth) as client:
+            resp = await client.post("/scrape", json={"url": "https://walled.com/p"})
+
+        assert resp.json()["pattern_attempts"] == ["a_b_c", "e1"]
+
+    def test_tier_is_on_by_default(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Guards the production default, which the test suite deliberately flips."""
+        monkeypatch.delenv("SCRAPPER_TOOL_RENDER_TIER", raising=False)
+        assert http_server._render_tier_enabled() is True
+
+    @pytest.mark.parametrize(
+        ("value", "expected"),
+        [("1", True), ("true", True), ("on", True), ("0", False), ("no", False), ("", True)],
+    )
+    def test_tier_toggle_parsing(
+        self, monkeypatch: pytest.MonkeyPatch, value: str, expected: bool
+    ) -> None:
+        monkeypatch.setenv("SCRAPPER_TOOL_RENDER_TIER", value)
+        assert http_server._render_tier_enabled() is expected
+
+
+# --- C3/C4: learn-once, replay, and drift self-heal -------------------------
+
+
+_RECIPE_LISTING_HTML = """<html><body><div class="feed">
+  <div class="feed-item"><h2 class="t">Mazda 3</h2><span class="p">45,000</span></div>
+  <div class="feed-item"><h2 class="t">Toyota Corolla</h2><span class="p">52,000</span></div>
+</div></body></html>"""
+
+_RECIPE_ROWS = [
+    {"title": "Mazda 3", "price": "45,000"},
+    {"title": "Toyota Corolla", "price": "52,000"},
+]
+
+# A listing page carries no JSON-LD/microdata, so the caller supplies a CSS
+# schema — the realistic shape for the pages recipes are worth learning on.
+_RECIPE_SCHEMA: dict[str, Any] = {
+    "baseSelector": "div.feed-item",
+    "fields": [
+        {"name": "title", "selector": "h2.t", "type": "text"},
+        {"name": "price", "selector": "span.p", "type": "text"},
+    ],
+}
+
+
+class TestRecipeLearnAndReplay:
+    """The cost killer: one expensive win, then free replays.
+
+    Everything here is about the round trip actually closing. A learn step that
+    silently derives nothing, or a replay tier that never hits, is invisible in
+    production — it just looks like the cascade being slow forever.
+    """
+
+    @staticmethod
+    def _blocked_ladder(monkeypatch: pytest.MonkeyPatch) -> None:
+        from scrapper_tool.errors import BlockedError
+
+        async def fake_ladder(method: str, url: str, **kwargs: Any) -> Any:
+            raise BlockedError("blocked")
+
+        monkeypatch.setattr("scrapper_tool.ladder.request_with_ladder", fake_ladder)
+        monkeypatch.setattr(http_server, "_hostile_available", lambda: False)
+
+    @pytest.mark.asyncio
+    async def test_render_win_teaches_a_recipe_that_the_next_call_replays(
+        self, app_no_auth: Any, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The headline claim: second call pays nothing the first call paid."""
+        from scrapper_tool.recipe.store import get_store
+
+        self._blocked_ladder(monkeypatch)
+        renders: list[dict[str, Any]] = []
+        _install_fake_render(monkeypatch, html=_RECIPE_LISTING_HTML, calls=renders)
+        body = {"url": "https://cars.test/list", "schema_json": _RECIPE_SCHEMA}
+
+        async with _client(app_no_auth) as client:
+            first = (await client.post("/scrape", json=body)).json()
+            assert first["pattern_used"] == "render"
+            assert get_store().get(cache_key(body["url"], _RECIPE_SCHEMA)) is not None, (
+                "a render win must teach a recipe"
+            )
+
+            second = (await client.post("/scrape", json=body)).json()
+
+        assert second["pattern_used"] == "replay"
+        assert second["pattern_attempts"] == ["replay"], "replay short-circuits the whole cascade"
+        assert second["data"] == _RECIPE_ROWS
+        assert second["tokens_used"] == 0
+        # A/B/C was blocked here, so there was no raw body to prove the
+        # selectors work without JS — the recipe stays a render recipe and the
+        # replay still renders. What it skips is the whole cascade above it.
+        assert len(renders) == 2
+
+    @pytest.mark.asyncio
+    async def test_a_css_schema_wins_at_tier_one_when_the_raw_body_has_it(
+        self, app_no_auth: Any, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """No tier above A/B/C should run when the raw HTML already answers.
+
+        The A/B/C tier used to run only the JSON-LD and microdata extractors, so a
+        caller supplying a CSS schema always fell through to Pattern D and paid
+        for a browser — even on a plain server-rendered listing whose markup had
+        everything the selectors needed. Tier 1 now runs the same extractor
+        pipeline as the tiers below it.
+        """
+        renders: list[dict[str, Any]] = []
+        _install_fake_render(monkeypatch, html=_RECIPE_LISTING_HTML, calls=renders)
+
+        async def fake_ladder(method: str, url: str, **kwargs: Any) -> Any:
+            return _make_response(text=_RECIPE_LISTING_HTML, url=url), "chrome146"
+
+        monkeypatch.setattr("scrapper_tool.ladder.request_with_ladder", fake_ladder)
+        monkeypatch.setattr(http_server, "_hostile_available", lambda: False)
+
+        async with _client(app_no_auth) as client:
+            body = (
+                await client.post(
+                    "/scrape",
+                    json={"url": "https://cars.test/list", "schema_json": _RECIPE_SCHEMA},
+                )
+            ).json()
+
+        assert body["pattern_used"] == "a_b_c"
+        assert body["pattern_attempts"] == ["a_b_c"]
+        assert body["data"] == _RECIPE_ROWS
+        assert renders == [], "no browser should be launched for this page at all"
+
+    @pytest.mark.asyncio
+    async def test_replay_reruns_the_cascade_and_reheals_when_the_site_changes(
+        self, app_no_auth: Any, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """C4 — a recipe that stops matching is evicted, not retried forever."""
+        from scrapper_tool.recipe.derive import Recipe
+        from scrapper_tool.recipe.store import get_store
+
+        self._blocked_ladder(monkeypatch)
+        stale = Recipe(
+            domain="cars.test",
+            schema={
+                "baseSelector": "div.OLD-markup",
+                "fields": [{"name": "title", "selector": "h2", "type": "text"}],
+            },
+            source_tier="render",
+            sample_url="https://cars.test/list",
+            multi_row=True,
+            created_at=datetime.now(UTC).isoformat(),
+            schema_hash="stale",
+            field_names=("title",),
+        )
+        key = cache_key("https://cars.test/list", _RECIPE_SCHEMA)
+        get_store().put(key, stale)
+        _install_fake_render(monkeypatch, html=_RECIPE_LISTING_HTML)
+
+        async with _client(app_no_auth) as client:
+            body = (
+                await client.post(
+                    "/scrape",
+                    json={"url": "https://cars.test/list", "schema_json": _RECIPE_SCHEMA},
+                )
+            ).json()
+
+        assert body["pattern_used"] == "render", "drift must fall through, not return nothing"
+        assert "replay" not in body["pattern_attempts"]
+        healed = get_store().get(key)
+        assert healed is not None, "the cascade should have re-learned"
+        assert healed.schema["baseSelector"] == "div.feed-item", (
+            "self-heal means the stale recipe is REPLACED, not just deleted"
+        )
+
+    @pytest.mark.asyncio
+    async def test_replay_is_skipped_when_the_cache_is_disabled(
+        self, app_no_auth: Any, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from scrapper_tool.recipe.store import get_store
+
+        self._blocked_ladder(monkeypatch)
+        _install_fake_render(monkeypatch, html=_RECIPE_LISTING_HTML)
+        monkeypatch.setenv("SCRAPPER_TOOL_RECIPE_CACHE", "0")
+
+        async with _client(app_no_auth) as client:
+            body = (
+                await client.post(
+                    "/scrape",
+                    json={"url": "https://cars.test/list", "schema_json": _RECIPE_SCHEMA},
+                )
+            ).json()
+
+        assert body["pattern_used"] == "render"
+        assert get_store().get(cache_key("https://cars.test/list", _RECIPE_SCHEMA)) is None, (
+            "learning must also respect the toggle"
+        )
+
+    @pytest.mark.asyncio
+    async def test_a_render_learned_recipe_is_not_replayed_over_a_raw_fetch(
+        self, app_no_auth: Any, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Selectors for a rendered DOM find nothing in raw HTML.
+
+        Replaying one over a plain fetch would return nothing and be misread as
+        drift, evicting a recipe that was perfectly good.
+        """
+        from scrapper_tool.recipe.derive import derive_recipe
+        from scrapper_tool.recipe.store import get_store
+
+        recipe = derive_recipe(
+            _RECIPE_LISTING_HTML, _RECIPE_ROWS, source_tier="render", url="https://cars.test/list"
+        )
+        assert recipe is not None
+        key = cache_key("https://cars.test/list")
+        get_store().put(key, recipe)
+
+        # Render tier off => no render function => the replay must decline.
+        monkeypatch.setenv("SCRAPPER_TOOL_RENDER_TIER", "0")
+
+        async def fake_ladder(method: str, url: str, **kwargs: Any) -> Any:
+            return _make_response(text=_PRODUCT_HTML, url=url), "chrome146"
+
+        monkeypatch.setattr("scrapper_tool.ladder.request_with_ladder", fake_ladder)
+
+        async with _client(app_no_auth) as client:
+            body = (await client.post("/scrape", json={"url": "https://cars.test/list"})).json()
+
+        assert body["pattern_used"] == "a_b_c"
+        assert get_store().get(key) is not None, "declining to replay must not evict the recipe"
+
+    @pytest.mark.asyncio
+    async def test_learning_failure_never_breaks_the_scrape(
+        self, app_no_auth: Any, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Learning is an optimisation for next time; it cannot fail this call."""
+        self._blocked_ladder(monkeypatch)
+        _install_fake_render(monkeypatch, html=_RECIPE_LISTING_HTML)
+
+        def exploding_learn(*args: Any, **kwargs: Any) -> None:
+            raise RuntimeError("disk on fire")
+
+        monkeypatch.setattr("scrapper_tool.recipe.replay.learn_from_success", exploding_learn)
+
+        async with _client(app_no_auth) as client:
+            resp = await client.post(
+                "/scrape", json={"url": "https://cars.test/list", "schema_json": _RECIPE_SCHEMA}
+            )
+
+        assert resp.status_code == 200
+        assert resp.json()["pattern_used"] == "render"
+
+    @pytest.mark.asyncio
+    async def test_different_requested_schemas_do_not_share_a_recipe(
+        self, app_no_auth: Any, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from scrapper_tool.recipe.derive import derive_recipe
+        from scrapper_tool.recipe.store import get_store
+
+        recipe = derive_recipe(
+            _RECIPE_LISTING_HTML, _RECIPE_ROWS, source_tier="a_b_c", url="https://cars.test/list"
+        )
+        assert recipe is not None
+        get_store().put(cache_key("https://cars.test/list", {"fields": ["title"]}), recipe)
+
+        async def fake_ladder(method: str, url: str, **kwargs: Any) -> Any:
+            return _make_response(text=_PRODUCT_HTML, url=url), "chrome146"
+
+        monkeypatch.setattr("scrapper_tool.ladder.request_with_ladder", fake_ladder)
+
+        async with _client(app_no_auth) as client:
+            body = (
+                await client.post(
+                    "/scrape",
+                    json={"url": "https://cars.test/list", "schema_json": {"fields": ["price"]}},
+                )
+            ).json()
+
+        assert body["pattern_used"] != "replay", "a recipe for other fields must not be reused"
+
+
+# --- F2: per-domain tier memory ---------------------------------------------
+
+
+class TestDomainPolicySkip:
+    """The self-tuning cascade: once a domain has repeatedly needed render,
+    stop paying for the ladder and Pattern D on every request.
+
+    The safety property under test is that skipping is a *starting hint* — the
+    cascade still reaches the same answer, just faster, and a wrong policy can
+    only waste one tier, never corrupt a result.
+    """
+
+    @staticmethod
+    def _blocked_ladder(monkeypatch: pytest.MonkeyPatch) -> None:
+        from scrapper_tool.errors import BlockedError
+
+        async def fake_ladder(method: str, url: str, **kwargs: Any) -> Any:
+            raise BlockedError("blocked")
+
+        monkeypatch.setattr("scrapper_tool.ladder.request_with_ladder", fake_ladder)
+        monkeypatch.setattr(http_server, "_hostile_available", lambda: False)
+
+    @pytest.mark.asyncio
+    async def test_a_confident_render_policy_skips_the_ladder(
+        self, app_no_auth: Any, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Two render wins later, the ladder and D are skipped entirely."""
+        from datetime import UTC, datetime
+
+        from scrapper_tool.recipe.policy import DomainPolicy, get_policy_store
+
+        # Pre-seed a confident policy (2 observations at render).
+        get_policy_store()._write(  # type: ignore[attr-defined]
+            "walled.test",
+            DomainPolicy(
+                domain="walled.test",
+                best_tier="render",
+                updated_at=datetime.now(UTC).isoformat(),
+                observations=2,
+            ),
+        )
+        ladder_calls: list[str] = []
+
+        async def spy_ladder(method: str, url: str, **kwargs: Any) -> Any:
+            ladder_calls.append(url)
+            raise AssertionError("the ladder must be skipped when policy says render")
+
+        monkeypatch.setattr("scrapper_tool.ladder.request_with_ladder", spy_ladder)
+        monkeypatch.setattr(http_server, "_hostile_available", lambda: False)
+        # Product HTML (JSON-LD) so render wins with no caller schema.
+        _install_fake_render(monkeypatch, html=_PRODUCT_HTML)
+
+        async with _client(app_no_auth) as client:
+            body = (await client.post("/scrape", json={"url": "https://walled.test/p"})).json()
+
+        assert body["pattern_used"] == "render"
+        assert ladder_calls == [], "a confident render policy must not touch the ladder"
+        assert "a_b_c" not in body["pattern_attempts"]
+        assert "d" not in body["pattern_attempts"]
+        policy_rows = [r for r in body["escalation_log"] if r["step"] == "policy"]
+        assert policy_rows and "start at render" in policy_rows[0]["detail"]
+
+    @pytest.mark.asyncio
+    async def test_an_unconfident_policy_does_not_skip(
+        self, app_no_auth: Any, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """One win is a fluke; the full cascade must still run."""
+
+        async def fake_ladder(method: str, url: str, **kwargs: Any) -> Any:
+            return _make_response(text=_PRODUCT_HTML, url=url), "chrome146"
+
+        monkeypatch.setattr("scrapper_tool.ladder.request_with_ladder", fake_ladder)
+        from datetime import UTC, datetime
+
+        from scrapper_tool.recipe.policy import DomainPolicy, get_policy_store
+
+        get_policy_store()._write(  # type: ignore[attr-defined]
+            "plain.test",
+            DomainPolicy(
+                domain="plain.test",
+                best_tier="render",
+                updated_at=datetime.now(UTC).isoformat(),
+                observations=1,  # not confident
+            ),
+        )
+
+        async with _client(app_no_auth) as client:
+            body = (await client.post("/scrape", json={"url": "https://plain.test/p"})).json()
+
+        assert body["pattern_used"] == "a_b_c", "one observation must not skip the ladder"
+
+    @pytest.mark.asyncio
+    async def test_two_render_wins_teach_the_policy_to_skip(
+        self, app_no_auth: Any, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """End to end: the third request skips what the first two learned."""
+        self._blocked_ladder(monkeypatch)
+        renders: list[dict[str, Any]] = []
+        _install_fake_render(monkeypatch, html=_PRODUCT_HTML, calls=renders)
+
+        async with _client(app_no_auth) as client:
+            # No schema -> render wins on JSON-LD, no recipe learned (so replay
+            # won't short-circuit and mask the policy behaviour).
+            for _ in range(2):
+                r = (await client.post("/scrape", json={"url": "https://learn.test/p"})).json()
+                assert r["pattern_used"] == "render"
+
+            ladder_after: list[str] = []
+
+            async def spy_ladder(method: str, url: str, **kwargs: Any) -> Any:
+                ladder_after.append(url)
+                raise AssertionError("ladder should be skipped by now")
+
+            monkeypatch.setattr("scrapper_tool.ladder.request_with_ladder", spy_ladder)
+            third = (await client.post("/scrape", json={"url": "https://learn.test/p"})).json()
+
+        assert third["pattern_used"] == "render"
+        assert ladder_after == [], "after two render wins the ladder is skipped"
+
+    @pytest.mark.asyncio
+    async def test_policy_disabled_runs_the_full_cascade(
+        self, app_no_auth: Any, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from datetime import UTC, datetime
+
+        from scrapper_tool.recipe.policy import DomainPolicy, get_policy_store
+
+        get_policy_store()._write(  # type: ignore[attr-defined]
+            "walled.test",
+            DomainPolicy(
+                domain="walled.test",
+                best_tier="render",
+                updated_at=datetime.now(UTC).isoformat(),
+                observations=5,
+            ),
+        )
+        monkeypatch.setenv("SCRAPPER_TOOL_DOMAIN_POLICY", "0")
+
+        async def fake_ladder(method: str, url: str, **kwargs: Any) -> Any:
+            return _make_response(text=_PRODUCT_HTML, url=url), "chrome146"
+
+        monkeypatch.setattr("scrapper_tool.ladder.request_with_ladder", fake_ladder)
+
+        async with _client(app_no_auth) as client:
+            body = (await client.post("/scrape", json={"url": "https://walled.test/p"})).json()
+
+        assert body["pattern_used"] == "a_b_c", "disabled policy must not skip anything"
+
+    @pytest.mark.asyncio
+    async def test_a_tier_one_win_is_recorded(
+        self, app_no_auth: Any, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from scrapper_tool.recipe.policy import get_policy_store
+
+        async def fake_ladder(method: str, url: str, **kwargs: Any) -> Any:
+            return _make_response(text=_PRODUCT_HTML, url=url), "chrome146"
+
+        monkeypatch.setattr("scrapper_tool.ladder.request_with_ladder", fake_ladder)
+
+        async with _client(app_no_auth) as client:
+            await client.post("/scrape", json={"url": "https://plain.test/p"})
+
+        policy = get_policy_store().get("https://plain.test/p")
+        assert policy is not None
+        assert policy.best_tier == "a_b_c"
+
+    @pytest.mark.asyncio
+    async def test_a_blocked_result_is_not_recorded(
+        self, app_no_auth: Any, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Only a real win teaches the policy — a blocked E1 must not."""
+        from scrapper_tool.recipe.policy import get_policy_store
+
+        self._blocked_ladder(monkeypatch)
+        blocked = _fake_agent_result("extract", blocked=True)
+        blocked.error = "captcha"
+        blocked.final_url = "https://hard.test/p"
+        _mock_agent_module(monkeypatch, extract_result=blocked)
+
+        async with _client(app_no_auth) as client:
+            await client.post("/scrape", json={"url": "https://hard.test/p"})
+
+        assert get_policy_store().get("https://hard.test/p") is None
+
+
+# --- B4: E2 is gated behind interactive=true --------------------------------
+
+
+class TestE2InteractiveGate:
+    """B4 — a blocked E1 no longer auto-escalates into the agent loop.
+
+    E2 (browser-use) is the priciest tier by a wide margin, and running it on
+    every blocked E1 spends a multi-step agent loop to hit the same wall more
+    slowly. It earns its cost only on genuinely interactive flows, so the caller
+    has to say so.
+    """
+
+    @staticmethod
+    def _blocked_e1_cascade(monkeypatch: pytest.MonkeyPatch) -> Any:
+        from scrapper_tool.errors import BlockedError
+
+        async def fake_ladder(method: str, url: str, **kwargs: Any) -> Any:
+            raise BlockedError("blocked")
+
+        monkeypatch.setattr("scrapper_tool.ladder.request_with_ladder", fake_ladder)
+        monkeypatch.setattr(http_server, "_hostile_available", lambda: False)
+        blocked = _fake_agent_result("extract", blocked=True)
+        blocked.error = "hit a captcha"
+        blocked.final_url = "https://protected.com/p"
+        return blocked
+
+    @pytest.mark.asyncio
+    async def test_blocked_e1_stops_without_interactive(
+        self, app_no_auth: Any, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        blocked = self._blocked_e1_cascade(monkeypatch)
+        _mock_agent_module(
+            monkeypatch,
+            extract_result=blocked,
+            browse_side_effect=AssertionError("E2 must not run without interactive=true"),
+        )
+
+        async with _client(app_no_auth) as client:
+            resp = await client.post("/scrape", json={"url": "https://protected.com/p"})
+
+        body = resp.json()
+        assert body["pattern_attempts"] == ["a_b_c", "e1"]
+        assert body["blocked"] is True
+        gate = [r for r in body["escalation_log"] if r["step"] == "e2"]
+        assert gate[0]["outcome"] == "skipped"
+        assert "interactive=false" in gate[0]["detail"]
+
+    @pytest.mark.asyncio
+    async def test_blocked_e1_escalates_with_interactive(
+        self, app_no_auth: Any, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        blocked = self._blocked_e1_cascade(monkeypatch)
+        _mock_agent_module(
+            monkeypatch, extract_result=blocked, browse_result=_fake_agent_result("browse")
+        )
+
+        async with _client(app_no_auth) as client:
+            resp = await client.post(
+                "/scrape", json={"url": "https://protected.com/p", "interactive": True}
+            )
+
+        body = resp.json()
+        assert body["pattern_used"] == "e2"
+        assert body["pattern_attempts"] == ["a_b_c", "e1", "e2"]
+
+    @pytest.mark.asyncio
+    async def test_gated_response_keeps_e1s_partial_result(
+        self, app_no_auth: Any, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Returning E1's blocked result beats a bare error — the caller still
+        gets the escalation log and whatever E1 did see."""
+        blocked = self._blocked_e1_cascade(monkeypatch)
+        _mock_agent_module(monkeypatch, extract_result=blocked)
+
+        async with _client(app_no_auth) as client:
+            resp = await client.post("/scrape", json={"url": "https://protected.com/p"})
+
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["pattern_used"] == "e1"
+        assert body["error"] == "hit a captcha"
+
+    @pytest.mark.asyncio
+    async def test_mode_browse_is_never_gated(
+        self, app_no_auth: Any, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """An explicit mode=browse IS the request for E2."""
+        _mock_agent_module(monkeypatch, browse_result=_fake_agent_result("browse"))
+
+        async with _client(app_no_auth) as client:
+            resp = await client.post(
+                "/scrape",
+                json={
+                    "url": "https://example.com/p",
+                    "mode": "browse",
+                    "instruction": "log in and read the table",
+                },
+            )
+
+        assert resp.status_code == 200
+        assert resp.json()["pattern_used"] == "e2"
+
+    @pytest.mark.asyncio
+    async def test_raising_e1_still_surfaces_the_error_when_gated(
+        self, app_no_auth: Any, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """No partial result to hand back — the blocked error must not be swallowed."""
+        from scrapper_tool.errors import AgentBlockedError, BlockedError
+
+        async def fake_ladder(method: str, url: str, **kwargs: Any) -> Any:
+            raise BlockedError("blocked")
+
+        monkeypatch.setattr("scrapper_tool.ladder.request_with_ladder", fake_ladder)
+        monkeypatch.setattr(http_server, "_hostile_available", lambda: False)
+        _mock_agent_module(monkeypatch, extract_side_effect=AgentBlockedError("e1 blocked"))
+
+        async with _client(app_no_auth) as client:
+            resp = await client.post("/scrape", json={"url": "https://protected.com/p"})
+
+        assert resp.status_code == 422
+        assert resp.json()["error"] == "blocked"
+
+
+# --- B3: challenge detection drives escalation ------------------------------
+
+
+# A Radware/ShieldSquare interstitial: HTTP 200, so nothing errors, but it's a
+# wall not a page. Scrapling has no solver for this vendor.
+_RADWARE_WALL = (
+    "<html><head><title>Loading</title></head><body>"
+    "<script>window.location='https://validate.perfdrive.com/xyz'</script>"
+    "</body></html>"
+)
+
+# Cloudflare's — the one vendor Pattern D actually has a weapon against.
+_CF_WALL = "<html><head><title>Just a moment...</title></head><body></body></html>"
+
+
+class TestChallengeDetectionEscalation:
+    """B3 — knowing *which* vendor walled us changes what we try next.
+
+    Pattern D's anti-bot weapon is Scrapling's ``solve_cloudflare``, which is
+    Cloudflare-specific. So a Cloudflare wall should still go through D, while
+    any other vendor should skip it — otherwise D burns a browser launch just to
+    re-fetch the same interstitial the ladder already got. The detected vendor
+    is reported either way, since it's the most useful fact for tuning a target.
+    """
+
+    @pytest.mark.asyncio
+    async def test_non_cloudflare_wall_skips_d_and_renders(
+        self, app_no_auth: Any, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        async def fake_ladder(method: str, url: str, **kwargs: Any) -> Any:
+            return _make_response(text=_RADWARE_WALL, url=url), "chrome146"
+
+        monkeypatch.setattr("scrapper_tool.ladder.request_with_ladder", fake_ladder)
+        # D is installed and would happily run — the point is that it doesn't.
+        _install_fake_hostile_client(
+            monkeypatch, response=_FakeScraplingResponse(html=_RADWARE_WALL)
+        )
+        _install_fake_render(monkeypatch)
+
+        async with _client(app_no_auth) as client:
+            resp = await client.post("/scrape", json={"url": "https://walled.com/p"})
+
+        body = resp.json()
+        assert body["challenge_detected"] == "radware"
+        assert body["pattern_used"] == "render"
+        assert body["pattern_attempts"] == ["a_b_c", "render"], (
+            "Scrapling can't solve Radware — D must be skipped, not attempted"
+        )
+        skipped = [r for r in body["escalation_log"] if r["step"] == "d"]
+        assert skipped[0]["outcome"] == "skipped"
+        assert "Cloudflare" in skipped[0]["detail"]
+
+    @pytest.mark.asyncio
+    async def test_cloudflare_wall_still_runs_d(
+        self, app_no_auth: Any, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The one case where D has a real solver — don't skip it."""
+
+        async def fake_ladder(method: str, url: str, **kwargs: Any) -> Any:
+            return _make_response(text=_CF_WALL, url=url), "chrome146"
+
+        monkeypatch.setattr("scrapper_tool.ladder.request_with_ladder", fake_ladder)
+        _install_fake_hostile_client(
+            monkeypatch, response=_FakeScraplingResponse(html=_PRODUCT_HTML)
+        )
+
+        async with _client(app_no_auth) as client:
+            resp = await client.post("/scrape", json={"url": "https://cf.com/p"})
+
+        body = resp.json()
+        assert body["challenge_detected"] == "cloudflare"
+        assert body["pattern_used"] == "d"
+        assert body["pattern_attempts"] == ["a_b_c", "d"]
+
+    @pytest.mark.asyncio
+    async def test_challenge_reported_even_when_a_later_tier_wins(
+        self, app_no_auth: Any, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        async def fake_ladder(method: str, url: str, **kwargs: Any) -> Any:
+            return _make_response(text=_RADWARE_WALL, url=url), "chrome146"
+
+        monkeypatch.setattr("scrapper_tool.ladder.request_with_ladder", fake_ladder)
+        monkeypatch.setattr(http_server, "_hostile_available", lambda: False)
+        _install_fake_render(monkeypatch)
+
+        async with _client(app_no_auth) as client:
+            resp = await client.post("/scrape", json={"url": "https://walled.com/p"})
+
+        body = resp.json()
+        assert body["pattern_used"] == "render"
+        assert body["challenge_detected"] == "radware"
+
+    @pytest.mark.asyncio
+    async def test_no_challenge_leaves_the_cascade_unchanged(
+        self, app_no_auth: Any, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """An ordinary no-signal page must not trip detection or skip D."""
+
+        async def fake_ladder(method: str, url: str, **kwargs: Any) -> Any:
+            return _make_response(text="<html><body>plain page</body></html>", url=url), "chrome146"
+
+        monkeypatch.setattr("scrapper_tool.ladder.request_with_ladder", fake_ladder)
+        _install_fake_hostile_client(
+            monkeypatch, response=_FakeScraplingResponse(html=_PRODUCT_HTML)
+        )
+
+        async with _client(app_no_auth) as client:
+            resp = await client.post("/scrape", json={"url": "https://plain.com/p"})
+
+        body = resp.json()
+        assert body["challenge_detected"] is None
+        assert body["pattern_attempts"] == ["a_b_c", "d"]
+
+    @pytest.mark.asyncio
+    async def test_challenge_is_null_on_a_clean_win(
+        self, app_no_auth: Any, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        async def fake_ladder(method: str, url: str, **kwargs: Any) -> Any:
+            return _make_response(text=_PRODUCT_HTML, url=url), "chrome146"
+
+        monkeypatch.setattr("scrapper_tool.ladder.request_with_ladder", fake_ladder)
+
+        async with _client(app_no_auth) as client:
+            resp = await client.post("/scrape", json={"url": "https://plain.com/p"})
+
+        body = resp.json()
+        assert body["pattern_used"] == "a_b_c"
+        assert body["challenge_detected"] is None
+
+
 # --- v1.2.0: is_structured response field ----------------------------------
 
 
@@ -1456,7 +2419,7 @@ class TestIsStructuredField:
         self, app_no_auth: Any, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         async def fake_ladder(method: str, url: str, **kwargs: Any) -> tuple[Any, str]:
-            return _make_response(text=_PRODUCT_HTML, url=url), "chrome133a"
+            return _make_response(text=_PRODUCT_HTML, url=url), "chrome146"
 
         monkeypatch.setattr("scrapper_tool.ladder.request_with_ladder", fake_ladder)
 
@@ -1889,7 +2852,7 @@ class TestSharedProfileDir:
         monkeypatch.setattr(http_server, "_hostile_available", lambda: True)
 
         async def fake_ladder(method: str, url: str, **kwargs: Any) -> tuple[Any, str]:
-            return _make_response(text=_PRODUCT_HTML, url=url), "chrome133a"
+            return _make_response(text=_PRODUCT_HTML, url=url), "chrome146"
 
         monkeypatch.setattr("scrapper_tool.ladder.request_with_ladder", fake_ladder)
 
@@ -2034,7 +2997,7 @@ class TestSharedProfileDir:
         caller_dir = str(tmp_path / "vendor-amayama-profile")
 
         async def fake_ladder(method: str, url: str, **kwargs: Any) -> tuple[Any, str]:
-            return _make_response(text=_PRODUCT_HTML, url=url), "chrome133a"
+            return _make_response(text=_PRODUCT_HTML, url=url), "chrome146"
 
         monkeypatch.setattr("scrapper_tool.ladder.request_with_ladder", fake_ladder)
 
@@ -2066,7 +3029,7 @@ class TestSharedProfileDir:
         )
 
         async def fake_ladder(method: str, url: str, **kwargs: Any) -> tuple[Any, str]:
-            return _make_response(text=_PRODUCT_HTML, url=url), "chrome133a"
+            return _make_response(text=_PRODUCT_HTML, url=url), "chrome146"
 
         monkeypatch.setattr("scrapper_tool.ladder.request_with_ladder", fake_ladder)
 
@@ -2395,7 +3358,7 @@ class TestEscalationLog:
         self, app_no_auth: Any, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         async def fake_ladder(method: str, url: str, **kwargs: Any) -> tuple[Any, str]:
-            return _make_response(text=_PRODUCT_HTML, url=url), "chrome133a"
+            return _make_response(text=_PRODUCT_HTML, url=url), "chrome146"
 
         monkeypatch.setattr("scrapper_tool.ladder.request_with_ladder", fake_ladder)
         async with _client(app_no_auth) as client:
@@ -2519,7 +3482,7 @@ class TestMetricsEndpoint:
         # Run a /scrape that wins on A/B/C, then /metrics should show
         # scrapper_pattern_used_total{pattern="a_b_c"} >= 1.
         async def fake_ladder(method: str, url: str, **kwargs: Any) -> tuple[Any, str]:
-            return _make_response(text=_PRODUCT_HTML, url=url), "chrome133a"
+            return _make_response(text=_PRODUCT_HTML, url=url), "chrome146"
 
         monkeypatch.setattr("scrapper_tool.ladder.request_with_ladder", fake_ladder)
         async with _client(app_no_auth) as client:
@@ -2530,3 +3493,105 @@ class TestMetricsEndpoint:
         body = metrics_resp.text
         # Counter line shape: scrapper_pattern_used_total{pattern="a_b_c"} <N>
         assert 'scrapper_pattern_used_total{pattern="a_b_c"}' in body
+
+    @pytest.mark.asyncio
+    async def test_metrics_record_challenge_vendor(
+        self, app_no_auth: Any, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """F3: a detected wall shows up broken down by vendor."""
+        radware = (
+            "<html><body><script>window.location="
+            "'https://validate.perfdrive.com/x'</script></body></html>"
+        )
+
+        async def fake_ladder(method: str, url: str, **kwargs: Any) -> tuple[Any, str]:
+            return _make_response(text=radware, url=url), "chrome146"
+
+        monkeypatch.setattr("scrapper_tool.ladder.request_with_ladder", fake_ladder)
+        monkeypatch.setattr(http_server, "_hostile_available", lambda: False)
+        _install_fake_render(monkeypatch, html=_PRODUCT_HTML)
+
+        async with _client(app_no_auth) as client:
+            await client.post("/scrape", json={"url": "https://walled.test/p"})
+            metrics_resp = await client.get("/metrics")
+        if metrics_resp.status_code != 200:
+            pytest.skip("prometheus-client not installed")
+        assert 'scrapper_challenge_detected_total{vendor="radware"}' in metrics_resp.text
+
+    @pytest.mark.asyncio
+    async def test_metrics_record_replay_hit(
+        self, app_no_auth: Any, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """F3: recipe payoff is countable — a replay increments the hit event."""
+        from datetime import UTC, datetime
+
+        from scrapper_tool.recipe.derive import Recipe
+        from scrapper_tool.recipe.store import cache_key, get_store
+
+        schema = {
+            "baseSelector": "div.feed-item",
+            "fields": [{"name": "title", "selector": "h2.t", "type": "text"}],
+        }
+        get_store().put(
+            cache_key("https://cars.test/l", schema),
+            Recipe(
+                domain="cars.test",
+                schema=schema,
+                source_tier="a_b_c",
+                sample_url="https://cars.test/l",
+                multi_row=True,
+                created_at=datetime.now(UTC).isoformat(),
+                schema_hash="h",
+                field_names=("title",),
+            ),
+        )
+
+        async def fake_ladder(method: str, url: str, **kwargs: Any) -> tuple[Any, str]:
+            return _make_response(text=_RECIPE_LISTING_HTML, url=url), "chrome146"
+
+        monkeypatch.setattr("scrapper_tool.ladder.request_with_ladder", fake_ladder)
+
+        async with _client(app_no_auth) as client:
+            body = (
+                await client.post(
+                    "/scrape", json={"url": "https://cars.test/l", "schema_json": schema}
+                )
+            ).json()
+            assert body["pattern_used"] == "replay"
+            metrics_resp = await client.get("/metrics")
+        if metrics_resp.status_code != 200:
+            pytest.skip("prometheus-client not installed")
+        assert 'scrapper_recipe_events_total{event="hit"}' in metrics_resp.text
+
+    @pytest.mark.asyncio
+    async def test_metrics_record_policy_skip(
+        self, app_no_auth: Any, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """F3: the self-tuning payoff is countable."""
+        from datetime import UTC, datetime
+
+        from scrapper_tool.recipe.policy import DomainPolicy, get_policy_store
+
+        get_policy_store()._write(  # type: ignore[attr-defined]
+            "walled.test",
+            DomainPolicy(
+                domain="walled.test",
+                best_tier="render",
+                updated_at=datetime.now(UTC).isoformat(),
+                observations=3,
+            ),
+        )
+
+        async def spy_ladder(method: str, url: str, **kwargs: Any) -> tuple[Any, str]:
+            raise AssertionError("ladder should be skipped")
+
+        monkeypatch.setattr("scrapper_tool.ladder.request_with_ladder", spy_ladder)
+        monkeypatch.setattr(http_server, "_hostile_available", lambda: False)
+        _install_fake_render(monkeypatch, html=_PRODUCT_HTML)
+
+        async with _client(app_no_auth) as client:
+            await client.post("/scrape", json={"url": "https://walled.test/p"})
+            metrics_resp = await client.get("/metrics")
+        if metrics_resp.status_code != 200:
+            pytest.skip("prometheus-client not installed")
+        assert 'scrapper_policy_skips_total{start_tier="render"}' in metrics_resp.text

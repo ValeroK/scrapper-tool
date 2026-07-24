@@ -2,7 +2,7 @@
 
 Walks the impersonation ladder against a target URL and reports which
 profiles return 200 vs 403/blocked. Designed to run from cron / GitHub
-Actions to surface "chrome133a is starting to 403" before any consumer
+Actions to surface "chrome146 is starting to 403" before any consumer
 adapter notices.
 
 Usage::
@@ -10,7 +10,7 @@ Usage::
     scrapper-tool canary https://example.com/api/health
     scrapper-tool canary https://example.com/api/health --json
     scrapper-tool canary https://example.com/api/health \\
-        --profiles chrome133a,chrome124,safari18_0
+        --profiles chrome146,chrome142,safari260
 
 Exit codes
 ----------
@@ -23,23 +23,23 @@ Exit codes
 Output (default, human-readable)::
 
     URL: https://example.com/api/health
-    Effective profile: chrome133a
+    Effective profile: chrome146
     Profile  | Status | Time (ms)
     -------- | ------ | ---------
-    chrome133a | 200  |   234
-    chrome124  | -    |     -    (skipped — earlier profile won)
-    safari18_0 | -    |     -
-    firefox135 | -    |     -
+    chrome146 | 200  |   234
+    chrome142  | -    |     -    (skipped — earlier profile won)
+    safari260 | -    |     -
+    firefox147 | -    |     -
 
 Output (--json, machine-readable)::
 
     {
       "url": "https://example.com/api/health",
-      "winning_profile": "chrome133a",
+      "winning_profile": "chrome146",
       "exit_code": 0,
       "results": [
-        {"profile": "chrome133a", "status": 200, "elapsed_ms": 234, "skipped": false},
-        {"profile": "chrome124", "status": null, "elapsed_ms": null, "skipped": true},
+        {"profile": "chrome146", "status": 200, "elapsed_ms": 234, "skipped": false},
+        {"profile": "chrome142", "status": null, "elapsed_ms": null, "skipped": true},
         ...
       ]
     }
@@ -209,7 +209,7 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Probe a URL through the impersonation ladder; report which profile won.",
         description=(
             "Walks the four-profile impersonation ladder "
-            "(chrome133a -> chrome124 -> safari18_0 -> firefox135) against "
+            "(chrome146 -> chrome142 -> safari260 -> firefox147) against "
             "URL. Stops at the first non-403/503. Exit 0 on success, 1 if "
             "all profiles 403, 2 on error."
         ),

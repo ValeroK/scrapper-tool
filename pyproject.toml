@@ -53,13 +53,18 @@ agent = ["mcp>=1.2"]
 # install. They stay inert unless SCRAPPER_TOOL_CAPTCHA_KEY is set.
 llm-agent = [
     "crawl4ai>=0.9",
-    "browser-use>=0.5",
+    "browser-use>=0.13,<0.14",
     # Camoufox v0.4+ refuses to launch without ``geoip2`` because its
     # locale-matching layer queries a MaxMind GeoLite2 db at start.
     # The ``[geoip]`` extra pulls ``geoip2`` + ``maxminddb``. Bare
     # ``camoufox`` lets ``camoufox fetch`` succeed but every browser
     # launch then 500s with ``NotInstalledGeoIPExtra``.
-    "camoufox[geoip]>=0.4",
+    # v1.6.0: upgraded 0.4 -> 0.5.x. 0.5 adds ``fingerprint_preset`` (real
+    # bundled fingerprints, more realistic than generated) and needs Python
+    # >=3.10 (we require >=3.12). Upper bound pinned so a 0.6 with a changed
+    # AsyncCamoufox kwargs surface can't land silently — the launch-contract
+    # test in tests/unit/test_agent_backends.py is the tripwire.
+    "camoufox[geoip]>=0.5,<0.6",
     "patchright>=1.49",
     "browserforge>=1.2",
     "pillow>=10",
@@ -96,9 +101,11 @@ http = [
     "PyYAML>=6.0",                # used by scripts/dump_openapi.py for openapi.yaml
     "prometheus-client>=0.20",    # v1.4.0 — /metrics endpoint
 ]
-# Optional alternative browser backends.
-zendriver-backend = ["zendriver>=0.5"]
-botasaurus-backend = ["botasaurus-driver>=4.0"]
+# NOTE: zendriver-backend / botasaurus-backend extras removed in v1.5.0.
+# Both backends returned playwright_browser=None, so agent_browse raised
+# AgentError at runtime for them — they were never drivable via Pattern E.
+# The lightweight/CDP niche they aimed at is now filled by the Obscura
+# backend (connect-over-CDP, returns a real Playwright browser).
 # NOTE: skyvern-backend extra removed in v1.1.1.
 # skyvern's transitive litellm pin pulled three CVE-affected versions
 # (SQL injection / SSTI / RCE in /prompts/test, fixed in litellm 1.83.7),
@@ -136,9 +143,12 @@ Issues = "https://github.com/ValeroK/scrapper-tool/issues"
 Changelog = "https://github.com/ValeroK/scrapper-tool/blob/main/CHANGELOG.md"
 
 [tool.uv]
-# Crawl4AI's latest line is in pre-release; allow it during resolution
-# so the [llm-agent] extra resolves cleanly.
-prerelease = "allow"
+# NOTE: `prerelease = "allow"` used to live here, added when Crawl4AI's latest
+# line was pre-release only. Crawl4AI has shipped stable releases since, and the
+# global allow had become actively harmful: a `uv lock --upgrade` quietly dragged
+# the whole tree onto alphas (lxml 7.0.0a3, pydantic 2.14.0a1, curl-cffi 0.16.0b1,
+# mcp 2.0.0b2). If a single dependency ever genuinely needs a pre-release again,
+# name that version in its own requirement rather than reopening this globally.
 
 # Override transitive lxml constraints so [hostile] and [llm-agent] can
 # coexist via the [full] extra. Crawl4AI declares ``lxml~=5.3`` and
@@ -148,7 +158,38 @@ prerelease = "allow"
 # tests confirm both libraries function. If a future Crawl4AI release
 # starts depending on lxml-5-only API, install [hostile] and [llm-agent]
 # in separate environments instead of using [full].
-override-dependencies = ["lxml>=6.0.3", "pip>=26.1.2"]
+override-dependencies = [
+    "lxml>=6.0.3",
+    "pip>=26.1.2",
+    # browser-use 0.13 pins ``typing-extensions==4.15.0`` exactly. Honouring
+    # that exact pin drags scrapling 0.4.9 -> 0.4.6 and patchright 1.60 -> 1.58
+    # backwards, i.e. Pattern D and a browser backend regress so the E2 agent
+    # can have one specific typing-extensions build. typing-extensions is
+    # additive by design, so the override lets all three stay current; the
+    # backend launch-contract tests are the tripwire if that stops being true.
+    "typing-extensions>=4.16",
+    # browser-use 0.13 also pins ``pypdf==6.10.2`` exactly, which carries four
+    # CVEs (CVE-2026-59935/6/7/8) that pip-audit fails the build on. 6.14.2 fixes
+    # all four and is a patch-level bump over 6.10 (pypdf is used only for
+    # browser-use's optional PDF reading), so the override is safe and keeps CI's
+    # dependency-audit gate green.
+    "pypdf>=6.14.2",
+    # Same story for pillow: browser-use pins ``pillow==12.2.0`` exactly, which
+    # carries PYSEC-2026-3493/3494. 12.3.0 is a patch fix. Our own extra already
+    # declares ``pillow>=10``, so this only overrides browser-use's exact pin.
+    "pillow>=12.3",
+    # browser-use's exact pins also drag in CVE-affected click and mcp:
+    #   click==8.3.1  -> PYSEC-2026-2132        (fixed 8.3.3)
+    #   mcp==1.26.0   -> PYSEC-2026-3481/2/3    (fixed 1.27.2/1.28.1)
+    # Both fixed versions satisfy every other constraint (scrapling wants
+    # click>=8.3.0 and mcp>=1.27.0), and mcp is our own direct dep, so bumping
+    # it forward is squarely intended.
+    "click>=8.3.3",
+    "mcp>=1.28.1",
+    # ...and aiohttp: browser-use pins ``aiohttp==3.13.4`` (PYSEC-2026-2105..2108);
+    # 3.14.1 fixes all four and stays under the <4.0 cap every other consumer sets.
+    "aiohttp>=3.14.1",
+]
 
 # When NOT using the [full] extra, ``[hostile]`` and ``[llm-agent]``
 # stay separate. Declaring the extras as conflicting tells uv to lock
@@ -168,6 +209,7 @@ include = [
     "src/",
     "tests/",
     "docs/",
+    "skills/",
     "README.md",
     "CHANGELOG.md",
     "LICENSE",
@@ -246,10 +288,11 @@ module = [
     "crawl4ai.*",
     "browser_use.*",
     "patchright.*",
+    # playwright is pulled only by the [full]/[llm-agent] extras (via scrapling
+    # + crawl4ai), not by [dev] — the extra the CI lint job installs — so mypy
+    # there can't find its stubs. The Obscura backend imports it lazily.
+    "playwright.*",
     "camoufox.*",
-    "zendriver.*",
-    "botasaurus.*",
-    "botasaurus_driver.*",
     "browserforge.*",
     "langchain_ollama.*",
     "langchain_openai.*",

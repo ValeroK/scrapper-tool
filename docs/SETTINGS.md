@@ -57,11 +57,24 @@ These settings drive `agent_extract`, `agent_browse`, and `agent_session`.
 
 | Field | Env var | Default | Choices | Notes |
 |-------|---------|---------|---------|-------|
-| `browser` | `SCRAPPER_TOOL_AGENT_BROWSER` | `camoufox` | `camoufox` / `patchright` / `zendriver` / `scrapling` / `botasaurus` | Camoufox = best stealth, ~200 MB RAM, ~42 s/bypass. Patchright = fast mode, weaker stealth. |
+| `browser` | `SCRAPPER_TOOL_AGENT_BROWSER` | `camoufox` | `camoufox` / `patchright` / `scrapling` / `obscura` | Camoufox = best stealth, ~200 MB RAM, ~42 s/bypass. Patchright = fast mode, weaker stealth. Obscura = experimental lightweight CDP sidecar (see below). |
+| `obscura_cdp_url` | `SCRAPPER_TOOL_AGENT_OBSCURA_CDP_URL` | `http://127.0.0.1:9222` | http URL | CDP endpoint for `browser=obscura`. Requires a running `obscura serve --host 0.0.0.0` process (Playwright discovers the ws endpoint from the http URL). |
 | `fingerprint` | `SCRAPPER_TOOL_AGENT_FINGERPRINT` | `browserforge` | `browserforge` / `none` | Per-session UA/Accept/Canvas/WebGL randomization. Camoufox ignores this (has its own). |
 | `behavior` | `SCRAPPER_TOOL_AGENT_BEHAVIOR` | `humanlike` | `humanlike` / `fast` / `off` | Mouse-path bezier + jittered keystroke timing. Defeats DataDome behavior detection. |
 | `headful` | `SCRAPPER_TOOL_AGENT_HEADFUL` | `0` (false) | `0`/`1`/`true`/`false`/`yes`/`no`/`on`/`off` | Show the browser window. Useful for debugging. |
 | `proxy` | `SCRAPPER_TOOL_AGENT_PROXY` | unset | URL string | `http://user:pass@host:port` or `socks5://host:port`. Forwarded to the browser. |
+
+#### Camoufox render knobs (v1.6.0+)
+
+Camoufox-native; the other backends ignore them.
+
+| Field | Env var | Default | Notes |
+|-------|---------|---------|-------|
+| `camoufox_headless_mode` | `SCRAPPER_TOOL_AGENT_CAMOUFOX_DISPLAY` | `headless` | `virtual` runs under an Xvfb virtual display — stealthier than pure headless, and the Docker image ships `xvfb`. Try this first on a target that challenges you in headless. |
+| `block_images` | `SCRAPPER_TOOL_AGENT_BLOCK_IMAGES` | `0` | Big speed/bandwidth win when only text/DOM matters. **Camoufox warns this can cause detection issues on major WAFs** — use on unprotected targets, not hard ones. |
+| `fingerprint_preset` | `SCRAPPER_TOOL_AGENT_FINGERPRINT_PRESET` | `0` | Use a real bundled fingerprint instead of a generated one (Camoufox 0.5+). |
+| `camoufox_os` | `SCRAPPER_TOOL_AGENT_CAMOUFOX_OS` | unset | e.g. `windows`, `macos`, `linux` — match the target's typical audience. |
+| `camoufox_locale` | `SCRAPPER_TOOL_AGENT_CAMOUFOX_LOCALE` | unset | e.g. `he-IL`. Matching the site's locale is a real signal on geo-targeted sites. |
 
 #### When to switch backends
 
@@ -69,9 +82,8 @@ These settings drive `agent_extract`, `agent_browse`, and `agent_session`.
 |--------|-----|
 | Cloudflare Enterprise / DataDome / Akamai Bot Manager v4 / Imperva | `camoufox` (default) |
 | Lightly-protected SPAs, batch throughput, CI runs | `patchright` |
-| Sites that detect Playwright API itself | `zendriver` (CDP-direct, requires `[zendriver-backend]` extra) |
 | You already installed `[hostile]` and don't want another browser | `scrapling` |
-| Decorator-style workflow with humanlike behavior emulation | `botasaurus` (requires `[botasaurus-backend]` extra) |
+| High-volume/parallel batch where RAM per instance is the bottleneck (Linux/Docker) | `obscura` (experimental — run `obscura serve` sidecar, benchmark first) |
 
 ### LLM backend
 
@@ -141,6 +153,163 @@ Without a key, Tier 2 is skipped — captcha-encountered → `AgentBlockedError(
 
 ---
 
+## Cascade tiers
+
+`/scrape` (REST) and `auto_scrape` (MCP) run the same ladder:
+
+```
+replay cached recipe + fetch/render -> cheapest, often free
+A/B/C  curl_cffi TLS impersonation
+D      Scrapling (hostile fetcher)
+render stealth browser + deterministic extractors   <- NO LLM
+E1     Crawl4AI + LLM
+E2     browser-use agent            -> priciest, interactive=true only
+```
+
+| Env var | Default | Purpose |
+|---------|---------|---------|
+| `SCRAPPER_TOOL_RENDER_TIER` | `1` (on) | The stealth-render tier. Set `0` to skip straight from D to the LLM tiers. |
+| `SCRAPPER_TOOL_RECIPE_CACHE` | `1` (on) | Learn-once / replay. Set `0` to disable both learning and replay. |
+| `SCRAPPER_TOOL_RECIPE_DIR` | temp dir | Where learned recipes and domain policies are stored (one JSON file per domain). |
+| `SCRAPPER_TOOL_DOMAIN_POLICY` | `1` (on) | Per-domain tier memory (see below). Set `0` to always run the full cascade. |
+
+The render tier is on by default because it is both cheaper and more reliable
+than escalating to an LLM. Measured on real targets: one site returned 403 on
+all four TLS profiles yet rendered 1.35 MB of genuine content, and another went
+from 4 extractable headlines to 212 once rendered — in both cases the existing
+Pattern B/C/CSS extractors then did the job with **zero tokens**. It uses the
+browser configured by `SCRAPPER_TOOL_AGENT_BROWSER` and skips itself cleanly
+when the `[llm-agent]` extra isn't installed (no entry in `pattern_attempts`).
+
+### Learn-once / replay
+
+When an expensive tier succeeds, the cascade works backwards from the data it
+produced to the CSS selectors that would have produced it for free, then caches
+that recipe per domain. The next request for that domain replays it — a fetch
+plus a selectolax parse instead of a browser launch or an LLM call
+(`pattern_used="replay"`).
+
+Three things make it safe to cache a heuristic:
+
+- **Every recipe is verified before it's cached.** The derived schema is run
+  through the real CSS extractor and checked against the data it came from. One
+  that can't reproduce its own training example is discarded, not stored.
+- **The tier it was learned from travels with it.** Selectors for a rendered DOM
+  are replayed with a render; only a recipe proven to work against raw HTTP is
+  replayed with a plain fetch. When a render-learned recipe *also* matches the
+  body A/B/C already fetched, it's downgraded automatically — so a render that
+  won for anti-bot reasons rather than JS reasons still yields free replays.
+- **Drift self-heals.** A recipe that stops matching is evicted on the spot and
+  the normal cascade re-derives a fresh one. A stale recipe costs one wasted
+  fetch, once.
+
+Recipes are deliberately *not* derived for JSON-LD/microdata wins: Pattern B
+already extracts those deterministically at tier 1, so a CSS recipe would be
+strictly more fragile for no gain. Derivation also declines when a page's only
+handles are build-generated class hashes and it carries no `data-testid`-style
+attribute — a missing recipe just means full price next time, while a wrong one
+would mean wrong data indefinitely.
+
+### Per-domain tier memory (self-tuning cascade)
+
+The cascade remembers which tier reached content on each domain and starts there
+next time. On a site where the HTTP ladder always 403s and only a render gets
+through (store.mopar.com, g2.com), paying for the ladder and Pattern D on every
+request just to watch them fail is pure latency; once render has won there twice,
+the cascade skips straight to it.
+
+It is deliberately conservative:
+
+- **It only skips *cheaper* tiers, never jumps past a working one.** The worst
+  case of a wrong "start at render" is one wasted browser launch — the cascade
+  still falls through to the LLM tiers, so it can never produce a wrong answer,
+  only a slightly slower one.
+- **Two wins at the same tier are required** before a domain is trusted; one
+  success could be a fluke (a proxy rotation, a block briefly lifting).
+- **It expires after 24h.** A site that tightened *or relaxed* its posture is
+  re-discovered — the TTL is the only thing that re-probes the cheap tiers on a
+  domain we've learned to skip them on, so without it a site that got easier
+  would be stuck on the expensive tier forever.
+- The replay tier (cached recipe) always runs first regardless — a cache hit is
+  cheaper than every tier the policy chooses between.
+
+Stored under `<recipe dir>/policy/`. A blocked or errored result never teaches
+the policy; only a real win does.
+
+### Challenge detection
+
+When the ladder gets a bot-vendor interstitial instead of a page, the response
+carries `challenge_detected` — one of `cloudflare`, `radware`, `datadome`,
+`perimeterx`, `akamai`, `kasada`, `incapsula`, or `unknown` (null when nothing
+was detected). It is reported no matter which tier eventually wins, and it also
+steers escalation:
+
+| Detected | Pattern D | Why |
+|----------|-----------|-----|
+| `cloudflare` | **runs** | Scrapling's `solve_cloudflare` is exactly for this. |
+| anything else | **skipped** | Scrapling has no solver for it, so D would burn a browser launch re-fetching the same interstitial. Goes straight to render. |
+| nothing | runs | Unchanged behaviour. |
+
+Detection is content-first: a 403 carrying a large real DOM is *not* treated as
+a wall (`store.mopar.com` does exactly this), while a bot-walled HTTP 200 is.
+
+### Site-level scraping — `/map` and `/crawl`
+
+`/map` (MCP: `map_site`) discovers URLs: sitemaps declared in robots.txt, then
+`/sitemap.xml` as a fallback, plus links from the seed page fetched through the
+impersonation ladder. No browser, no LLM. Truncation is always reported via
+`truncated` / `dropped_by_limit` — "200 URLs" and "200 of 40,000" are different
+answers to plan a crawl on.
+
+`/crawl` (MCP: `crawl_site`) walks a site breadth-first, running the **full auto
+cascade on each page**. That means a crawl inherits recipe replay, the render
+tier, challenge detection, and proxy rotation for free, and the recipe learned on
+page one makes the rest of the crawl cheap. Bounded by `depth`, `max_pages`, and
+`concurrency`; the response's `stats` reports `hit_page_limit`, `hit_depth_limit`,
+and `queued_but_unvisited` so a bounded crawl is never mistaken for a complete
+one. Page HTML is omitted unless you pass `include_html: true` — a 50-page crawl
+of rendered pages is tens of megabytes of JSON.
+
+`same_domain` (default true) keeps the crawl on the seed's host **and its
+subdomains**, matched at a label boundary against the seed's own hostname. That
+deliberately avoids computing a "registrable domain" without a public-suffix
+list, which would reduce `yad2.co.il` to `co.il` and treat every Israeli
+commercial site as one site.
+
+### robots.txt
+
+`respect_robots` (default true, `SCRAPPER_TOOL_AGENT_RESPECT_ROBOTS`) is now
+enforced — previously it was configuration that nothing read. It applies to the
+crawler, which is where it matters: a single scrape is a user asking for one page
+they could have opened themselves, while a crawler visits pages nobody asked for.
+
+- `Crawl-delay` is honoured, including fractional values. Python's
+  `RobotFileParser` parses this directive with `int()` and silently discards
+  `Crawl-delay: 0.5`, so it's parsed separately. A delay is capped at 10s of
+  actual waiting — honouring a hostile `Crawl-delay: 86400` literally is
+  indistinguishable from hanging.
+- Status handling follows RFC 9309: 4xx (including the 403 anti-bot systems often
+  serve for robots.txt) means no rules published and everything is allowed; 5xx or
+  unreachable is treated as a full disallow.
+- robots.txt is fetched once per origin per hour, not once per URL.
+
+Set `respect_robots: false` only for sites you own or are authorised to crawl. It
+logs a warning when disabled.
+
+### The E2 gate — `interactive`
+
+E2 (browser-use) is the most expensive tier by a wide margin. From v1.6.0 a
+blocked E1 no longer auto-escalates into it: pass `interactive: true` (REST) /
+`interactive=True` (MCP `auto_scrape`) when the target genuinely needs a
+multi-step agent — login, pagination, dynamic forms. Otherwise the cascade stops
+at E1 and returns E1's blocked result, which carries the escalation log and
+whatever partial content E1 saw.
+
+Rationale: a page that is simply *walled* will wall the agent too, just slower
+and for many more tokens. Interaction is the only thing E2 can do that the
+render tier can't. An explicit REST `mode="browse"` is a direct request for E2
+and is never gated.
+
 ## Install extras
 
 **Recommended SDK install** for all capabilities:
@@ -160,9 +329,12 @@ is also the full one — every pattern wired up.
 | `[llm-agent]` | Pattern E — Camoufox, Patchright, browser-use, Crawl4AI, Browserforge, langchain-ollama, Pillow. Pins `lxml~=5.3`. | `[hostile]` (when installed via plain pip) |
 | `[turnstile-solver]` | Captcha cascade Tier 1 (Theyka). Compatible with `[llm-agent]`. | — |
 | **`[full]`** ⭐ | All five patterns: A/B/C/D/E in one environment via uv's `override-dependencies` declaration. | — (uv-only) |
-| `[zendriver-backend]` | Adds Zendriver as an alternative Pattern E browser. | — |
-| `[botasaurus-backend]` | Adds Botasaurus as an alternative Pattern E browser. | — |
 | `[skyvern-backend]` | Reserved for a future Skyvern E2 backend. | — |
+
+The `obscura` browser needs no extra — it reuses the Playwright client from
+`[llm-agent]` and connects to an external `obscura serve` process. The removed
+`[zendriver-backend]` / `[botasaurus-backend]` extras (v1.5.0) are no longer
+available; use `obscura` for a lightweight CDP-driven backend.
 
 `[full]` is a uv-only install path — it relies on `[tool.uv] override-dependencies`
 in `pyproject.toml` to coerce both Scrapling and Crawl4AI onto a single

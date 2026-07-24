@@ -29,13 +29,19 @@ Usage::
 
 from __future__ import annotations
 
-from decimal import Decimal, InvalidOperation
+from decimal import Decimal  # noqa: TC003 — see below
 from typing import Any
 
 import extruct
 from pydantic import BaseModel, Field
 
 from scrapper_tool._logging import get_logger
+from scrapper_tool._money import parse_price
+
+# `Decimal` must stay a RUNTIME import even though it only appears in
+# annotations: `ProductOffer` is a pydantic model, and pydantic resolves
+# annotations at class-build time. Behind `TYPE_CHECKING` it raises
+# "ProductOffer is not fully defined" on the first instantiation.
 
 _logger = get_logger(__name__)
 
@@ -111,13 +117,13 @@ def _walk_for_product(node: Any) -> dict[str, Any] | None:
 
 
 def _coerce_decimal(value: Any) -> Decimal | None:
-    """Best-effort string/number → Decimal."""
-    if value is None:
-        return None
-    try:
-        return Decimal(str(value).strip())
-    except (InvalidOperation, ValueError):
-        return None
+    """Best-effort string/number → Decimal.
+
+    Delegates to :func:`scrapper_tool._money.parse_price`. Until v1.6.0 this
+    handed the raw string straight to ``Decimal()``, so a thousands-separated
+    JSON-LD price like ``"1,299.99"`` raised and silently became ``None``.
+    """
+    return parse_price(value)
 
 
 def _first_gtin(product: dict[str, Any]) -> str | None:

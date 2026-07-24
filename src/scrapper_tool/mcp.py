@@ -74,10 +74,13 @@ so a single fetch can't exhaust the agent's context window.
 from __future__ import annotations
 
 import base64
+import os
 import sys
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from scrapper_tool import __version__
+from scrapper_tool._challenge import is_interstitial
+from scrapper_tool._classify import classify_extraction_success
 from scrapper_tool.canary import run_canary
 from scrapper_tool.errors import (
     AgentBlockedError,
@@ -89,6 +92,9 @@ from scrapper_tool.http import request_with_retry, vendor_client
 from scrapper_tool.ladder import IMPERSONATE_LADDER, request_with_ladder
 from scrapper_tool.patterns.b import extract_product_offer
 from scrapper_tool.patterns.c import extract_microdata_price as _extract_microdata_price
+
+if TYPE_CHECKING:
+    from collections.abc import Awaitable, Callable
 
 _BODY_TRUNCATION_BYTES = 64 * 1024
 _MAX_AGENT_SCREENSHOTS = 3
@@ -134,6 +140,20 @@ def _structured_price(html: str) -> dict[str, Any] | None:
     return {"price": str(price), "currency": currency}
 
 
+def _structured_json_ld(html: str, base_url: str | None) -> list[Any] | None:
+    """Return raw JSON-LD blocks (for the shared classifier's signal check).
+
+    Mirrors the ``json_ld`` component of the REST ``_extract_b_c`` pipeline so
+    ``auto_scrape`` feeds the same signals to ``classify_extraction_success``.
+    """
+    from scrapper_tool._extractors import get as get_extractor  # noqa: PLC0415
+
+    result = get_extractor("json_ld_product").extract(html, base_url=base_url)
+    if result.has_signal and isinstance(result.data, dict):
+        return result.data.get("json_ld")
+    return None
+
+
 def _agent_error_payload(
     message: str,
     *,
@@ -168,6 +188,7 @@ async def _continue_to_e_tier(
     last_error: str | None,
     hostile_skipped: bool,
     user_data_dir: str | None = None,
+    interactive: bool = False,
 ) -> dict[str, Any]:
     """E1 → E2 escalation for the MCP ``auto_scrape`` tool.
 
@@ -177,6 +198,11 @@ async def _continue_to_e_tier(
     ``user_data_dir`` (v1.3.0+): forwarded to ``AgentConfig.merged`` so
     Crawl4AI / browser-use launch against the cascade-shared profile and
     inherit D's CF clearance.
+
+    ``interactive`` (v1.6.0+): REST parity. E2 is the priciest tier by a wide
+    margin and only earns its cost on login / pagination / dynamic-form flows;
+    on anything else a blocked E1 stops here rather than spending an agent loop
+    to hit the same wall more slowly.
     """
     try:
         from scrapper_tool.agent import AgentConfig  # noqa: PLC0415
@@ -209,6 +235,7 @@ async def _continue_to_e_tier(
     # ----- Pattern E1 -----
     attempts.append("e1")
     schema_for_e1 = schema_json or {"type": "object", "additionalProperties": True}
+    blocked_e1: Any = None
     try:
         result = await _agent_extract(
             url, schema_for_e1, instruction=instruction, config=cfg, **overrides
@@ -222,8 +249,33 @@ async def _continue_to_e_tier(
             payload["is_structured"] = _is_e_tier_structured(result.data, result.blocked)
             return payload
         last_error = f"e1: {result.error or 'blocked'}"
+        blocked_e1 = result
     except AgentBlockedError as exc:
         last_error = f"e1: {exc}"
+
+    # ----- E2 gate: interactive tasks only -----
+    if not interactive:
+        if blocked_e1 is not None:
+            # E1's blocked result carries the partial content and error detail —
+            # strictly more useful to hand back than a bare "blocked".
+            payload = _agent_result_payload(blocked_e1)
+            payload["pattern_used"] = "e1"
+            payload["pattern_attempts"] = attempts
+            payload["product"] = None
+            payload["hostile_skipped"] = hostile_skipped
+            payload["is_structured"] = False
+            return payload
+        return _agent_error_payload(
+            f"Blocked at E1: {last_error}. Set interactive=true to escalate to "
+            "the E2 agent (login / pagination / dynamic forms).",
+            blocked=True,
+        ) | {
+            "pattern_used": None,
+            "pattern_attempts": attempts,
+            "product": None,
+            "hostile_skipped": hostile_skipped,
+            "is_structured": False,
+        }
 
     # ----- Pattern E2 -----
     attempts.append("e2")
@@ -281,6 +333,8 @@ async def _auto_scrape_inner(
     hostile_fallback: bool,
     pattern_d_network_idle: bool,
     user_data_dir: str | None,
+    interactive: bool = False,
+    state: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Cascade body for the MCP auto_scrape tool.
 
@@ -288,81 +342,66 @@ async def _auto_scrape_inner(
     indenting the whole cascade one level. Owns the A/B/C → D → E1 → E2
     sequence; profile-dir lifecycle (mkdtemp + rmtree) lives in the
     enclosing auto_scrape.
+
+    ``state`` collects cascade-scoped facts (currently the detected bot vendor)
+    for the caller to fold into the payload — the MCP equivalent of what REST
+    stashes on ``req.__dict__``, since there's no request object here.
     """
+    cascade_state = state if state is not None else {}
     attempts: list[str] = []
     last_error: str | None = None
     hostile_skipped = False
 
     # ----- hostile_only fast-path: skip A/B/C, start at D -----
     if hostile_only:
-        d_payload, d_error, hostile_skipped = await _try_pattern_d_for_auto_scrape(
-            url, schema_json, attempts, timeout_s, pattern_d_network_idle, user_data_dir
+        return await _hostile_only_cascade(
+            url=url,
+            schema_json=schema_json,
+            instruction=instruction,
+            model=model,
+            browser=browser,
+            timeout_s=timeout_s,
+            hostile_fallback=hostile_fallback,
+            pattern_d_network_idle=pattern_d_network_idle,
+            user_data_dir=user_data_dir,
+            interactive=interactive,
+            attempts=attempts,
         )
-        if d_payload is not None:
-            return d_payload
-        if not hostile_fallback:
-            return _agent_error_payload(
-                f"hostile_only=True and D failed: "
-                f"{d_error or 'classifier rejected D output or [hostile] missing'}",
-                blocked=True,
-            ) | {
-                "pattern_used": None,
-                "pattern_attempts": attempts,
-                "product": None,
-                "hostile_skipped": hostile_skipped,
-                "is_structured": False,
-            }
-        last_error = d_error
-        return await _continue_to_e_tier(
-            url,
-            schema_json,
-            instruction,
-            model,
-            browser,
-            timeout_s,
-            attempts,
-            last_error,
-            hostile_skipped,
-            user_data_dir,
-        )
+
+    # ----- Replay (tier 0 — cached recipe, no browser, no LLM) -----
+    replayed = await _try_replay_for_auto_scrape(
+        url, schema_json, attempts, timeout_s, browser, user_data_dir
+    )
+    if replayed is not None:
+        return replayed
+
+    # F2 — per-domain tier memory. Skip tiers this domain has repeatedly proven
+    # it doesn't need. Starting hint only; the cascade still falls through.
+    start_rank = _policy_start_rank(url, cascade_state)
 
     # ----- Pattern A/B/C -----
-    attempts.append("a_b_c")
-    try:
-        resp, profile = await request_with_ladder("GET", url)
-        text = resp.text or ""
-        product = _structured_product(text, str(resp.url))
-        price = _structured_price(text)
-        success = schema_json is None and (product is not None or price is not None)
-        if success:
-            truncated_text, truncated = _truncate(text)
-            return {
-                "pattern_used": "a_b_c",
-                "pattern_attempts": attempts,
-                "url": str(resp.url),
-                "winning_profile": profile,
-                "product": product,
-                "microdata_price": price,
-                "data": None,
-                "rendered_markdown": None,
-                "body": truncated_text,
-                "truncated": truncated,
-                "blocked": False,
-                "error": None,
-                "hostile_skipped": False,
-                "is_structured": True,
-            }
-    except BlockedError as exc:
-        last_error = f"a_b_c: {exc}"
+    if start_rank <= _tier_rank_mcp("a_b_c"):
+        attempts.append("a_b_c")
+        resp, _profile, err = await _try_a_b_c(url, schema_json, attempts, cascade_state)
+        if resp is not None:
+            return resp
+        last_error = err  # carries the error string when A/B/C failed/blocked
 
-    # ----- Pattern D -----
-    d_payload, d_error, hostile_skipped = await _try_pattern_d_for_auto_scrape(
-        url, schema_json, attempts, timeout_s, pattern_d_network_idle, user_data_dir
+    # ----- Deterministic tiers: Pattern D, then stealth render (no LLM) -----
+    payload, last_error, hostile_skipped = await _run_deterministic_tiers(
+        url=url,
+        schema_json=schema_json,
+        attempts=attempts,
+        timeout_s=timeout_s,
+        pattern_d_network_idle=pattern_d_network_idle,
+        browser=browser,
+        user_data_dir=user_data_dir,
+        last_error=last_error,
+        challenge=cascade_state.get("challenge_detected"),
+        start_rank=start_rank,
     )
-    if d_payload is not None:
-        return d_payload
-    if d_error is not None:
-        last_error = d_error
+    if payload is not None:
+        return payload
 
     # ----- E1 → E2 escalation -----
     return await _continue_to_e_tier(
@@ -376,7 +415,179 @@ async def _auto_scrape_inner(
         last_error,
         hostile_skipped,
         user_data_dir,
+        interactive,
     )
+
+
+async def _try_a_b_c(
+    url: str,
+    schema_json: dict[str, Any] | None,
+    attempts: list[str],
+    cascade_state: dict[str, Any],
+) -> tuple[dict[str, Any] | None, str | None, str | None]:
+    """Run the A/B/C ladder for MCP auto_scrape.
+
+    Returns ``(success_payload, profile, error_or_none)``. On success the payload
+    is set; otherwise the third element is the error string (or None) for
+    ``last_error``. Extracted so the cascade body stays under the branch limit
+    now that the F2 gate wraps it.
+    """
+    last_error: str | None = None
+    try:
+        resp, profile = await request_with_ladder("GET", url)
+        text = resp.text or ""
+        product = _structured_product(text, str(resp.url))
+        price = _structured_price(text)
+        # v1.5.0: use the shared classifier so auto_scrape accepts A/B/C the
+        # same way REST /scrape does (previously MCP always escalated to an
+        # LLM call whenever a schema was supplied).
+        json_ld = _structured_json_ld(text, str(resp.url))
+        success = classify_extraction_success(
+            mode="auto",
+            schema_json=schema_json,
+            force_llm_extract=False,
+            status_code=resp.status_code,
+            text=text,
+            product=product,
+            microdata_price=price,
+            json_ld=json_ld,
+        )
+        if success:
+            truncated_text, truncated = _truncate(text)
+            return (
+                {
+                    "pattern_used": "a_b_c",
+                    "pattern_attempts": attempts,
+                    "url": str(resp.url),
+                    "winning_profile": profile,
+                    "product": product,
+                    "microdata_price": price,
+                    "data": None,
+                    "rendered_markdown": None,
+                    "body": truncated_text,
+                    "truncated": truncated,
+                    "blocked": False,
+                    "error": None,
+                    "hostile_skipped": False,
+                    "is_structured": True,
+                },
+                profile,
+                None,
+            )
+        # Not a signal, so we escalate either way — but knowing *which* vendor
+        # walled us decides whether Pattern D is worth attempting at all.
+        vendor = is_interstitial(text, resp.status_code)
+        if vendor is not None:
+            cascade_state["challenge_detected"] = vendor
+    except BlockedError as exc:
+        last_error = f"a_b_c: {exc}"
+    return None, None, last_error
+
+
+async def _hostile_only_cascade(
+    *,
+    url: str,
+    schema_json: dict[str, Any] | None,
+    instruction: str | None,
+    model: str | None,
+    browser: str | None,
+    timeout_s: float,
+    hostile_fallback: bool,
+    pattern_d_network_idle: bool,
+    user_data_dir: str | None,
+    interactive: bool,
+    attempts: list[str],
+) -> dict[str, Any]:
+    """``hostile_only=True`` — start at Pattern D, skipping the A/B/C ladder.
+
+    For vendors recon has already classified as hostile, where the ladder is
+    known to fail and its ~2-3 s is pure waste. With ``hostile_fallback=False``
+    a D failure surfaces immediately instead of silently paying for an LLM.
+    """
+    d_payload, d_error, hostile_skipped = await _try_pattern_d_for_auto_scrape(
+        url, schema_json, attempts, timeout_s, pattern_d_network_idle, user_data_dir
+    )
+    if d_payload is not None:
+        return d_payload
+    if not hostile_fallback:
+        return _agent_error_payload(
+            f"hostile_only=True and D failed: "
+            f"{d_error or 'classifier rejected D output or [hostile] missing'}",
+            blocked=True,
+        ) | {
+            "pattern_used": None,
+            "pattern_attempts": attempts,
+            "product": None,
+            "hostile_skipped": hostile_skipped,
+            "is_structured": False,
+        }
+    return await _continue_to_e_tier(
+        url,
+        schema_json,
+        instruction,
+        model,
+        browser,
+        timeout_s,
+        attempts,
+        d_error,
+        hostile_skipped,
+        user_data_dir,
+        interactive,
+    )
+
+
+async def _run_deterministic_tiers(
+    *,
+    url: str,
+    schema_json: dict[str, Any] | None,
+    attempts: list[str],
+    timeout_s: float,
+    pattern_d_network_idle: bool,
+    browser: str | None,
+    user_data_dir: str | None,
+    last_error: str | None,
+    challenge: str | None = None,
+    start_rank: int = 0,
+) -> tuple[dict[str, Any] | None, str | None, bool]:
+    """Run the no-LLM tiers between the HTTP ladder and the agent tiers.
+
+    Pattern D (Scrapling) then the stealth render, in cost order. Grouped behind
+    one seam because they answer the same question — "can we get this
+    deterministically?" — and because either failing must still let the next one
+    try. Returns ``(payload, last_error, hostile_skipped)``; a None payload means
+    keep escalating to E1.
+
+    ``challenge`` is the bot vendor detected by the ladder, if any. Scrapling's
+    weapon is ``solve_cloudflare``, so a non-Cloudflare wall means D would burn
+    a browser launch re-fetching the same interstitial — skip straight to the
+    render tier. A Cloudflare wall is exactly what D is for, so it still runs.
+
+    ``start_rank`` (F2): a confident per-domain policy may have learned this
+    domain needs render or an LLM tier, in which case D — and possibly render —
+    are known-doomed and skipped.
+    """
+    hostile_skipped = False
+    skip_d = (challenge is not None and challenge != "cloudflare") or start_rank > _tier_rank_mcp(
+        "d"
+    )
+    if not skip_d:
+        d_payload, d_error, hostile_skipped = await _try_pattern_d_for_auto_scrape(
+            url, schema_json, attempts, timeout_s, pattern_d_network_idle, user_data_dir
+        )
+        if d_payload is not None:
+            return d_payload, last_error, hostile_skipped
+        if d_error is not None:
+            last_error = d_error
+
+    if start_rank <= _tier_rank_mcp("render"):
+        r_payload, r_error = await _try_render_for_auto_scrape(
+            url, schema_json, attempts, timeout_s, browser, user_data_dir
+        )
+        if r_payload is not None:
+            return r_payload, last_error, hostile_skipped
+        if r_error is not None:
+            last_error = r_error
+    return None, last_error, hostile_skipped
 
 
 async def _try_pattern_d_for_auto_scrape(
@@ -427,7 +638,19 @@ async def _try_pattern_d_for_auto_scrape(
     d_url = str(getattr(d_resp, "url", url) or url)
     d_product = _structured_product(d_html, d_url)
     d_price = _structured_price(d_html)
-    if not (schema_json is None and (d_product is not None or d_price is not None)):
+    d_json_ld = _structured_json_ld(d_html, d_url)
+    # D returns rendered HTML on success — treat as a readable 200 page.
+    d_accepted = classify_extraction_success(
+        mode="auto",
+        schema_json=schema_json,
+        force_llm_extract=False,
+        status_code=200,
+        text=d_html,
+        product=d_product,
+        microdata_price=d_price,
+        json_ld=d_json_ld,
+    )
+    if not d_accepted:
         return None, None, False
 
     truncated_text, truncated = _truncate(d_html)
@@ -450,6 +673,269 @@ async def _try_pattern_d_for_auto_scrape(
         },
         None,
         False,
+    )
+
+
+async def _try_replay_for_auto_scrape(
+    url: str,
+    schema_json: dict[str, Any] | None,
+    attempts: list[str],
+    timeout_s: float,
+    browser: str | None = None,
+    user_data_dir: str | None = None,
+) -> dict[str, Any] | None:
+    """Tier 0 for MCP — replay this domain's learned recipe. REST parity.
+
+    Returns None on any miss (including drift, which evicts the stale recipe
+    first) so the normal cascade runs.
+    """
+    try:
+        from scrapper_tool.recipe.replay import try_replay  # noqa: PLC0415
+
+        outcome = await try_replay(
+            url,
+            fetch=_make_ladder_fetch_mcp(url, timeout_s),
+            render=_make_render_fetch_mcp(url, timeout_s, browser, user_data_dir),
+            schema_json=schema_json,
+        )
+    except Exception:
+        return None  # a cache problem must never break a scrape
+    if outcome is None:
+        return None
+
+    attempts.append("replay")
+    truncated_text, truncated = _truncate(outcome.html)
+    return {
+        "pattern_used": "replay",
+        "pattern_attempts": attempts,
+        "url": outcome.final_url,
+        "winning_profile": f"recipe:{outcome.recipe.source_tier}",
+        "product": None,
+        "microdata_price": None,
+        "data": outcome.rows if outcome.recipe.multi_row else outcome.rows[0],
+        "rendered_markdown": None,
+        "body": truncated_text,
+        "truncated": truncated,
+        "blocked": False,
+        "error": None,
+        "hostile_skipped": False,
+        "is_structured": True,
+    }
+
+
+def _make_ladder_fetch_mcp(
+    url: str, timeout_s: float
+) -> Callable[[], Awaitable[tuple[str, int, str]]]:
+    async def fetch() -> tuple[str, int, str]:
+        response, _profile = await request_with_ladder("GET", url, timeout=timeout_s)
+        return response.text or "", response.status_code, str(response.url)
+
+    return fetch
+
+
+def _make_render_fetch_mcp(
+    url: str, timeout_s: float, browser: str | None, user_data_dir: str | None
+) -> Callable[[], Awaitable[tuple[str, int, str]]] | None:
+    if not _render_tier_enabled():
+        return None
+
+    async def render() -> tuple[str, int, str]:
+        from scrapper_tool.agent import AgentConfig  # noqa: PLC0415
+        from scrapper_tool.agent.backends.browser import BrowserLaunchOptions  # noqa: PLC0415
+        from scrapper_tool.patterns.render import render_html  # noqa: PLC0415
+
+        overrides: dict[str, Any] = {"timeout_s": timeout_s}
+        if browser:
+            overrides["browser"] = browser
+        if user_data_dir:
+            overrides["user_data_dir"] = user_data_dir
+        cfg = AgentConfig.from_env().merged(**overrides)
+        result = await render_html(
+            url,
+            browser=cfg.browser,
+            timeout_s=cfg.timeout_s,
+            options=BrowserLaunchOptions(
+                headful=cfg.headful,
+                proxy=cfg.proxy,
+                user_data_dir=cfg.user_data_dir,
+                headless_mode=cfg.camoufox_headless_mode,
+                block_images=cfg.block_images,
+                fingerprint_preset=cfg.fingerprint_preset,
+                os=cfg.camoufox_os,
+                locale=cfg.camoufox_locale,
+            ),
+            cdp_url=cfg.obscura_cdp_url,
+        )
+        return result.html, result.status, result.final_url
+
+    return render
+
+
+def _learn_recipe_mcp(
+    url: str, html: str, data: Any, *, source_tier: str, schema_json: Any = None
+) -> None:
+    """Teach the cache from a successful tier. Never raises."""
+    if not html or not data:
+        return
+    try:
+        from scrapper_tool.recipe.replay import learn_from_success  # noqa: PLC0415
+
+        learn_from_success(url, html, data, source_tier=source_tier, schema_json=schema_json)
+    except Exception:
+        return  # an optimisation for next time; never fail the current call
+
+
+def _policy_start_rank(url: str, state: dict[str, Any]) -> int:
+    """F2 — lowest tier rank worth attempting for ``url``. REST parity.
+
+    Records the chosen rank in ``state`` and logs the skip. Any failure returns 0
+    (run everything), because a policy problem must never break a scrape.
+    """
+    try:
+        from scrapper_tool.recipe.policy import (  # noqa: PLC0415
+            domain_policy_enabled,
+            get_policy_store,
+        )
+
+        if not domain_policy_enabled():
+            return 0
+        policy = get_policy_store().get(url)
+    except Exception:
+        return 0
+    if policy is None:
+        return 0
+    rank = policy.start_tier_rank()
+    state["policy_start_rank"] = rank
+    if rank > 0:
+        from scrapper_tool._logging import get_logger  # noqa: PLC0415
+
+        get_logger(__name__).info("auto_scrape.policy_skip", url=url, best_tier=policy.best_tier)
+    return rank
+
+
+def _record_policy(payload: dict[str, Any], url: str, state: dict[str, Any]) -> None:
+    """Remember the winning tier for this domain. Best-effort, never raises."""
+    tier = payload.get("pattern_used")
+    if not isinstance(tier, str) or payload.get("blocked"):
+        return
+    try:
+        from scrapper_tool.recipe.policy import (  # noqa: PLC0415
+            domain_policy_enabled,
+            get_policy_store,
+        )
+
+        if not domain_policy_enabled():
+            return
+        get_policy_store().record(url, tier, challenge_vendor=state.get("challenge_detected"))
+    except Exception:
+        return
+
+
+def _tier_rank_mcp(tier: str) -> int:
+    from scrapper_tool.recipe.policy import tier_rank  # noqa: PLC0415
+
+    return tier_rank(tier)
+
+
+def _render_tier_enabled() -> bool:
+    """Render tier is on by default; ``SCRAPPER_TOOL_RENDER_TIER=0`` disables it."""
+    raw = os.environ.get("SCRAPPER_TOOL_RENDER_TIER")
+    if raw is None or not raw.strip():
+        return True
+    return raw.strip().lower() in {"1", "true", "yes", "on"}
+
+
+async def _try_render_for_auto_scrape(
+    url: str,
+    schema_json: dict[str, Any] | None,
+    attempts: list[str],
+    timeout_s: float,
+    browser: str | None = None,
+    user_data_dir: str | None = None,
+) -> tuple[dict[str, Any] | None, str | None]:
+    """Stealth-render step for the MCP ``auto_scrape`` tool — no LLM.
+
+    REST parity for :func:`scrapper_tool.http_server._do_render_step`. Returns
+    ``(success_payload, last_error)``; ``(None, None)`` means "no signal, keep
+    escalating".
+    """
+    if not _render_tier_enabled():
+        return None, None
+    try:
+        from scrapper_tool.agent import AgentConfig  # noqa: PLC0415
+        from scrapper_tool.agent.backends.browser import BrowserLaunchOptions  # noqa: PLC0415
+        from scrapper_tool.patterns.render import render_html  # noqa: PLC0415
+    except ImportError:
+        # [llm-agent] extra absent — skip without touching `attempts`.
+        return None, None
+
+    attempts.append("render")
+    overrides: dict[str, Any] = {"timeout_s": timeout_s}
+    if browser:
+        overrides["browser"] = browser
+    if user_data_dir:
+        overrides["user_data_dir"] = user_data_dir
+    cfg = AgentConfig.from_env().merged(**overrides)
+    options = BrowserLaunchOptions(
+        headful=cfg.headful,
+        proxy=cfg.proxy,
+        user_data_dir=cfg.user_data_dir,
+        headless_mode=cfg.camoufox_headless_mode,
+        block_images=cfg.block_images,
+        fingerprint_preset=cfg.fingerprint_preset,
+        os=cfg.camoufox_os,
+        locale=cfg.camoufox_locale,
+    )
+    try:
+        result = await render_html(
+            url,
+            browser=cfg.browser,
+            timeout_s=cfg.timeout_s,
+            options=options,
+            cdp_url=cfg.obscura_cdp_url,
+        )
+    except Exception as exc:  # broad: any browser failure falls through to E1
+        return None, f"render: {exc}"
+
+    html, status, final_url = result.html, result.status, result.final_url
+    product = _structured_product(html, final_url)
+    price = _structured_price(html)
+    json_ld = _structured_json_ld(html, final_url)
+    accepted = classify_extraction_success(
+        mode="auto",
+        schema_json=schema_json,
+        force_llm_extract=False,
+        status_code=status,
+        text=html,
+        product=product,
+        microdata_price=price,
+        json_ld=json_ld,
+    )
+    if not accepted:
+        return None, None
+
+    # Learn from the expensive win so the next page on this domain replays free.
+    _learn_recipe_mcp(url, html, product, source_tier="render", schema_json=schema_json)
+
+    truncated_text, truncated = _truncate(html)
+    return (
+        {
+            "pattern_used": "render",
+            "pattern_attempts": attempts,
+            "url": final_url,
+            "winning_profile": cfg.browser,
+            "product": product,
+            "microdata_price": price,
+            "data": None,
+            "rendered_markdown": None,
+            "body": truncated_text,
+            "truncated": truncated,
+            "blocked": False,
+            "error": None,
+            "hostile_skipped": False,
+            "is_structured": True,
+        },
+        None,
     )
 
 
@@ -553,7 +1039,7 @@ def _build_server(  # noqa: PLR0915 — single-place tool registration
         name="fetch_with_ladder",
         description=(
             "Issue an HTTP request through the four-profile TLS-impersonation "
-            "ladder (chrome133a -> chrome124 -> safari18_0 -> firefox135) "
+            "ladder (" + " -> ".join(IMPERSONATE_LADDER) + ") "
             "until a profile returns non-403/503. Returns status, body "
             "(truncated to 64 KB), and which profile won. Use for sites "
             "that fingerprint the default httpx stack."
@@ -797,11 +1283,15 @@ def _build_server(  # noqa: PLR0915 — single-place tool registration
             "Pattern A/B/C (TLS impersonation + JSON-LD/microdata extraction) "
             "first; if blocked or schema not satisfied, tries Pattern D "
             "(Scrapling, when [hostile] extra installed) for hostile vendors; "
-            "if D is skipped or also fails, escalates to Pattern E1 "
-            "(Crawl4AI + LLM); if still blocked, escalates to Pattern E2 "
-            "(browser-use multi-step agent). Set hostile_only=True to skip "
-            "the A/B/C ladder for vendors recon-classified as hostile — saves "
-            "~2-3s per call. Returns pattern_used + pattern_attempts + "
+            "then a stealth-browser render with the same deterministic "
+            "extractors and NO LLM (v1.6.0); if that still yields nothing, "
+            "escalates to Pattern E1 (Crawl4AI + LLM). Pattern E2 (browser-use "
+            "multi-step agent) runs only with interactive=True — it is the "
+            "priciest tier and earns its cost on login / pagination / dynamic "
+            "forms, not on a page that is simply walled. Set hostile_only=True "
+            "to skip the A/B/C ladder for vendors recon-classified as hostile — "
+            "saves ~2-3s per call. Returns pattern_used + pattern_attempts + "
+            "challenge_detected (the bot vendor that walled us, or null) + "
             "is_structured (sidecar's success verdict) + hostile_skipped "
             "(true when [hostile] extra missing)."
         ),
@@ -817,8 +1307,14 @@ def _build_server(  # noqa: PLR0915 — single-place tool registration
         hostile_fallback: bool = True,
         pattern_d_network_idle: bool = False,
         persist_browser_profile_dir: str | None = None,
+        interactive: bool = False,
     ) -> dict[str, Any]:
-        """Run the full A/B/C → D → E1 → E2 escalation ladder.
+        """Run the full A/B/C → D → render → E1 → E2 escalation ladder.
+
+        Set interactive=True only when the target genuinely needs a multi-step
+        agent (login, pagination, dynamic forms). E2 is by far the most
+        expensive tier, so by default a blocked E1 stops and returns the blocked
+        result instead of spending an agent loop to hit the same wall.
 
         Set hostile_only=True to skip A/B/C and start at Pattern D (mirrors
         ``mode='hostile'`` on the REST side). When D fails with
@@ -852,8 +1348,9 @@ def _build_server(  # noqa: PLR0915 — single-place tool registration
         else:
             profile_dir = None
 
+        state: dict[str, Any] = {}
         try:
-            return await _auto_scrape_inner(
+            payload = await _auto_scrape_inner(
                 url=url,
                 schema_json=schema_json,
                 instruction=instruction,
@@ -864,12 +1361,130 @@ def _build_server(  # noqa: PLR0915 — single-place tool registration
                 hostile_fallback=hostile_fallback,
                 pattern_d_network_idle=pattern_d_network_idle,
                 user_data_dir=profile_dir,
+                interactive=interactive,
+                state=state,
             )
+            # Reported no matter which tier won: the vendor that walled us is
+            # the single most useful fact for tuning a target.
+            payload["challenge_detected"] = state.get("challenge_detected")
+            # F2: remember which tier reached content so the next call for this
+            # domain starts there.
+            _record_policy(payload, url, state)
+            return payload
         finally:
             if cleanup_dir is not None:
                 import shutil  # noqa: PLC0415
 
                 shutil.rmtree(cleanup_dir, ignore_errors=True)
+
+    # ---- Tool: map_site (NEW v1.6.0) --------------------------------------
+
+    @server.tool(
+        name="map_site",
+        description=(
+            "Discover URLs on a site. Combines sitemaps (found via robots.txt "
+            "Sitemap: directives, falling back to /sitemap.xml) with links from "
+            "the seed page. Cheap — no browser, no LLM. Use before crawl_site to "
+            "see how big a job it is; truncation is reported, never silent."
+        ),
+    )
+    async def map_site_tool(
+        url: str,
+        max_urls: int = 200,
+        same_domain: bool = True,
+        include_sitemap: bool = True,
+        fetch_seed: bool = True,
+        timeout_s: float = 30.0,
+    ) -> dict[str, Any]:
+        """Discover URLs on the seed's site."""
+        from scrapper_tool.crawl.map import make_ladder_fetch, map_site  # noqa: PLC0415
+
+        result = await map_site(
+            url,
+            max_urls=max_urls,
+            same_domain=same_domain,
+            include_sitemap=include_sitemap,
+            fetch=make_ladder_fetch(timeout_s) if fetch_seed else None,
+        )
+        return {
+            "seed": result.seed,
+            "urls": result.urls,
+            "count": len(result.urls),
+            "from_sitemap": result.from_sitemap,
+            "from_links": result.from_links,
+            "truncated": result.truncated,
+            "dropped_by_limit": result.dropped_by_limit,
+            "sitemaps_read": list(result.sitemaps_read),
+        }
+
+    # ---- Tool: crawl_site (NEW v1.6.0) -----------------------------------
+
+    @server.tool(
+        name="crawl_site",
+        description=(
+            "Crawl a site breadth-first, running the full auto_scrape cascade on "
+            "each page — so every page benefits from recipe replay, the render "
+            "tier, and proxy rotation, and the recipe learned on page one makes "
+            "the rest cheap. robots.txt is honoured by default, including "
+            "Crawl-delay. Bounded by depth / max_pages / concurrency, and the "
+            "response reports what the bounds left unvisited. Page HTML is "
+            "omitted by default: a 50-page crawl of rendered pages is tens of MB "
+            "and would swamp the agent's context."
+        ),
+    )
+    async def crawl_site_tool(
+        url: str,
+        schema_json: dict[str, Any] | None = None,
+        depth: int = 2,
+        max_pages: int = 25,
+        concurrency: int = 4,
+        same_domain: bool = True,
+        respect_robots: bool = True,
+        interactive: bool = False,
+        timeout_s: float = 120.0,
+    ) -> dict[str, Any]:
+        """Crawl from ``url``, running the auto cascade per page."""
+        from scrapper_tool.crawl.crawl import crawl_to_list  # noqa: PLC0415
+
+        async def scrape_one(target: str) -> dict[str, Any]:
+            return await _auto_scrape_inner(
+                url=target,
+                schema_json=schema_json,
+                instruction=None,
+                model=None,
+                browser=None,
+                timeout_s=timeout_s,
+                hostile_only=False,
+                hostile_fallback=True,
+                pattern_d_network_idle=False,
+                user_data_dir=None,
+                interactive=interactive,
+            )
+
+        pages, stats = await crawl_to_list(
+            url,
+            scrape=scrape_one,
+            depth=depth,
+            max_pages=max_pages,
+            concurrency=concurrency,
+            same_domain=same_domain,
+            respect_robots=respect_robots,
+        )
+        results: list[dict[str, Any]] = []
+        for page in pages:
+            payload = dict(page.payload or {})
+            payload.pop("body", None)  # the bulky field; extracted data is the point
+            results.append(
+                {
+                    "url": page.url,
+                    "depth": page.depth,
+                    "ok": page.ok,
+                    "error": page.error,
+                    "skipped_reason": page.skipped_reason,
+                    "result": payload or None,
+                }
+            )
+        return {"seed": url, "pages": results, "stats": stats.as_dict()}
 
     # ---- Tool: canary -----------------------------------------------------
 

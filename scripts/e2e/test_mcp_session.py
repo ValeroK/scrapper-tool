@@ -91,7 +91,7 @@ async def main() -> None:  # noqa: PLR0915 - sequential narrative, intentional
             r = await session.call_tool("canary", {"url": "https://example.com"})
             data = _payload(r)
             assert isinstance(data, dict), data
-            assert data.get("winning_profile") == "chrome133a", data
+            assert data.get("winning_profile") == "chrome146", data
             assert data.get("exit_code") == 0, data
             print(f"[5.A] [OK] winning_profile={data['winning_profile']}")
             print()

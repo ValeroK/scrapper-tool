@@ -80,7 +80,7 @@ class TestAgentExtract:
 
     @pytest.mark.asyncio
     async def test_explicit_config_used_verbatim(self, patch_run_extract: AsyncMock) -> None:
-        cfg = AgentConfig(model="custom:1b", browser="zendriver")
+        cfg = AgentConfig(model="custom:1b", browser="patchright")
         await runner_mod.agent_extract("https://e.com", schema={"x": 1}, config=cfg)
         passed = patch_run_extract.await_args.kwargs["config"]
         assert passed is cfg
