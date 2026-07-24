@@ -288,6 +288,10 @@ module = [
     "crawl4ai.*",
     "browser_use.*",
     "patchright.*",
+    # playwright is pulled only by the [full]/[llm-agent] extras (via scrapling
+    # + crawl4ai), not by [dev] — the extra the CI lint job installs — so mypy
+    # there can't find its stubs. The Obscura backend imports it lazily.
+    "playwright.*",
     "camoufox.*",
     "browserforge.*",
     "langchain_ollama.*",
