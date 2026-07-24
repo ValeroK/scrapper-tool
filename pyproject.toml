@@ -168,6 +168,27 @@ override-dependencies = [
     # additive by design, so the override lets all three stay current; the
     # backend launch-contract tests are the tripwire if that stops being true.
     "typing-extensions>=4.16",
+    # browser-use 0.13 also pins ``pypdf==6.10.2`` exactly, which carries four
+    # CVEs (CVE-2026-59935/6/7/8) that pip-audit fails the build on. 6.14.2 fixes
+    # all four and is a patch-level bump over 6.10 (pypdf is used only for
+    # browser-use's optional PDF reading), so the override is safe and keeps CI's
+    # dependency-audit gate green.
+    "pypdf>=6.14.2",
+    # Same story for pillow: browser-use pins ``pillow==12.2.0`` exactly, which
+    # carries PYSEC-2026-3493/3494. 12.3.0 is a patch fix. Our own extra already
+    # declares ``pillow>=10``, so this only overrides browser-use's exact pin.
+    "pillow>=12.3",
+    # browser-use's exact pins also drag in CVE-affected click and mcp:
+    #   click==8.3.1  -> PYSEC-2026-2132        (fixed 8.3.3)
+    #   mcp==1.26.0   -> PYSEC-2026-3481/2/3    (fixed 1.27.2/1.28.1)
+    # Both fixed versions satisfy every other constraint (scrapling wants
+    # click>=8.3.0 and mcp>=1.27.0), and mcp is our own direct dep, so bumping
+    # it forward is squarely intended.
+    "click>=8.3.3",
+    "mcp>=1.28.1",
+    # ...and aiohttp: browser-use pins ``aiohttp==3.13.4`` (PYSEC-2026-2105..2108);
+    # 3.14.1 fixes all four and stays under the <4.0 cap every other consumer sets.
+    "aiohttp>=3.14.1",
 ]
 
 # When NOT using the [full] extra, ``[hostile]`` and ``[llm-agent]``
