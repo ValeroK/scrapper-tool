@@ -36,6 +36,15 @@ All notable changes to `scrapper-tool` are recorded here. Format follows [Keep a
   additive and only dragged other packages back.
 
 ### Added
+- **One library entrypoint: `scrapper_tool.scrape` and `crawl_site`.** The whole
+  autonomous cascade — replay → HTTP ladder → Pattern D → render → E1 → (E2 if
+  `interactive`), with recipe learning, per-domain tier memory, challenge
+  detection, and proxy rotation — is now one `await scrape(url, schema=...)` call
+  with no REST sidecar or MCP server to stand up. It delegates to the same
+  cascade the `/scrape` endpoint runs (not a parallel implementation), so the
+  three surfaces can't drift; the cascade body's FastAPI imports are lazy, so the
+  library call needs no `[http]` extra. `crawl_site` streams `CrawlPage`s,
+  running that cascade per page.
 - **Observability for the intelligence tiers.** `/metrics` gains
   `scrapper_challenge_detected_total` (by bot vendor),
   `scrapper_recipe_events_total` (hit / learned / drift), and

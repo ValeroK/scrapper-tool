@@ -39,6 +39,7 @@ follow SemVer: breaking changes will only land in a new major version.
 from __future__ import annotations
 
 from scrapper_tool.adapter import Adapter
+from scrapper_tool.cascade import crawl_site, scrape
 from scrapper_tool.errors import (
     AgentBlockedError,
     AgentError,
@@ -122,7 +123,9 @@ __all__ = [
     "agent_browse",
     "agent_extract",
     "agent_session",
+    "crawl_site",
     "request_with_ladder",
     "request_with_retry",
+    "scrape",
     "vendor_client",
 ]
