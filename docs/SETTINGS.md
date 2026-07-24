@@ -170,7 +170,8 @@ E2     browser-use agent            -> priciest, interactive=true only
 |---------|---------|---------|
 | `SCRAPPER_TOOL_RENDER_TIER` | `1` (on) | The stealth-render tier. Set `0` to skip straight from D to the LLM tiers. |
 | `SCRAPPER_TOOL_RECIPE_CACHE` | `1` (on) | Learn-once / replay. Set `0` to disable both learning and replay. |
-| `SCRAPPER_TOOL_RECIPE_DIR` | temp dir | Where learned recipes are stored (one JSON file per domain). |
+| `SCRAPPER_TOOL_RECIPE_DIR` | temp dir | Where learned recipes and domain policies are stored (one JSON file per domain). |
+| `SCRAPPER_TOOL_DOMAIN_POLICY` | `1` (on) | Per-domain tier memory (see below). Set `0` to always run the full cascade. |
 
 The render tier is on by default because it is both cheaper and more reliable
 than escalating to an LLM. Measured on real targets: one site returned 403 on
@@ -208,6 +209,32 @@ strictly more fragile for no gain. Derivation also declines when a page's only
 handles are build-generated class hashes and it carries no `data-testid`-style
 attribute — a missing recipe just means full price next time, while a wrong one
 would mean wrong data indefinitely.
+
+### Per-domain tier memory (self-tuning cascade)
+
+The cascade remembers which tier reached content on each domain and starts there
+next time. On a site where the HTTP ladder always 403s and only a render gets
+through (store.mopar.com, g2.com), paying for the ladder and Pattern D on every
+request just to watch them fail is pure latency; once render has won there twice,
+the cascade skips straight to it.
+
+It is deliberately conservative:
+
+- **It only skips *cheaper* tiers, never jumps past a working one.** The worst
+  case of a wrong "start at render" is one wasted browser launch — the cascade
+  still falls through to the LLM tiers, so it can never produce a wrong answer,
+  only a slightly slower one.
+- **Two wins at the same tier are required** before a domain is trusted; one
+  success could be a fluke (a proxy rotation, a block briefly lifting).
+- **It expires after 24h.** A site that tightened *or relaxed* its posture is
+  re-discovered — the TTL is the only thing that re-probes the cheap tiers on a
+  domain we've learned to skip them on, so without it a site that got easier
+  would be stuck on the expensive tier forever.
+- The replay tier (cached recipe) always runs first regardless — a cache hit is
+  cheaper than every tier the policy chooses between.
+
+Stored under `<recipe dir>/policy/`. A blocked or errored result never teaches
+the policy; only a real win does.
 
 ### Challenge detection
 

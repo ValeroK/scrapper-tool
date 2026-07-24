@@ -626,6 +626,83 @@ def _fake_agent_module_for_e1() -> MagicMock:
     return agent_module
 
 
+# ---- F2: per-domain tier memory (MCP parity) ------------------------------
+
+
+class TestAutoScrapePolicySkip:
+    """MCP must self-tune the same way REST does: a domain that has repeatedly
+    needed render stops paying for the ladder on every call."""
+
+    @pytest.mark.asyncio
+    async def test_confident_policy_skips_the_ladder(
+        self, server: object, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from datetime import UTC, datetime
+
+        from scrapper_tool.recipe.policy import DomainPolicy, get_policy_store
+
+        get_policy_store()._write(  # type: ignore[attr-defined]
+            "walled.test",
+            DomainPolicy(
+                domain="walled.test",
+                best_tier="render",
+                updated_at=datetime.now(UTC).isoformat(),
+                observations=3,
+            ),
+        )
+
+        async def spy_ladder(method: str, url: str, **kwargs: Any) -> Any:
+            raise AssertionError("ladder must be skipped when policy says render")
+
+        monkeypatch.setattr(mcp_module, "request_with_ladder", spy_ladder)
+        monkeypatch.setattr(mcp_module, "_try_pattern_d_for_auto_scrape", _skip_d_for_auto_scrape)
+
+        product = (
+            '<html><head><script type="application/ld+json">'
+            '{"@context":"https://schema.org","@type":"Product","name":"W",'
+            '"offers":{"@type":"Offer","price":"9.99","priceCurrency":"USD"}}'
+            "</script></head><body></body></html>"
+        )
+
+        import scrapper_tool.patterns.render as render_mod
+
+        monkeypatch.setenv("SCRAPPER_TOOL_RENDER_TIER", "1")
+
+        async def fake_render(url: str, **_kwargs: Any) -> Any:
+            return render_mod.RenderResult(html=product, status=200, final_url=url)
+
+        monkeypatch.setattr(render_mod, "render_html", fake_render)
+
+        tool = _get_tool(server, "auto_scrape")
+        result = await tool.fn(url="https://walled.test/p")  # type: ignore[attr-defined]
+
+        assert result["pattern_used"] == "render"
+        assert "a_b_c" not in result["pattern_attempts"]
+
+    @pytest.mark.asyncio
+    async def test_an_ab_c_win_is_recorded(
+        self, server: object, fake_curl: type[FakeCurlSession], monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from scrapper_tool.recipe.policy import get_policy_store
+
+        fake_curl.STATUS_FOR_PROFILE = {"chrome146": 200}
+        fake_curl.RESPONSE_TEXT_FOR_PROFILE = {
+            "chrome146": (
+                '<html><head><script type="application/ld+json">'
+                '{"@context":"https://schema.org","@type":"Product","name":"W",'
+                '"offers":{"@type":"Offer","price":"1.00","priceCurrency":"USD"}}'
+                "</script></head><body></body></html>"
+            )
+        }
+
+        tool = _get_tool(server, "auto_scrape")
+        await tool.fn(url="https://plain.test/p")  # type: ignore[attr-defined]
+
+        policy = get_policy_store().get("https://plain.test/p")
+        assert policy is not None
+        assert policy.best_tier == "a_b_c"
+
+
 # ---- B3: challenge detection drives escalation (MCP parity) ---------------
 
 

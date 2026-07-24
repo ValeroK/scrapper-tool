@@ -20,6 +20,13 @@ that only exists inside a JSON-LD block yields no recipe, correctly.
 from __future__ import annotations
 
 from scrapper_tool.recipe.derive import Recipe, derive_recipe, registrable_domain
+from scrapper_tool.recipe.policy import (
+    DomainPolicy,
+    DomainPolicyStore,
+    domain_policy_enabled,
+    get_policy_store,
+    set_policy_store,
+)
 from scrapper_tool.recipe.store import (
     JsonFileRecipeStore,
     RecipeStore,
@@ -30,13 +37,18 @@ from scrapper_tool.recipe.store import (
 )
 
 __all__ = [
+    "DomainPolicy",
+    "DomainPolicyStore",
     "JsonFileRecipeStore",
     "Recipe",
     "RecipeStore",
     "cache_key",
     "derive_recipe",
+    "domain_policy_enabled",
+    "get_policy_store",
     "get_store",
     "recipe_cache_enabled",
     "registrable_domain",
+    "set_policy_store",
     "set_store",
 ]

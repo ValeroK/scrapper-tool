@@ -1952,6 +1952,191 @@ class TestRecipeLearnAndReplay:
         assert body["pattern_used"] != "replay", "a recipe for other fields must not be reused"
 
 
+# --- F2: per-domain tier memory ---------------------------------------------
+
+
+class TestDomainPolicySkip:
+    """The self-tuning cascade: once a domain has repeatedly needed render,
+    stop paying for the ladder and Pattern D on every request.
+
+    The safety property under test is that skipping is a *starting hint* — the
+    cascade still reaches the same answer, just faster, and a wrong policy can
+    only waste one tier, never corrupt a result.
+    """
+
+    @staticmethod
+    def _blocked_ladder(monkeypatch: pytest.MonkeyPatch) -> None:
+        from scrapper_tool.errors import BlockedError
+
+        async def fake_ladder(method: str, url: str, **kwargs: Any) -> Any:
+            raise BlockedError("blocked")
+
+        monkeypatch.setattr("scrapper_tool.ladder.request_with_ladder", fake_ladder)
+        monkeypatch.setattr(http_server, "_hostile_available", lambda: False)
+
+    @pytest.mark.asyncio
+    async def test_a_confident_render_policy_skips_the_ladder(
+        self, app_no_auth: Any, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Two render wins later, the ladder and D are skipped entirely."""
+        from datetime import UTC, datetime
+
+        from scrapper_tool.recipe.policy import DomainPolicy, get_policy_store
+
+        # Pre-seed a confident policy (2 observations at render).
+        get_policy_store()._write(  # type: ignore[attr-defined]
+            "walled.test",
+            DomainPolicy(
+                domain="walled.test",
+                best_tier="render",
+                updated_at=datetime.now(UTC).isoformat(),
+                observations=2,
+            ),
+        )
+        ladder_calls: list[str] = []
+
+        async def spy_ladder(method: str, url: str, **kwargs: Any) -> Any:
+            ladder_calls.append(url)
+            raise AssertionError("the ladder must be skipped when policy says render")
+
+        monkeypatch.setattr("scrapper_tool.ladder.request_with_ladder", spy_ladder)
+        monkeypatch.setattr(http_server, "_hostile_available", lambda: False)
+        # Product HTML (JSON-LD) so render wins with no caller schema.
+        _install_fake_render(monkeypatch, html=_PRODUCT_HTML)
+
+        async with _client(app_no_auth) as client:
+            body = (await client.post("/scrape", json={"url": "https://walled.test/p"})).json()
+
+        assert body["pattern_used"] == "render"
+        assert ladder_calls == [], "a confident render policy must not touch the ladder"
+        assert "a_b_c" not in body["pattern_attempts"]
+        assert "d" not in body["pattern_attempts"]
+        policy_rows = [r for r in body["escalation_log"] if r["step"] == "policy"]
+        assert policy_rows and "start at render" in policy_rows[0]["detail"]
+
+    @pytest.mark.asyncio
+    async def test_an_unconfident_policy_does_not_skip(
+        self, app_no_auth: Any, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """One win is a fluke; the full cascade must still run."""
+
+        async def fake_ladder(method: str, url: str, **kwargs: Any) -> Any:
+            return _make_response(text=_PRODUCT_HTML, url=url), "chrome146"
+
+        monkeypatch.setattr("scrapper_tool.ladder.request_with_ladder", fake_ladder)
+        from datetime import UTC, datetime
+
+        from scrapper_tool.recipe.policy import DomainPolicy, get_policy_store
+
+        get_policy_store()._write(  # type: ignore[attr-defined]
+            "plain.test",
+            DomainPolicy(
+                domain="plain.test",
+                best_tier="render",
+                updated_at=datetime.now(UTC).isoformat(),
+                observations=1,  # not confident
+            ),
+        )
+
+        async with _client(app_no_auth) as client:
+            body = (await client.post("/scrape", json={"url": "https://plain.test/p"})).json()
+
+        assert body["pattern_used"] == "a_b_c", "one observation must not skip the ladder"
+
+    @pytest.mark.asyncio
+    async def test_two_render_wins_teach_the_policy_to_skip(
+        self, app_no_auth: Any, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """End to end: the third request skips what the first two learned."""
+        self._blocked_ladder(monkeypatch)
+        renders: list[dict[str, Any]] = []
+        _install_fake_render(monkeypatch, html=_PRODUCT_HTML, calls=renders)
+
+        async with _client(app_no_auth) as client:
+            # No schema -> render wins on JSON-LD, no recipe learned (so replay
+            # won't short-circuit and mask the policy behaviour).
+            for _ in range(2):
+                r = (await client.post("/scrape", json={"url": "https://learn.test/p"})).json()
+                assert r["pattern_used"] == "render"
+
+            ladder_after: list[str] = []
+
+            async def spy_ladder(method: str, url: str, **kwargs: Any) -> Any:
+                ladder_after.append(url)
+                raise AssertionError("ladder should be skipped by now")
+
+            monkeypatch.setattr("scrapper_tool.ladder.request_with_ladder", spy_ladder)
+            third = (await client.post("/scrape", json={"url": "https://learn.test/p"})).json()
+
+        assert third["pattern_used"] == "render"
+        assert ladder_after == [], "after two render wins the ladder is skipped"
+
+    @pytest.mark.asyncio
+    async def test_policy_disabled_runs_the_full_cascade(
+        self, app_no_auth: Any, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from datetime import UTC, datetime
+
+        from scrapper_tool.recipe.policy import DomainPolicy, get_policy_store
+
+        get_policy_store()._write(  # type: ignore[attr-defined]
+            "walled.test",
+            DomainPolicy(
+                domain="walled.test",
+                best_tier="render",
+                updated_at=datetime.now(UTC).isoformat(),
+                observations=5,
+            ),
+        )
+        monkeypatch.setenv("SCRAPPER_TOOL_DOMAIN_POLICY", "0")
+
+        async def fake_ladder(method: str, url: str, **kwargs: Any) -> Any:
+            return _make_response(text=_PRODUCT_HTML, url=url), "chrome146"
+
+        monkeypatch.setattr("scrapper_tool.ladder.request_with_ladder", fake_ladder)
+
+        async with _client(app_no_auth) as client:
+            body = (await client.post("/scrape", json={"url": "https://walled.test/p"})).json()
+
+        assert body["pattern_used"] == "a_b_c", "disabled policy must not skip anything"
+
+    @pytest.mark.asyncio
+    async def test_a_tier_one_win_is_recorded(
+        self, app_no_auth: Any, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from scrapper_tool.recipe.policy import get_policy_store
+
+        async def fake_ladder(method: str, url: str, **kwargs: Any) -> Any:
+            return _make_response(text=_PRODUCT_HTML, url=url), "chrome146"
+
+        monkeypatch.setattr("scrapper_tool.ladder.request_with_ladder", fake_ladder)
+
+        async with _client(app_no_auth) as client:
+            await client.post("/scrape", json={"url": "https://plain.test/p"})
+
+        policy = get_policy_store().get("https://plain.test/p")
+        assert policy is not None
+        assert policy.best_tier == "a_b_c"
+
+    @pytest.mark.asyncio
+    async def test_a_blocked_result_is_not_recorded(
+        self, app_no_auth: Any, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Only a real win teaches the policy — a blocked E1 must not."""
+        from scrapper_tool.recipe.policy import get_policy_store
+
+        self._blocked_ladder(monkeypatch)
+        blocked = _fake_agent_result("extract", blocked=True)
+        blocked.error = "captcha"
+        blocked.final_url = "https://hard.test/p"
+        _mock_agent_module(monkeypatch, extract_result=blocked)
+
+        async with _client(app_no_auth) as client:
+            await client.post("/scrape", json={"url": "https://hard.test/p"})
+
+        assert get_policy_store().get("https://hard.test/p") is None
+
+
 # --- B4: E2 is gated behind interactive=true --------------------------------
 
 

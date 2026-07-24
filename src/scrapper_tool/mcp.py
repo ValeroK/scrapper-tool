@@ -375,8 +375,64 @@ async def _auto_scrape_inner(
     if replayed is not None:
         return replayed
 
+    # F2 — per-domain tier memory. Skip tiers this domain has repeatedly proven
+    # it doesn't need. Starting hint only; the cascade still falls through.
+    start_rank = _policy_start_rank(url, cascade_state)
+
     # ----- Pattern A/B/C -----
-    attempts.append("a_b_c")
+    if start_rank <= _tier_rank_mcp("a_b_c"):
+        attempts.append("a_b_c")
+        resp, _profile, err = await _try_a_b_c(url, schema_json, attempts, cascade_state)
+        if resp is not None:
+            return resp
+        last_error = err  # carries the error string when A/B/C failed/blocked
+
+    # ----- Deterministic tiers: Pattern D, then stealth render (no LLM) -----
+    payload, last_error, hostile_skipped = await _run_deterministic_tiers(
+        url=url,
+        schema_json=schema_json,
+        attempts=attempts,
+        timeout_s=timeout_s,
+        pattern_d_network_idle=pattern_d_network_idle,
+        browser=browser,
+        user_data_dir=user_data_dir,
+        last_error=last_error,
+        challenge=cascade_state.get("challenge_detected"),
+        start_rank=start_rank,
+    )
+    if payload is not None:
+        return payload
+
+    # ----- E1 → E2 escalation -----
+    return await _continue_to_e_tier(
+        url,
+        schema_json,
+        instruction,
+        model,
+        browser,
+        timeout_s,
+        attempts,
+        last_error,
+        hostile_skipped,
+        user_data_dir,
+        interactive,
+    )
+
+
+async def _try_a_b_c(
+    url: str,
+    schema_json: dict[str, Any] | None,
+    attempts: list[str],
+    cascade_state: dict[str, Any],
+) -> tuple[dict[str, Any] | None, str | None, str | None]:
+    """Run the A/B/C ladder for MCP auto_scrape.
+
+    Returns ``(success_payload, profile, error_or_none)``. On success the payload
+    is set; otherwise the third element is the error string (or None) for
+    ``last_error``. Extracted so the cascade body stays under the branch limit
+    now that the F2 gate wraps it.
+    """
+    last_error: str | None = None
     try:
         resp, profile = await request_with_ladder("GET", url)
         text = resp.text or ""
@@ -398,22 +454,26 @@ async def _auto_scrape_inner(
         )
         if success:
             truncated_text, truncated = _truncate(text)
-            return {
-                "pattern_used": "a_b_c",
-                "pattern_attempts": attempts,
-                "url": str(resp.url),
-                "winning_profile": profile,
-                "product": product,
-                "microdata_price": price,
-                "data": None,
-                "rendered_markdown": None,
-                "body": truncated_text,
-                "truncated": truncated,
-                "blocked": False,
-                "error": None,
-                "hostile_skipped": False,
-                "is_structured": True,
-            }
+            return (
+                {
+                    "pattern_used": "a_b_c",
+                    "pattern_attempts": attempts,
+                    "url": str(resp.url),
+                    "winning_profile": profile,
+                    "product": product,
+                    "microdata_price": price,
+                    "data": None,
+                    "rendered_markdown": None,
+                    "body": truncated_text,
+                    "truncated": truncated,
+                    "blocked": False,
+                    "error": None,
+                    "hostile_skipped": False,
+                    "is_structured": True,
+                },
+                profile,
+                None,
+            )
         # Not a signal, so we escalate either way — but knowing *which* vendor
         # walled us decides whether Pattern D is worth attempting at all.
         vendor = is_interstitial(text, resp.status_code)
@@ -421,36 +481,7 @@ async def _auto_scrape_inner(
             cascade_state["challenge_detected"] = vendor
     except BlockedError as exc:
         last_error = f"a_b_c: {exc}"
-
-    # ----- Deterministic tiers: Pattern D, then stealth render (no LLM) -----
-    payload, last_error, hostile_skipped = await _run_deterministic_tiers(
-        url=url,
-        schema_json=schema_json,
-        attempts=attempts,
-        timeout_s=timeout_s,
-        pattern_d_network_idle=pattern_d_network_idle,
-        browser=browser,
-        user_data_dir=user_data_dir,
-        last_error=last_error,
-        challenge=cascade_state.get("challenge_detected"),
-    )
-    if payload is not None:
-        return payload
-
-    # ----- E1 → E2 escalation -----
-    return await _continue_to_e_tier(
-        url,
-        schema_json,
-        instruction,
-        model,
-        browser,
-        timeout_s,
-        attempts,
-        last_error,
-        hostile_skipped,
-        user_data_dir,
-        interactive,
-    )
+    return None, None, last_error
 
 
 async def _hostile_only_cascade(
@@ -516,6 +547,7 @@ async def _run_deterministic_tiers(
     user_data_dir: str | None,
     last_error: str | None,
     challenge: str | None = None,
+    start_rank: int = 0,
 ) -> tuple[dict[str, Any] | None, str | None, bool]:
     """Run the no-LLM tiers between the HTTP ladder and the agent tiers.
 
@@ -529,9 +561,15 @@ async def _run_deterministic_tiers(
     weapon is ``solve_cloudflare``, so a non-Cloudflare wall means D would burn
     a browser launch re-fetching the same interstitial — skip straight to the
     render tier. A Cloudflare wall is exactly what D is for, so it still runs.
+
+    ``start_rank`` (F2): a confident per-domain policy may have learned this
+    domain needs render or an LLM tier, in which case D — and possibly render —
+    are known-doomed and skipped.
     """
     hostile_skipped = False
-    skip_d = challenge is not None and challenge != "cloudflare"
+    skip_d = (challenge is not None and challenge != "cloudflare") or start_rank > _tier_rank_mcp(
+        "d"
+    )
     if not skip_d:
         d_payload, d_error, hostile_skipped = await _try_pattern_d_for_auto_scrape(
             url, schema_json, attempts, timeout_s, pattern_d_network_idle, user_data_dir
@@ -541,13 +579,14 @@ async def _run_deterministic_tiers(
         if d_error is not None:
             last_error = d_error
 
-    r_payload, r_error = await _try_render_for_auto_scrape(
-        url, schema_json, attempts, timeout_s, browser, user_data_dir
-    )
-    if r_payload is not None:
-        return r_payload, last_error, hostile_skipped
-    if r_error is not None:
-        last_error = r_error
+    if start_rank <= _tier_rank_mcp("render"):
+        r_payload, r_error = await _try_render_for_auto_scrape(
+            url, schema_json, attempts, timeout_s, browser, user_data_dir
+        )
+        if r_payload is not None:
+            return r_payload, last_error, hostile_skipped
+        if r_error is not None:
+            last_error = r_error
     return None, last_error, hostile_skipped
 
 
@@ -744,6 +783,58 @@ def _learn_recipe_mcp(
         learn_from_success(url, html, data, source_tier=source_tier, schema_json=schema_json)
     except Exception:
         return  # an optimisation for next time; never fail the current call
+
+
+def _policy_start_rank(url: str, state: dict[str, Any]) -> int:
+    """F2 — lowest tier rank worth attempting for ``url``. REST parity.
+
+    Records the chosen rank in ``state`` and logs the skip. Any failure returns 0
+    (run everything), because a policy problem must never break a scrape.
+    """
+    try:
+        from scrapper_tool.recipe.policy import (  # noqa: PLC0415
+            domain_policy_enabled,
+            get_policy_store,
+        )
+
+        if not domain_policy_enabled():
+            return 0
+        policy = get_policy_store().get(url)
+    except Exception:
+        return 0
+    if policy is None:
+        return 0
+    rank = policy.start_tier_rank()
+    state["policy_start_rank"] = rank
+    if rank > 0:
+        from scrapper_tool._logging import get_logger  # noqa: PLC0415
+
+        get_logger(__name__).info("auto_scrape.policy_skip", url=url, best_tier=policy.best_tier)
+    return rank
+
+
+def _record_policy(payload: dict[str, Any], url: str, state: dict[str, Any]) -> None:
+    """Remember the winning tier for this domain. Best-effort, never raises."""
+    tier = payload.get("pattern_used")
+    if not isinstance(tier, str) or payload.get("blocked"):
+        return
+    try:
+        from scrapper_tool.recipe.policy import (  # noqa: PLC0415
+            domain_policy_enabled,
+            get_policy_store,
+        )
+
+        if not domain_policy_enabled():
+            return
+        get_policy_store().record(url, tier, challenge_vendor=state.get("challenge_detected"))
+    except Exception:
+        return
+
+
+def _tier_rank_mcp(tier: str) -> int:
+    from scrapper_tool.recipe.policy import tier_rank  # noqa: PLC0415
+
+    return tier_rank(tier)
 
 
 def _render_tier_enabled() -> bool:
@@ -1276,6 +1367,9 @@ def _build_server(  # noqa: PLR0915 — single-place tool registration
             # Reported no matter which tier won: the vendor that walled us is
             # the single most useful fact for tuning a target.
             payload["challenge_detected"] = state.get("challenge_detected")
+            # F2: remember which tier reached content so the next call for this
+            # domain starts there.
+            _record_policy(payload, url, state)
             return payload
         finally:
             if cleanup_dir is not None:

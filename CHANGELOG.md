@@ -36,6 +36,17 @@ All notable changes to `scrapper-tool` are recorded here. Format follows [Keep a
   additive and only dragged other packages back.
 
 ### Added
+- **Per-domain tier memory — the self-tuning cascade.** `/scrape` and MCP
+  `auto_scrape` now remember which tier reached content on each domain and start
+  there next time, skipping the tiers a domain has repeatedly proven it doesn't
+  need (e.g. an Akamai/Cloudflare site where the ladder always 403s and only a
+  render works). On by default (`SCRAPPER_TOOL_DOMAIN_POLICY=0` disables), stored
+  under `<recipe dir>/policy/`. Deliberately conservative: it only skips *cheaper*
+  tiers (never jumps past a working one, so it can never produce a wrong answer,
+  only a faster one), requires two wins at the same tier before trusting a domain,
+  expires after 24h so a site that tightened *or relaxed* is re-discovered, and
+  only a real win teaches it — a blocked result never does. The replay tier still
+  runs first regardless.
 - **E1 renders through the Obscura CDP server when `browser="obscura"`.** Until
   now that setting only validated the name — E1 still launched Crawl4AI's own
   Chromium and the Obscura server was never touched. E1 now sets

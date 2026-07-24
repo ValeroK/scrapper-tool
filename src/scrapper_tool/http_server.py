@@ -1566,6 +1566,86 @@ def _should_skip_d_for_challenge(req: Any) -> bool:
     return bool(vendor) and vendor != "cloudflare"
 
 
+def _tier_rank(tier: str) -> int:
+    """Cost rank of a cascade tier (see recipe.policy.TIER_ORDER)."""
+    from scrapper_tool.recipe.policy import tier_rank  # noqa: PLC0415
+
+    return tier_rank(tier)
+
+
+def _policy_start_rank(req: Any) -> int:
+    """Lowest tier rank worth attempting for this URL, per the domain policy.
+
+    0 (start from A/B/C) unless a *confident* policy has learned this domain
+    needs a more expensive tier, in which case the cheaper ones are skipped.
+    Stashes the chosen rank on the request so the deterministic-tier step can
+    read it without a second lookup, and logs the skip for observability.
+    """
+    try:
+        from scrapper_tool.recipe.policy import (  # noqa: PLC0415
+            domain_policy_enabled,
+            get_policy_store,
+        )
+
+        if not domain_policy_enabled():
+            return 0
+        policy = get_policy_store().get(req.url)
+    except Exception as exc:  # a policy problem must never break a scrape
+        _logger.debug("scrape.policy.lookup_failed", url=req.url, error=str(exc)[:120])
+        return 0
+    if policy is None:
+        return 0
+    rank = policy.start_tier_rank()
+    req.__dict__["_policy_start_rank"] = rank
+    if rank > 0:
+        log: list[dict[str, Any]] = req.__dict__.setdefault("_escalation_log", [])
+        log.append(
+            _build_log_entry(
+                "policy",
+                outcome="skipped",
+                reason="ok",
+                duration_s=0.0,
+                detail=(
+                    f"domain learned to start at {policy.best_tier} "
+                    f"({policy.observations} obs); skipping cheaper tiers"
+                ),
+            )
+        )
+        _logger.info(
+            "scrape.policy.skip",
+            url=req.url,
+            best_tier=policy.best_tier,
+            observations=policy.observations,
+        )
+    return rank
+
+
+def _record_policy(payload: dict[str, Any] | None, req: Any) -> None:
+    """After a scrape, remember which tier reached content on this domain.
+
+    Best-effort: any failure is swallowed, because learning is an optimisation
+    for next time and must never affect the result the caller already has.
+    """
+    if payload is None:
+        return
+    tier = payload.get("pattern_used")
+    if not isinstance(tier, str) or payload.get("blocked"):
+        return
+    try:
+        from scrapper_tool.recipe.policy import (  # noqa: PLC0415
+            domain_policy_enabled,
+            get_policy_store,
+        )
+
+        if not domain_policy_enabled():
+            return
+        get_policy_store().record(
+            req.url, tier, challenge_vendor=req.__dict__.get("_challenge_detected")
+        )
+    except Exception as exc:
+        _logger.debug("scrape.policy.record_failed", url=req.url, error=str(exc)[:120])
+
+
 def _render_tier_enabled() -> bool:
     """Render tier is on by default; ``SCRAPPER_TOOL_RENDER_TIER=0`` disables it."""
     raw = os.environ.get("SCRAPPER_TOOL_RENDER_TIER")
@@ -2033,6 +2113,9 @@ async def _do_scrape(req: Any) -> dict[str, Any]:
         # Surfaced here rather than in each tier's return: the vendor that
         # walled us is worth reporting no matter which tier eventually won.
         payload["challenge_detected"] = req.__dict__.get("_challenge_detected")
+        # F2: remember which tier reached content so the next request for this
+        # domain can start there. One place, so every winning tier is recorded.
+        _record_policy(payload, req)
         return payload
     except BaseException:
         raised = True
@@ -2066,8 +2149,15 @@ async def _do_scrape_inner(req: Any, attempts: list[str], start: float) -> dict[
         if replayed is not None:
             return replayed
 
+    # v1.6.0 F2 — per-domain tier memory. If this domain has repeatedly needed a
+    # more expensive tier (the ladder always 403s, only render gets through),
+    # skip the tiers we've learned are doomed. Purely a starting hint: the
+    # cascade still falls through from wherever it starts, and replay above ran
+    # regardless. mode="fetch" is exempt — it's an explicit "A/B/C only" request.
+    start_rank = _policy_start_rank(req) if req.mode == "auto" else 0
+
     # ----- A/B/C -----
-    if req.mode in ("auto", "fetch"):
+    if req.mode in ("auto", "fetch") and start_rank <= _tier_rank("a_b_c"):
         attempts.append("a_b_c")
         a_b_c_start = time.perf_counter()
         try:
@@ -2196,8 +2286,13 @@ async def _do_deterministic_tiers(
     """
     log: list[dict[str, Any]] = req.__dict__.setdefault("_escalation_log", [])
     hostile_skipped = False
+    # F2: the per-domain policy may have learned this domain needs render (or an
+    # LLM tier), in which case D is doomed and worth skipping.
+    start_rank = int(req.__dict__.get("_policy_start_rank", 0))
 
-    if _should_skip_d_for_challenge(req):
+    if start_rank > _tier_rank("d"):
+        pass  # policy says skip D — see _policy_start_rank
+    elif _should_skip_d_for_challenge(req):
         # A wall Scrapling can't solve — don't spend ~30 s proving it.
         log.append(
             _build_log_entry(
@@ -2218,11 +2313,12 @@ async def _do_deterministic_tiers(
         if d_error is not None:
             last_error = d_error
 
-    r_response, r_error = await _do_render_step(req, attempts, start)
-    if r_response is not None:
-        return r_response, last_error, hostile_skipped
-    if r_error is not None:
-        last_error = r_error
+    if start_rank <= _tier_rank("render"):
+        r_response, r_error = await _do_render_step(req, attempts, start)
+        if r_response is not None:
+            return r_response, last_error, hostile_skipped
+        if r_error is not None:
+            last_error = r_error
     return None, last_error, hostile_skipped
 
 

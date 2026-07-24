@@ -23,6 +23,7 @@ from typing import TYPE_CHECKING
 
 import pytest
 
+from scrapper_tool.recipe.policy import set_policy_store
 from scrapper_tool.recipe.store import set_store
 
 if TYPE_CHECKING:
@@ -58,3 +59,7 @@ def _isolate_recipe_cache(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> No
     """
     monkeypatch.setenv("SCRAPPER_TOOL_RECIPE_DIR", str(tmp_path / "recipes"))
     set_store(None)  # drop the process-wide handle so the new dir takes effect
+    # The per-domain tier policy (F2) lives under the same cache dir and is also
+    # default-ON; reset its process-wide handle for the same reason, else a
+    # policy learned in one test would skip tiers in another.
+    set_policy_store(None)
