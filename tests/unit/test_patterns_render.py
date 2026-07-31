@@ -192,3 +192,90 @@ async def test_render_pinned_proxy_beats_pool(fake_render_backend: dict[str, Any
     )
     assert fake_render_backend["captured"]["options"].proxy == "http://pinned:1"
     assert pool.entries[0].successes == 0  # pinned choice isn't pool-managed
+
+
+class _FakePersistentContext:
+    """Camoufox with ``user_data_dir`` returns a BrowserContext, not a Browser.
+
+    Deliberately exposes neither ``.contexts`` nor ``.new_context`` — that is what
+    a real Playwright ``BrowserContext`` looks like, and what made the old
+    ``browser.contexts[0] if ... else await browser.new_context()`` idiom raise.
+    """
+
+    def __init__(self, page: _FakePage) -> None:
+        self.pages = [page]
+        self.cookies = AsyncMock(return_value=[{"name": "cf_clearance", "value": "persisted"}])
+
+
+@pytest.fixture
+def fake_persistent_backend(monkeypatch: pytest.MonkeyPatch) -> dict[str, Any]:
+    """Backend whose ``playwright_browser`` is a *context*, as Camoufox returns."""
+    page = _FakePage()
+    context = _FakePersistentContext(page)
+
+    class _Backend:
+        name = "camoufox"
+
+        async def launch(self, *, options: Any, fingerprint: Any, behavior: Any) -> Any:
+            from scrapper_tool.agent.backends.browser import BrowserHandle
+
+            async def shutdown() -> None:
+                return None
+
+            return BrowserHandle(
+                name="camoufox", playwright_browser=context, raw=context, shutdown=shutdown
+            )
+
+    monkeypatch.setattr(render_mod, "get_browser_backend", lambda name, cdp_url=None: _Backend())
+    return {"page": page, "context": context}
+
+
+async def test_render_html_handles_camoufox_persistent_context(
+    fake_persistent_backend: dict[str, Any],
+) -> None:
+    """Regression: a persistent-profile render used to raise AttributeError.
+
+    ``persistent_context=True`` (set whenever ``user_data_dir`` is present) makes
+    Camoufox return a BrowserContext. The cascade sets that dir on every
+    ``mode="auto"`` run once ``[hostile]`` is installed, so this was the default
+    path — and it failed before ``resolve_context`` existed.
+    """
+    result = await render_mod.render_html(
+        "https://x.example",
+        options=BrowserLaunchOptions(user_data_dir="/tmp/prof"),
+        settle_s=0,
+    )
+    assert result.html == "<html><body>ok</body></html>"
+    assert result.status == 203
+    assert result.cookies[0]["value"] == "persisted"
+
+
+class TestResolveContext:
+    """The Browser-or-BrowserContext normalizer used by every Playwright tier."""
+
+    async def test_prefers_existing_context(self) -> None:
+        from scrapper_tool.agent.backends.browser import resolve_context
+
+        page = _FakePage()
+        browser = _FakeBrowser(page)
+        assert await resolve_context(browser) is browser.contexts[0]
+
+    async def test_creates_one_when_browser_has_none(self) -> None:
+        from scrapper_tool.agent.backends.browser import resolve_context
+
+        made = _FakeContext(_FakePage())
+
+        class _Empty:
+            contexts: list[Any] = []
+            new_context = AsyncMock(return_value=made)
+
+        browser = _Empty()
+        assert await resolve_context(browser) is made
+        browser.new_context.assert_awaited_once()
+
+    async def test_returns_a_bare_context_unchanged(self) -> None:
+        """The Camoufox persistent case — no .contexts, no .new_context."""
+        from scrapper_tool.agent.backends.browser import resolve_context
+
+        ctx = _FakePersistentContext(_FakePage())
+        assert await resolve_context(ctx) is ctx

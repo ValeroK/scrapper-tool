@@ -4,6 +4,28 @@ All notable changes to `scrapper-tool` are recorded here. Format follows [Keep a
 
 ## [Unreleased]
 
+### Fixed
+
+- **The render tier failed on its own default path.** Whenever a profile dir was in
+  play, the Camoufox backend set `persistent_context=True`, which makes Camoufox
+  call `launch_persistent_context()` and return a Playwright **BrowserContext**
+  rather than a Browser (its `__aenter__` is annotated
+  `Union[Browser, BrowserContext]`). `render_html` then ran
+  `browser.contexts[0] if ... else await browser.new_context()` against it — and a
+  context has neither attribute — so every such render raised `AttributeError`.
+  The cascade allocates an ephemeral profile dir on *every* `mode="auto"` run once
+  `[hostile]` is installed (`_resolve_profile_dir`), and `[hostile]` ships in the
+  recommended `[full]` install while `camoufox` is the default backend. So the
+  documented default configuration hit this on every scrape: `_do_render_step`
+  caught the error, logged `scrape.render.failed`, and the cascade escalated
+  straight past the render tier to the expensive LLM tiers. Earlier live
+  validation missed it because those runs drove `render_html` directly, without
+  the cascade-supplied profile dir. Fixed by a new
+  `agent.backends.browser.resolve_context()` that normalizes Browser-or-Context,
+  prefers an already-open context, and only creates one when none exists —
+  preferring the existing context also avoids attaching to a fresh *incognito*
+  context on CDP-connected backends such as Obscura.
+
 ## [2.0.0] - 2026-07-24
 
 The autonomous-cascade release. One `scrape()` call now runs a self-driving

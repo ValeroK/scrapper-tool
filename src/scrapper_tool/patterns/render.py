@@ -35,6 +35,7 @@ from scrapper_tool.agent.backends.browser import (
     BrowserLaunchOptions,
     get_browser_backend,
     open_browser,
+    resolve_context,
 )
 from scrapper_tool.proxy import resolve_proxy
 
@@ -131,11 +132,7 @@ async def render_html(
             msg = f"browser backend {handle.name!r} exposes no Playwright Browser to render with"
             raise ImportError(msg)
 
-        context = (
-            pw_browser.contexts[0]
-            if getattr(pw_browser, "contexts", None)
-            else await pw_browser.new_context()
-        )
+        context = await resolve_context(pw_browser)
         page = context.pages[0] if getattr(context, "pages", None) else await context.new_page()
 
         response = await page.goto(url, wait_until=wait_until, timeout=timeout_s * 1000)

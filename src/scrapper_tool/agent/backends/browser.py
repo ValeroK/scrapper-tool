@@ -524,6 +524,43 @@ def get_browser_backend(name: str, *, cdp_url: str | None = None) -> BrowserBack
     return table[name]()
 
 
+async def resolve_context(pw_browser: Any) -> Any:
+    """Return a usable Playwright ``BrowserContext`` from whatever a backend handed us.
+
+    Backends return one of two shapes through ``BrowserHandle.playwright_browser``,
+    and callers must not care which:
+
+    * a **Browser** — ``chromium.launch()`` (Patchright), ``connect_over_cdp()``
+      (Obscura), or Camoufox in its non-persistent mode.
+    * a **BrowserContext** — Camoufox with ``user_data_dir`` set, because
+      ``persistent_context=True`` makes it call ``launch_persistent_context()``,
+      whose return type is a context. Its own ``__aenter__`` is annotated
+      ``Union[Browser, BrowserContext]``, so this is contract, not accident.
+
+    The second case is why this helper exists. A ``BrowserContext`` has neither
+    ``.contexts`` nor ``.new_context``, so the obvious
+    ``browser.contexts[0] if ... else await browser.new_context()`` idiom raises
+    ``AttributeError`` on it — and the cascade sets ``user_data_dir`` on every
+    ``mode="auto"`` run once ``[hostile]`` is installed, which is the documented
+    default install. The render tier therefore failed on its own default path.
+
+    Preferring an existing context over creating one also matters on Obscura:
+    ``new_context()`` against a CDP-attached browser opens a fresh *incognito*
+    context that the page we then drive would not be in.
+    """
+    contexts = getattr(pw_browser, "contexts", None)
+    if contexts:
+        # NOTE: Playwright stores contexts in a `set`, so `contexts[0]` is only
+        # deterministic while exactly one exists. Every backend here creates at
+        # most one, but don't rely on the index if that ever changes.
+        return contexts[0]
+    new_context = getattr(pw_browser, "new_context", None)
+    if callable(new_context):
+        return await new_context()
+    # Already a context (Camoufox persistent mode) — use it directly.
+    return pw_browser
+
+
 @asynccontextmanager
 async def open_browser(
     backend: BrowserBackend,
@@ -550,4 +587,5 @@ __all__ = [
     "ScraplingBackend",
     "get_browser_backend",
     "open_browser",
+    "resolve_context",
 ]
