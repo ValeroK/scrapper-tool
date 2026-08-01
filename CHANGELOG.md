@@ -121,6 +121,20 @@ All notable changes to `scrapper-tool` are recorded here. Format follows [Keep a
 
 ### Fixed
 
+- **Wildcard CORS no longer grants credentials (security).** The sidecar
+  configured `allow_origins=["*"]` together with `allow_credentials=True`. That
+  pairing is forbidden by the CORS spec, and the assumption had been that it was
+  inert because browsers reject it. Checked against the pinned Starlette
+  (1.3.1), it is not inert: with a wildcard origin list Starlette **reflects the
+  request's `Origin` header verbatim** and still sends
+  `access-control-allow-credentials: true`. Any page on any origin could
+  therefore make credentialed cross-origin requests to the sidecar and read the
+  responses — which for a service holding an API key, and now session cookies,
+  is an exfiltration path rather than a lint finding. Wildcard origins now
+  disable credentialed CORS and log a warning naming the remedy. Nothing
+  legitimate is lost: the spec requires enumerating origins for credentialed
+  CORS anyway, and anonymous cross-origin requests still work.
+
 - **`user_data_dir_supported` was a false negative on every current install.**
   The probe imported `browser_use.BrowserConfig` and returned False when that
   raised. browser-use 0.13 — the version this project pins — removed that class

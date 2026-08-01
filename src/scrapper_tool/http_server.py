@@ -449,10 +449,41 @@ def _build_app(
         redoc_url="/redoc" if serve_docs else None,
     )
 
+    # Wildcard origins and credentialed CORS must not be combined.
+    #
+    # The CORS spec forbids `Access-Control-Allow-Origin: *` together with
+    # `Access-Control-Allow-Credentials: true`, and the assumption used to be
+    # that this pairing was merely misconfigured-but-inert because browsers
+    # reject it. Checked against the pinned Starlette (1.3.1) it is not inert:
+    # with allow_origins=["*"] and allow_credentials=True, Starlette *reflects*
+    # the request's Origin header verbatim and still sends
+    # allow-credentials: true. A page on any origin can then make credentialed
+    # cross-origin requests to this sidecar and read the responses — which for
+    # a sidecar that holds API keys and session cookies is a real exfiltration
+    # path, not a lint finding.
+    #
+    # So when origins are wildcarded we drop credentials rather than keep an
+    # exploitable pairing. Nothing legitimate is lost: credentialed CORS
+    # requires enumerating origins under the spec anyway, so a deployment that
+    # genuinely needs it must list them, and one that doesn't is unaffected.
+    wildcard_origins = "*" in (cors_origins or [])
+    if wildcard_origins:
+        _logger.warning(
+            "http.cors.credentials_disabled",
+            reason="allow_origins=* cannot be combined with credentialed CORS",
+            remedy="set SCRAPPER_TOOL_HTTP_CORS_ORIGINS to an explicit origin list",
+        )
+        if api_key is None:
+            _logger.warning(
+                "http.cors.open_and_unauthenticated",
+                reason="wildcard CORS with no API key configured",
+                remedy="set SCRAPPER_TOOL_HTTP_API_KEY",
+            )
+
     app.add_middleware(
         CORSMiddleware,
         allow_origins=cors_origins,
-        allow_credentials=True,
+        allow_credentials=not wildcard_origins,
         allow_methods=["*"],
         allow_headers=["*"],
     )
