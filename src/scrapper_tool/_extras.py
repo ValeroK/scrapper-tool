@@ -38,14 +38,17 @@ __all__ = [
     "agent_available",
     "agent_runnable",
     "browser_binary_present",
+    "browser_use_accepts",
     "check_browser_module",
     "cookie_backend_available",
+    "crawl4ai_accepts",
     "crawl4ai_available",
     "geoip2_available",
     "hostile_available",
     "obscura_endpoint_reachable",
     "playwright_browsers_root",
     "probe_llm",
+    "render_tier_enabled",
     "user_data_dir_supported",
 ]
 
@@ -267,39 +270,93 @@ def agent_runnable(browser: str, *, root: Path | None = None) -> bool:
 # ---------------------------------------------------------------------------
 
 
+#: Where browser-use has kept its browser-configuration surface, newest first.
+#: 0.13 dropped the top-level ``BrowserConfig`` in favour of ``BrowserProfile``
+#: (the declarative half) and ``BrowserSession`` (the live half); older releases
+#: only had ``BrowserConfig``. Probing all three keeps the answer correct across
+#: the whole supported range instead of silently reporting "unsupported" the
+#: moment upstream renames a class.
+_BROWSER_USE_CONFIG_CLASSES: tuple[tuple[str, str], ...] = (
+    ("browser_use.browser.profile", "BrowserProfile"),
+    ("browser_use.browser.session", "BrowserSession"),
+    ("browser_use", "BrowserConfig"),
+)
+
+
+def browser_use_accepts(param: str) -> bool:
+    """True if any browser-use config class accepts ``param``.
+
+    Signature inspection, not a browser launch: the failure mode worth catching
+    is "the installed version silently dropped this kwarg", and that is visible
+    statically.
+    """
+    import importlib  # noqa: PLC0415
+    import inspect  # noqa: PLC0415
+
+    for module_name, attr in _BROWSER_USE_CONFIG_CLASSES:
+        try:
+            module = importlib.import_module(module_name)
+            cls = getattr(module, attr, None)
+            if cls is None:
+                continue
+            if param in inspect.signature(cls).parameters:
+                return True
+        except Exception:  # noqa: S112 — see below
+            # Deliberately silent. This loop walks *candidate* locations for a
+            # class that has moved between releases, so two of the three
+            # attempts failing is the normal path, not an anomaly. Logging each
+            # miss would emit noise on every healthy install; the caller gets
+            # the only answer that matters (False) when every candidate misses.
+            continue
+    return False
+
+
+def crawl4ai_accepts(param: str) -> bool:
+    """True if Crawl4AI's ``BrowserConfig`` accepts ``param``."""
+    import inspect  # noqa: PLC0415
+
+    try:
+        from crawl4ai import BrowserConfig  # noqa: PLC0415
+
+        return param in inspect.signature(BrowserConfig).parameters
+    except Exception:
+        return False
+
+
 def user_data_dir_supported() -> bool:
-    """Probe whether installed Crawl4AI / browser-use accept ``user_data_dir``.
+    """Probe whether installed Crawl4AI *and* browser-use accept ``user_data_dir``.
 
-    Inspects the ``BrowserConfig`` signatures (no browser launch) — much
-    cheaper than spinning up a probe browser, and sufficient because the
-    failure mode we care about is "library version silently dropped the
-    kwarg." If either lib is uninstalled, returns False with no error (the
-    cascade still works without persistence — Pattern D just doesn't share its
-    CF clearance).
+    Signature inspection only (no browser launch) — the failure mode we care
+    about is "library version silently dropped the kwarg." If either lib is
+    uninstalled, returns False with no error: the cascade still works without
+    persistence, Pattern D just doesn't share its CF clearance forward.
 
-    Returns False on any probe error.
+    Historical note worth keeping: this probe used to import
+    ``browser_use.BrowserConfig`` directly and return False when that failed.
+    browser-use 0.13 — the version this project pins — removed that class, so
+    the probe reported ``user_data_dir_unsupported`` on every correctly
+    installed system, and ``/ready`` emitted a warning telling operators to
+    upgrade libraries that were already new enough. Probing a list of candidate
+    classes is what stops the next rename from doing the same thing.
     """
     if not agent_available():
         return False
-    try:
-        import inspect  # noqa: PLC0415
-
-        from crawl4ai import BrowserConfig as Crawl4AIBrowserConfig  # noqa: PLC0415
-
-        crawl4ai_params = inspect.signature(Crawl4AIBrowserConfig).parameters
-        if "user_data_dir" not in crawl4ai_params:
-            return False
-    except Exception:
+    if not crawl4ai_accepts("user_data_dir"):
         return False
-    try:
-        import inspect  # noqa: PLC0415
+    return browser_use_accepts("user_data_dir")
 
-        from browser_use import BrowserConfig as BUBrowserConfig  # noqa: PLC0415
 
-        browseruse_params = inspect.signature(BUBrowserConfig).parameters
-        return "user_data_dir" in browseruse_params
-    except Exception:
-        return False
+def render_tier_enabled() -> bool:
+    """Render tier is on by default; ``SCRAPPER_TOOL_RENDER_TIER=0`` disables it.
+
+    Lives here rather than in ``http_server`` because it is a plain environment
+    read that both the sidecar and ``doctor`` need, and ``doctor`` must not
+    import the ``[http]``-gated module to answer it.
+    """
+    raw = os.environ.get("SCRAPPER_TOOL_RENDER_TIER")
+    if raw is None or not raw.strip():
+        return True
+    return raw.strip().lower() in {"1", "true", "yes", "on"}
 
 
 def check_browser_module(browser: str) -> str:  # noqa: PLR0911 — one return per backend

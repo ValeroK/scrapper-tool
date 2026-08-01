@@ -126,7 +126,7 @@ dev = [
 ]
 
 [project.scripts]
-scrapper-tool = "scrapper_tool.canary:main"
+scrapper-tool = "scrapper_tool.cli:main"
 scrapper-tool-mcp = "scrapper_tool.mcp:main"
 scrapper-tool-serve = "scrapper_tool.http_server:main"
 

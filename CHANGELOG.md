@@ -4,6 +4,30 @@ All notable changes to `scrapper-tool` are recorded here. Format follows [Keep a
 
 ## [Unreleased]
 
+### Added
+
+- **`scrapper-tool doctor`** — preflights every cascade tier and reports which
+  are functional, with the exact command that fixes each one that isn't.
+  `/ready` answers "can this server serve requests"; doctor answers "which tiers
+  work on this machine", and it runs without the REST server (or the `[http]`
+  extra) being involved at all. Tier rows are keyed by `recipe.policy.TIER_ORDER`
+  so the names match `pattern_used` and `escalation_log` exactly. Exit `0` ready
+  / `1` degraded / `2` not ready; `--json` for machine-readable output;
+  `--require-tier <name>` turns it into a CI or container healthcheck gate.
+
+  Two findings it surfaces that nothing else did: a browser *module* that
+  imports while its *binary* is absent (the `camoufox fetch || true` in the
+  Dockerfile means a build-time blip ships exactly that image), and that **E2
+  cannot run on the default configuration** — the default backend is `camoufox`,
+  Firefox has no CDP, and `agent_browse` hard-raises without a CDP endpoint, so
+  a stock install could never reach E2 and nothing said so until a request
+  escalated that far.
+
+- The `scrapper-tool` CLI now dispatches subcommands from a new
+  `scrapper_tool.cli` module, where each subcommand owns its own
+  `add_subparser` / `run_cli` pair. `canary.main` remains as a forwarding shim,
+  so editable installs and the documented entry point keep working.
+
 ### Changed
 
 - **Capability probes now live in one stdlib-only module,
@@ -20,6 +44,18 @@ All notable changes to `scrapper-tool` are recorded here. Format follows [Keep a
   monkeypatching one name still steers every use of it. No behaviour change.
 
 ### Fixed
+
+- **`user_data_dir_supported` was a false negative on every current install.**
+  The probe imported `browser_use.BrowserConfig` and returned False when that
+  raised. browser-use 0.13 — the version this project pins — removed that class
+  in favour of `BrowserProfile` / `BrowserSession`, both of which accept
+  `user_data_dir` perfectly well. So `/ready` emitted
+  `user_data_dir_unsupported` on correctly installed systems, advising operators
+  to upgrade libraries that were already new enough, and implying Pattern D's
+  Cloudflare clearance would not carry forward when in fact it would. The probe
+  now walks a list of candidate config classes, which also stops the next
+  upstream rename from silently reproducing the bug. Found by running the new
+  `doctor` command against this repo's own environment.
 
 - **The render tier failed on its own default path.** Whenever a profile dir was in
   play, the Camoufox backend set `persistent_context=True`, which makes Camoufox

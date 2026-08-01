@@ -1579,10 +1579,7 @@ def _record_policy(payload: dict[str, Any] | None, req: Any) -> None:
 
 def _render_tier_enabled() -> bool:
     """Render tier is on by default; ``SCRAPPER_TOOL_RENDER_TIER=0`` disables it."""
-    raw = os.environ.get("SCRAPPER_TOOL_RENDER_TIER")
-    if raw is None or not raw.strip():
-        return True
-    return raw.strip().lower() in {"1", "true", "yes", "on"}
+    return _extras.render_tier_enabled()
 
 
 async def _do_render_step(

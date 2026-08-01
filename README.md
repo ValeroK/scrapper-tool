@@ -74,6 +74,44 @@ Web scraping in 2026 is dominated by five recurring patterns. This lib gives eac
 
 Plus a five-profile **anti-bot ladder** (`chrome146 → chrome142 → safari260 → firefox147`) that auto-walks when a profile gets fingerprinted, and a `scrapper-tool canary` CLI for nightly fingerprint-health probes.
 
+### Checking your install
+
+This stack has several ways to be half-installed — the uv-only `[full]` lxml
+override, three separate browser downloads, an Ollama model pull — and most of
+them fail late, deep inside a request. `scrapper-tool doctor` answers "which
+cascade tiers actually work on this machine?" up front, and prints the command
+that fixes each one:
+
+```console
+$ scrapper-tool doctor
+scrapper-tool doctor — v2.0.0     Status: degraded
+
+Tier     | Status   | Detail
+-------- | -------- | ------------------------------------------------
+replay   | ok       | cache dir writable at /tmp/scrapper-tool-recipes
+a_b_c    | ok       | chrome146, chrome142, safari260, firefox147, chrome133a
+d        | degraded | scrapling installed, but no Camoufox/Firefox binary found on disk
+render   | degraded | camoufox module imports, but its browser binary is missing
+e1       | degraded | crawl4ai ok; LLM unreachable at http://localhost:11434
+e2       | blocked  | browser=camoufox exposes no CDP endpoint (Firefox dropped CDP)
+cookies  | missing  | rookiepy not installed
+
+Fixes:
+  playwright install firefox
+  camoufox fetch
+  ollama serve && ollama pull qwen3-vl:8b
+  set SCRAPPER_TOOL_AGENT_BROWSER=patchright to enable E2
+```
+
+Exit `0` ready / `1` degraded / `2` not ready. `--json` for machine-readable
+output, and `--require-tier <name>` turns it into a CI or container healthcheck
+gate that only passes when that specific tier is `ok`.
+
+Two things it will tell you that nothing else does: whether a browser *module*
+imports while its *binary* is missing (the published image once shipped exactly
+that), and that **E2 cannot run on the default backend at all** — Camoufox is
+Firefox, Firefox has no CDP, and browser-use 0.13 attaches only over CDP.
+
 ## Architecture
 
 ```mermaid
