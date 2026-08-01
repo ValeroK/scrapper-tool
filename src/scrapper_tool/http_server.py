@@ -1693,6 +1693,48 @@ def _assert_cookies_safe_to_send(req: Any) -> None:
         pool.assert_safe_for_credentials()
 
 
+def _harvest_cookies(req: Any, harvested: Any, *, tier: str) -> None:
+    """Fold cookies a tier *won* into the request-scoped jar.
+
+    A `cf_clearance` bought with an expensive render was previously computed,
+    returned on ``RenderResult.cookies``, and then dropped on the floor by both
+    consumers — so every later tier re-fought the same wall.
+
+    Scope is one request, deliberately. These are **not** written to the recipe
+    store, for five independent reasons, any one of them sufficient: that store
+    lives at a fixed world-readable temp path; it is keyed by *domain* while
+    cookies are per-*identity*, so two callers scraping one domain as different
+    users would silently share a session; its TTL is 14 days against a
+    ~30-minute clearance; its contract is "every read failure is silent", which
+    is right for a selector and wrong for a credential, where the worst case of
+    a *successful* read is impersonating the wrong user; and the sanctioned
+    mechanism for cross-request persistence already exists in
+    ``persist_browser_profile_dir``.
+    """
+    if not harvested:
+        return
+    try:
+        from scrapper_tool.cookies import from_playwright, merge  # noqa: PLC0415
+
+        incoming = from_playwright([dict(entry) for entry in harvested])
+    except Exception as exc:
+        _logger.debug("scrape.cookies.harvest_failed", tier=tier, error=str(exc)[:120])
+        return
+    if not incoming:
+        return
+
+    existing = req.__dict__.get("_cookie_jar") or []
+    req.__dict__["_cookie_jar"] = merge(existing, incoming)
+    harvested_from: list[str] = req.__dict__.setdefault("_cookies_harvested_from", [])
+    if tier not in harvested_from:
+        harvested_from.append(tier)
+    _logger.debug(
+        "scrape.cookies.harvested",
+        tier=tier,
+        count=len(incoming),
+    )
+
+
 def _render_tier_enabled() -> bool:
     """Render tier is on by default; ``SCRAPPER_TOOL_RENDER_TIER=0`` disables it."""
     return _extras.render_tier_enabled()
@@ -1776,6 +1818,13 @@ async def _do_render_step(
             )
         )
         return None, exc
+
+    # Harvest BEFORE the accept/reject branch below. A render can win a
+    # cf_clearance and still produce no accepted signal — that is precisely the
+    # case where E1 should inherit the clearance rather than re-fight the wall
+    # from scratch. Harvesting only on the success path would throw it away in
+    # the one situation it is most valuable.
+    _harvest_cookies(req, result.cookies, tier="render")
 
     html, status_code, final_url = result.html, result.status, result.final_url
     req.__dict__["_render_intermediate_html"] = html
@@ -2168,6 +2217,11 @@ async def _do_scrape(req: Any) -> dict[str, Any]:
         if _request_cookies(req):
             payload["cookies_applied"] = req.__dict__.get("_cookies_applied", [])
             payload["cookies_skipped"] = req.__dict__.get("_cookies_skipped", [])
+        harvested_from = req.__dict__.get("_cookies_harvested_from")
+        if harvested_from:
+            # Metadata only — never the cookies themselves. The response body is
+            # what every reverse proxy in the path writes to its access log.
+            payload["cookies_harvested_from"] = harvested_from
         # F2: remember which tier reached content so the next request for this
         # domain can start there. One place, so every winning tier is recorded.
         _record_policy(payload, req)

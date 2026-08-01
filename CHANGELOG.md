@@ -23,6 +23,25 @@ All notable changes to `scrapper-tool` are recorded here. Format follows [Keep a
   a stock install could never reach E2 and nothing said so until a request
   escalated that far.
 
+- **Cookies won by one tier are reused by later tiers.** A `cf_clearance`
+  bought with an expensive render was computed, returned on
+  `RenderResult.cookies`, and then discarded by both consumers — so every later
+  tier re-fought the same wall. It is now folded into a request-scoped jar and
+  carried forward, and the response reports `cookies_harvested_from`.
+
+  Harvesting happens **before** the accept/reject branch, not after. A render
+  can win a clearance and still produce no accepted signal, and that is exactly
+  the case where the next tier should inherit it rather than start over.
+
+  Scope is one request. These are deliberately never written to the recipe
+  store: it lives at a fixed world-readable temp path, it is keyed by *domain*
+  while cookies are per-*identity* (two callers scraping one domain as different
+  users would silently share a session), its TTL is 14 days against a
+  ~30-minute clearance, and its contract of "every read failure is silent" is
+  right for a CSS selector and wrong for a credential, where the worst case of a
+  *successful* read is impersonating the wrong user. `persist_browser_profile_dir`
+  remains the sanctioned way to persist a session across requests.
+
 - **Caller-supplied cookies are threaded through the cascade.** `scrape(url,
   cookies=...)` and the `cookies` field on `POST /scrape` carry an
   authenticated session into the tiers that can hold one. Every response that

@@ -385,3 +385,100 @@ class TestUnauthenticatedCookieGate:
         async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
             resp = await client.post("/scrape", json={"url": "https://example.com"})
         assert resp.status_code != 403
+
+
+# ---------------------------------------------------------------------------
+# Harvest-forward (P5)
+# ---------------------------------------------------------------------------
+
+
+class TestHarvestForward:
+    """A cf_clearance won by an expensive render used to be dropped on the floor."""
+
+    @staticmethod
+    def _rows() -> list[dict[str, Any]]:
+        return [
+            {
+                "name": "cf_clearance",
+                "value": "CLEARANCE-TOKEN",
+                "domain": "example.com",
+                "path": "/",
+                "secure": True,
+            }
+        ]
+
+    def test_harvested_cookies_enter_the_request_jar(self) -> None:
+        from scrapper_tool.http_server import _harvest_cookies, _request_cookies
+
+        req = _Req()
+        _harvest_cookies(req, self._rows(), tier="render")
+        jar = _request_cookies(req)
+        assert jar is not None
+        assert [c.name for c in jar] == ["cf_clearance"]
+
+    def test_caller_cookies_and_harvested_cookies_coexist(self) -> None:
+        from scrapper_tool.http_server import _harvest_cookies, _request_cookies
+
+        req = _Req([cookie(name="session")])
+        _request_cookies(req)  # materialise the jar from the caller's cookies first
+        _harvest_cookies(req, self._rows(), tier="render")
+        jar = _request_cookies(req)
+        assert jar is not None
+        assert {c.name for c in jar} == {"session", "cf_clearance"}
+
+    def test_harvest_records_the_contributing_tier(self) -> None:
+        from scrapper_tool.http_server import _harvest_cookies
+
+        req = _Req()
+        _harvest_cookies(req, self._rows(), tier="render")
+        _harvest_cookies(req, self._rows(), tier="render")
+        assert req.__dict__["_cookies_harvested_from"] == ["render"]
+
+    def test_empty_harvest_is_a_noop(self) -> None:
+        from scrapper_tool.http_server import _harvest_cookies
+
+        req = _Req()
+        _harvest_cookies(req, [], tier="render")
+        assert "_cookies_harvested_from" not in req.__dict__
+
+    def test_malformed_rows_do_not_fail_the_tier(self) -> None:
+        """A bad row from a browser must not turn a successful render into an error."""
+        from scrapper_tool.http_server import _harvest_cookies
+
+        req = _Req()
+        _harvest_cookies(req, [{"nonsense": True}], tier="render")
+        assert "_cookies_harvested_from" not in req.__dict__
+
+    def test_later_harvest_supersedes_an_earlier_value(self) -> None:
+        from scrapper_tool.http_server import _harvest_cookies, _request_cookies
+
+        req = _Req()
+        _harvest_cookies(req, self._rows(), tier="render")
+        refreshed = self._rows()
+        refreshed[0]["value"] = "FRESHER-TOKEN"
+        _harvest_cookies(req, refreshed, tier="d")
+        jar = _request_cookies(req)
+        assert jar is not None
+        assert jar[0].value.get_secret_value() == "FRESHER-TOKEN"
+
+    def test_harvest_never_logs_a_value(self, caplog: pytest.LogCaptureFixture) -> None:
+        from scrapper_tool.http_server import _harvest_cookies
+
+        with caplog.at_level(logging.DEBUG):
+            _harvest_cookies(_Req(), self._rows(), tier="render")
+        assert "CLEARANCE-TOKEN" not in caplog.text
+
+    def test_nothing_is_written_to_the_recipe_store(self, tmp_path: Any) -> None:
+        """Cookies are per-identity; that store is keyed by domain. Never persist."""
+        from scrapper_tool.http_server import _harvest_cookies
+        from scrapper_tool.recipe.store import default_cache_dir
+
+        req = _Req()
+        _harvest_cookies(req, self._rows(), tier="render")
+        cache_dir = default_cache_dir()
+        blob = ""
+        if cache_dir.is_dir():
+            for path in cache_dir.rglob("*"):
+                if path.is_file():
+                    blob += path.read_text(encoding="utf-8", errors="ignore")
+        assert "CLEARANCE-TOKEN" not in blob
