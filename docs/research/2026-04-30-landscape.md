@@ -99,7 +99,7 @@ A new category in 2024-2026 — LLMs that help you scrape sites by inferring sel
 |---|---|---|---|---|
 | **Crawl4AI** ([docs][crawl4ai]) | Markdown extraction + LLM-driven schema inference; self-host; LLM-friendly output | Free (self-host); LLM costs separate | Caches generated schemas; you can regenerate | ⏸ deferred — runtime LLM-in-the-path **breaks per-request cost ceilings** (PartsPilot's 12-call-per-conversation cap). May adopt as a **bootstrap-only** tool (extract once, replay deterministically forever). |
 | **Firecrawl** ([cnb][firecrawl]) | Managed SaaS; "scrape this URL → markdown / JSON" | Per-request billing (~$83-$333/month at production volumes) | Returns same shape per URL | ❌ rejected — managed SaaS doesn't fit `scrapper-tool`'s self-host posture. |
-| **ScrapeGraphAI** ([github][scrapegraphai]) | Self-host LLM-driven scraper; pluggable LLM backend | Free (self-host) + LLM | Lower than Crawl4AI; agent-loop nature | ❌ rejected — runtime LLM not in lib's scope. |
+| **ScrapeGraphAI** ([github][scrapegraphai]) | Self-host LLM-driven scraper; pluggable LLM backend | Free (self-host) + LLM | Lower than Crawl4AI; agent-loop nature | ❌ rejected — **see the 2026-08-01 correction below: this row evaluated the wrong repo.** Reject upheld on corrected grounds (no anti-bot; that's their paid tier). |
 | **AgentQL** ([github][agentql]) | Query language + Playwright integration for AI-driven element lookup | Mixed (free OSS + paid API tier) | Caches queries, but Playwright-bound | ⏸ candidate for future MCP-side tooling (M13). |
 | **Stagehand** (Browserbase) | AI agent + cloud browser; finds elements by intent, not selectors | SaaS; per-browser-minute billing | Low — agent re-decides per call | ❌ rejected — managed SaaS. |
 | **Reader** (Jina) | "Convert any URL to Markdown for LLM grounding" | Free tier + paid | Stateless | ⏸ candidate for an MCP tool (M13) but not in core lib. |
@@ -110,7 +110,7 @@ This is why M13's MCP server exposes `recon_classify` and `extract_product` as t
 
 [crawl4ai]: https://docs.crawl4ai.com
 [firecrawl]: https://cnb.cool/aigc/firecrawl/-/tree/002bfdf639baec43166af2b66951b8c95dd78b76
-[scrapegraphai]: https://github.com/ScrapeGraphAI/scrapegraph-sdk
+[scrapegraphai]: https://github.com/ScrapeGraphAI/Scrapegraph-ai
 [agentql]: https://github.com/tinyfish-io/agentql
 
 ---
@@ -170,7 +170,7 @@ All surveyed 2026-04-30 via Perplexity research + direct repo inspection:
 5. Scrapling Cloudflare Turnstile auto-solve guide — https://mintlify.wiki/D4Vinci/Scrapling/guides/cloudflare-turnstile
 6. Capsolver 2026 Cloudflare Turnstile bypass reference — https://www.capsolver.com/blog/Cloudflare/bypass-cloudflare-challenge-2025
 7. Crawl4AI vs Firecrawl 2026 comparison — https://crawl4ai.dev (and its in-repo docs)
-8. ScrapeGraphAI SDK — https://github.com/ScrapeGraphAI/scrapegraph-sdk
+8. ScrapeGraphAI OSS library — https://github.com/ScrapeGraphAI/Scrapegraph-ai (the 2026-04 draft cited `scrapegraph-sdk`, the managed cloud SDK, which is a different artifact — corrected 2026-08-01)
 9. AgentQL — https://github.com/tinyfish-io/agentql
 10. Browserbase Stagehand reference (cloud browser API + AI agent) — https://www.browserbase.com/blog/best-web-scraping-tools
 11. Firecrawl scraping platform — https://cnb.cool/aigc/firecrawl
@@ -195,3 +195,29 @@ This document is **append-only history**. When a major signal changes, write a n
 - A new anti-bot platform gains material market share.
 - A new structured-data syntax (post-RDFa, post-JSON-LD) becomes commonplace.
 - An OSS scraping library we depend on goes unmaintained for >6 months.
+
+---
+
+## Correction — 2026-08-01
+
+Two entries in this survey no longer describe reality, and one of them was
+wrong when written. Recorded here rather than by rewriting the tables, so the
+diff stays an audit trail.
+
+**1. The ScrapeGraphAI row evaluated the wrong repository.** Every link pointed
+at `scrapegraph-sdk`, the managed *cloud* SDK, while the row's text describes a
+self-hosted library. The thing worth evaluating is `Scrapegraph-ai`, the OSS
+library. Links above are corrected. The reject stands, but for a different and
+better reason: the OSS library's `FetchNode` is a plain Playwright loader with a
+BeautifulSoup fallback and no anti-bot handling at all — anti-bot is what their
+*paid* tier sells, and it is precisely the layer this project gives away. See
+`do-not-adopt.md` for the full re-evaluation.
+
+**2. The Crawl4AI row's "⏸ deferred" verdict was overturned by shipping.**
+Pattern E1 in v1.0.0 is Crawl4AI in the request path. The cost objection
+recorded here assumed a metered API behind every LLM call; running against a
+local Ollama removed the billing that made it incompatible with a per-request
+budget. The determinism concern was answered by the recipe layer, which distils
+an expensive E1 win into a CSS recipe that replays for free. Dated entry in
+`do-not-adopt.md`.
+
