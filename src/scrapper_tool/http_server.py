@@ -54,6 +54,11 @@ from pydantic import BaseModel, ConfigDict, Field  # noqa: E402 — after warnin
 
 from scrapper_tool import __version__, _extras  # noqa: E402
 from scrapper_tool._logging import get_logger  # noqa: E402
+
+# CookieIn is a runtime import, not a TYPE_CHECKING one: it appears in a
+# Pydantic field annotation, and pydantic resolves those against module globals
+# when it builds the model. Deferring it would make ScrapeRequest fail to build.
+from scrapper_tool.cookies import CookieIn  # noqa: E402, TC001
 from scrapper_tool.errors import (  # noqa: E402
     AgentBlockedError,
     AgentError,
@@ -120,6 +125,16 @@ class ScrapeRequest(BaseModel):
             "On D failure, falls through to E1/E2 unless hostile_fallback=false. "
             "Use for vendors recon-classified as hostile (Cloudflare Turnstile, "
             "Akamai EVA, DataDome) where A/B/C is known to fail."
+        ),
+    )
+    cookies: list[CookieIn] | None = Field(
+        None,
+        description=(
+            "Caller-supplied cookies, threaded to every tier that can carry them. "
+            "Export them with `scrapper-tool cookies export --domain <host>`. "
+            "Values are write-only: they are never echoed back in a response and "
+            "never appear in logs. Sending these to an unauthenticated sidecar is "
+            "refused with 403 — see SCRAPPER_TOOL_HTTP_API_KEY."
         ),
     )
     browser: str | None = Field(None, description="Override SCRAPPER_TOOL_AGENT_BROWSER")
@@ -453,6 +468,40 @@ def _build_app(
                 detail="Invalid or missing X-API-Key header.",
             )
 
+    async def _check_cookie_auth(req: ScrapeRequest) -> None:
+        """Refuse caller-supplied cookies on an unauthenticated sidecar.
+
+        ``_check_api_key`` is a no-op when ``SCRAPPER_TOOL_HTTP_API_KEY`` is
+        unset, which is the default — so ``/scrape`` is open out of the box.
+        That is defensible for anonymous scraping and indefensible the moment a
+        request body carries a live session cookie: anyone who can reach the
+        port could replay someone's session through this host's egress IP.
+
+        Breaking "works out of the box" is the right call here, but only for
+        requests that actually carry cookies; everything else is unaffected.
+        ``SCRAPPER_TOOL_HTTP_ALLOW_UNAUTH_COOKIES=1`` is the localhost-dev
+        escape hatch.
+        """
+        if not req.cookies:
+            return
+        if api_key is not None:
+            return
+        if os.environ.get("SCRAPPER_TOOL_HTTP_ALLOW_UNAUTH_COOKIES", "").strip().lower() in {
+            "1",
+            "true",
+            "yes",
+            "on",
+        }:
+            return
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail=(
+                "Refusing cookies on an unauthenticated sidecar. Set "
+                "SCRAPPER_TOOL_HTTP_API_KEY and send X-API-Key, or set "
+                "SCRAPPER_TOOL_HTTP_ALLOW_UNAUTH_COOKIES=1 for localhost development."
+            ),
+        )
+
     # ---- Exception handlers ---------------------------------------------
 
     @app.exception_handler(ConfigurationError)
@@ -613,7 +662,11 @@ def _build_app(
             "cascade falls through to E1 and the response carries hostile_skipped=true."
         ),
     )
-    async def scrape(req: ScrapeRequest, _: None = Depends(_check_api_key)) -> dict[str, Any]:
+    async def scrape(
+        req: ScrapeRequest,
+        _: None = Depends(_check_api_key),
+        __: None = Depends(_check_cookie_auth),
+    ) -> dict[str, Any]:
         return await _do_scrape(req)
 
     @app.post(
@@ -1387,7 +1440,7 @@ def _make_ladder_fetch(req: Any) -> Callable[[], Awaitable[tuple[str, int, str]]
         from scrapper_tool.ladder import request_with_ladder  # noqa: PLC0415
 
         response, _profile = await request_with_ladder(
-            "GET", req.url, timeout=req.timeout_s or 30.0
+            "GET", req.url, timeout=req.timeout_s or 30.0, cookies=_request_cookies(req)
         )
         return response.text or "", response.status_code, str(response.url)
 
@@ -1577,6 +1630,69 @@ def _record_policy(payload: dict[str, Any] | None, req: Any) -> None:
         _logger.debug("scrape.policy.record_failed", url=req.url, error=str(exc)[:120])
 
 
+# ---------------------------------------------------------------------------
+# Caller-supplied cookies
+# ---------------------------------------------------------------------------
+
+
+def _request_cookies(req: Any) -> list[CookieIn] | None:
+    """The request-scoped cookie jar, or None when the caller sent none.
+
+    Stashed on ``req.__dict__`` following the convention already used for
+    ``_resolved_profile_dir`` and ``_render_intermediate_html``: request-scoped
+    state that several cascade steps need, held for exactly one request and
+    never persisted. Returning None rather than an empty list lets call sites
+    pass it straight through as an optional argument.
+    """
+    jar = req.__dict__.get("_cookie_jar")
+    if jar is None:
+        jar = list(getattr(req, "cookies", None) or [])
+        req.__dict__["_cookie_jar"] = jar
+    return jar or None
+
+
+def _mark_cookies_applied(req: Any, tier: str) -> None:
+    """Record that ``tier`` actually carried the caller's cookies.
+
+    Without this, "I passed cookies and still got the logged-out page" is an
+    unfalsifiable complaint. Mirrors the ``hostile_skipped`` convention.
+    """
+    if not _request_cookies(req):
+        return
+    applied: list[str] = req.__dict__.setdefault("_cookies_applied", [])
+    if tier not in applied:
+        applied.append(tier)
+
+
+def _mark_cookies_skipped(req: Any, tier: str, reason: str) -> None:
+    """Record that ``tier`` ran but could NOT carry the caller's cookies."""
+    if not _request_cookies(req):
+        return
+    skipped: list[dict[str, str]] = req.__dict__.setdefault("_cookies_skipped", [])
+    if not any(entry["tier"] == tier for entry in skipped):
+        skipped.append({"tier": tier, "reason": reason})
+
+
+def _assert_cookies_safe_to_send(req: Any) -> None:
+    """Refuse to route credentialed traffic through an untrusted proxy pool.
+
+    Asserted at the entrypoint boundary rather than threaded as a kwarg: a
+    defaulted kwarg that mypy won't enforce drifts, and the failure mode here is
+    silent credential disclosure to whoever runs a free proxy. Raises
+    ``ConfigurationError`` (503-class) before a byte leaves the process.
+    """
+    if not _request_cookies(req):
+        return
+    try:
+        from scrapper_tool.proxy import ProxyPool  # noqa: PLC0415
+
+        pool = ProxyPool.from_env()
+    except Exception:  # pragma: no cover — a broken pool config fails elsewhere
+        return
+    if pool is not None:
+        pool.assert_safe_for_credentials()
+
+
 def _render_tier_enabled() -> bool:
     """Render tier is on by default; ``SCRAPPER_TOOL_RENDER_TIER=0`` disables it."""
     return _extras.render_tier_enabled()
@@ -1645,7 +1761,9 @@ async def _do_render_step(
             timeout_s=cfg.timeout_s,
             options=options,
             cdp_url=cfg.obscura_cdp_url,
+            cookies=_request_cookies(req),
         )
+        _mark_cookies_applied(req, "render")
     except Exception as exc:
         _logger.warning("scrape.render.failed", url=req.url, error=str(exc)[:200])
         log.append(
@@ -2034,6 +2152,9 @@ async def _do_scrape(req: Any) -> dict[str, Any]:
     profile_dir, cleanup_dir = _resolve_profile_dir(req)
     req.__dict__["_resolved_profile_dir"] = profile_dir
 
+    # Before any tier runs, and before a byte leaves the process.
+    _assert_cookies_safe_to_send(req)
+
     payload: dict[str, Any] | None = None
     raised = False
     try:
@@ -2041,6 +2162,12 @@ async def _do_scrape(req: Any) -> dict[str, Any]:
         # Surfaced here rather than in each tier's return: the vendor that
         # walled us is worth reporting no matter which tier eventually won.
         payload["challenge_detected"] = req.__dict__.get("_challenge_detected")
+        # Which tiers actually carried the caller's cookies, and which ran
+        # without them. Both keys are always present when cookies were supplied
+        # so a caller can tell "not applied" from "field absent".
+        if _request_cookies(req):
+            payload["cookies_applied"] = req.__dict__.get("_cookies_applied", [])
+            payload["cookies_skipped"] = req.__dict__.get("_cookies_skipped", [])
         # F2: remember which tier reached content so the next request for this
         # domain can start there. One place, so every winning tier is recorded.
         _record_policy(payload, req)
@@ -2092,8 +2219,9 @@ async def _do_scrape_inner(req: Any, attempts: list[str], start: float) -> dict[
             from scrapper_tool.ladder import request_with_ladder  # noqa: PLC0415
 
             response, profile = await request_with_ladder(
-                "GET", req.url, timeout=req.timeout_s or 30.0
+                "GET", req.url, timeout=req.timeout_s or 30.0, cookies=_request_cookies(req)
             )
+            _mark_cookies_applied(req, "a_b_c")
             text = response.text or ""
             # Kept for the recipe learner: if a later tier's selectors also
             # match this raw body, its recipe can replay without a browser.

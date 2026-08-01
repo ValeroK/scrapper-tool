@@ -32,6 +32,8 @@ from typing import TYPE_CHECKING, Any
 if TYPE_CHECKING:
     from collections.abc import AsyncIterator, Awaitable, Callable
 
+    from scrapper_tool.cookies import CookieIn
+
 
 async def scrape(
     url: str,
@@ -44,12 +46,20 @@ async def scrape(
     timeout_s: float | None = None,
     instruction: str | None = None,
     persist_browser_profile_dir: str | None = None,
+    cookies: list[CookieIn] | None = None,
 ) -> dict[str, Any]:
     """Run the autonomous cascade for one URL and return the result dict.
 
     Parameters mirror the ``/scrape`` request body; the return value is the same
     payload the REST endpoint produces, including ``pattern_used`` (which tier
     won), ``challenge_detected``, and ``escalation_log``.
+
+    ``cookies`` carries an authenticated session into every tier that can hold
+    one — export it with ``scrapper-tool cookies export --domain <host>`` and
+    load it with :func:`scrapper_tool.load_cookies`. The response then reports
+    ``cookies_applied`` (tiers that carried them) and ``cookies_skipped`` (tiers
+    that ran without them, and why). Cookies are held for the life of the
+    request only; they are never written to the recipe store.
 
     ``interactive=True`` permits escalation to the E2 browser-use agent for
     login / pagination / dynamic-form flows — off by default because E2 is the
@@ -71,6 +81,7 @@ async def scrape(
         timeout_s=timeout_s,
         instruction=instruction,
         persist_browser_profile_dir=persist_browser_profile_dir,
+        cookies=cookies,
     )
     return await _do_scrape(req)
 

@@ -55,6 +55,7 @@ if TYPE_CHECKING:
 
     import httpx
 
+    from scrapper_tool.cookies import CookieIn
     from scrapper_tool.proxy import ProxyPool
 
 # The fallback ladder. Walked top-to-bottom on 403; first ≠403 wins.
@@ -108,12 +109,20 @@ async def _curl_cffi_session(
     timeout: float,  # noqa: ASYNC109 — passed straight to curl_cffi, not asyncio.timeout
     proxy: str | None,
     extra_headers: dict[str, str] | None,
+    cookies: list[CookieIn] | None = None,
 ) -> AsyncIterator[_CurlCffiAsyncSession[Any]]:
     """Yield a one-shot curl_cffi session pinned to ``impersonate``.
 
     Mirrors ``vendor_client(use_curl_cffi=True)`` in defaults but is
     parameterised on the impersonation profile, so the ladder walker
     can rotate without rebuilding the kwargs dict per profile.
+
+    Caller cookies are loaded into the session's **jar**, never rendered into a
+    static ``Cookie:`` header. This session sets ``allow_redirects=True``, and a
+    static header is re-sent verbatim across a cross-domain redirect — which
+    hands the user's session cookie to whatever third-party host the redirect
+    points at. Putting them in the jar makes libcurl apply domain and path
+    scoping on every hop, which is the whole point.
     """
     headers: dict[str, str] = {
         "User-Agent": _DEFAULT_USER_AGENT,
@@ -129,10 +138,40 @@ async def _curl_cffi_session(
         allow_redirects=True,
         impersonate=cast("Any", impersonate),
     )
+    if cookies:
+        _load_cookie_jar(session, cookies)
     try:
         yield session
     finally:
         await session.close()
+
+
+def _load_cookie_jar(session: Any, cookies: list[CookieIn]) -> None:
+    """Set ``cookies`` on a curl_cffi session's jar, domain-scoped.
+
+    Sessions here are one-shot (a fresh one per ladder rung), so this runs once
+    per rung rather than once per walk. Failures are logged and swallowed: a jar
+    that won't load is a lost login, not a reason to fail a fetch that might
+    still succeed against public content.
+    """
+    jar = getattr(session, "cookies", None)
+    if jar is None:  # pragma: no cover — every real curl_cffi session has one
+        return
+    for cookie in cookies:
+        try:
+            jar.set(
+                cookie.name,
+                cookie.value.get_secret_value(),
+                domain=cookie.domain,
+                path=cookie.path,
+            )
+        except Exception as exc:
+            _logger.debug(
+                "ladder.cookie_jar.set_failed",
+                name=cookie.name,
+                domain=cookie.domain,
+                error=str(exc)[:120],
+            )
 
 
 async def request_with_ladder(
@@ -145,6 +184,7 @@ async def request_with_ladder(
     proxy_pool: ProxyPool | None = None,
     extra_headers: dict[str, str] | None = None,
     max_attempts_per_profile: int = 3,
+    cookies: list[CookieIn] | None = None,
     **kwargs: Any,
 ) -> tuple[httpx.Response, str]:
     """Issue ``method`` to ``url``, walking the impersonation ``ladder``.
@@ -199,6 +239,7 @@ async def request_with_ladder(
                 timeout=timeout,
                 proxy=attempt_proxy,
                 extra_headers=extra_headers,
+                cookies=cookies,
             ) as session:
                 resp = await request_with_retry(
                     cast("httpx.AsyncClient", session),

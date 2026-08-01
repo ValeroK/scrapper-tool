@@ -480,6 +480,77 @@
         "title": "BrowseRequest",
         "description": "Body of POST /browse."
       },
+      "CookieIn": {
+        "properties": {
+          "name": {
+            "type": "string",
+            "minLength": 1,
+            "title": "Name"
+          },
+          "value": {
+            "type": "string",
+            "format": "password",
+            "title": "Value",
+            "writeOnly": true
+          },
+          "domain": {
+            "type": "string",
+            "minLength": 1,
+            "title": "Domain"
+          },
+          "path": {
+            "type": "string",
+            "title": "Path",
+            "default": "/"
+          },
+          "expires": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Expires"
+          },
+          "http_only": {
+            "type": "boolean",
+            "title": "Http Only",
+            "default": false
+          },
+          "secure": {
+            "type": "boolean",
+            "title": "Secure",
+            "default": true
+          },
+          "same_site": {
+            "anyOf": [
+              {
+                "type": "string",
+                "enum": [
+                  "Strict",
+                  "Lax",
+                  "None"
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Same Site"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "name",
+          "value",
+          "domain"
+        ],
+        "title": "CookieIn",
+        "description": "One cookie, in the project's canonical snake_case shape."
+      },
       "CrawlRequest": {
         "properties": {
           "url": {
@@ -838,6 +909,21 @@
             "title": "Mode",
             "description": "auto: full ladder (A/B/C \u2192 D \u2192 E1 \u2192 E2). fetch/extract/browse: force a specific pattern (mode=fetch never invokes Pattern D \u2014 the cheap-path contract is preserved). hostile (NEW v1.2.0): invoke Pattern D directly, skipping the A/B/C ladder. On D failure, falls through to E1/E2 unless hostile_fallback=false. Use for vendors recon-classified as hostile (Cloudflare Turnstile, Akamai EVA, DataDome) where A/B/C is known to fail.",
             "default": "auto"
+          },
+          "cookies": {
+            "anyOf": [
+              {
+                "items": {
+                  "$ref": "#/components/schemas/CookieIn"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Cookies",
+            "description": "Caller-supplied cookies, threaded to every tier that can carry them. Export them with `scrapper-tool cookies export --domain <host>`. Values are write-only: they are never echoed back in a response and never appear in logs. Sending these to an unauthenticated sidecar is refused with 403 \u2014 see SCRAPPER_TOOL_HTTP_API_KEY."
           },
           "browser": {
             "anyOf": [

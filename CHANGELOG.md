@@ -23,6 +23,38 @@ All notable changes to `scrapper-tool` are recorded here. Format follows [Keep a
   a stock install could never reach E2 and nothing said so until a request
   escalated that far.
 
+- **Caller-supplied cookies are threaded through the cascade.** `scrape(url,
+  cookies=...)` and the `cookies` field on `POST /scrape` carry an
+  authenticated session into the tiers that can hold one. Every response that
+  supplied cookies reports `cookies_applied` (tiers that carried them) and
+  `cookies_skipped` (tiers that ran without them, with a reason) — without
+  that, "I passed cookies and still got the logged-out page" is unfalsifiable.
+
+  Three decisions worth recording:
+
+  - **A/B/C sets the curl_cffi cookie jar, not a `Cookie:` header.** That
+    session runs with `allow_redirects=True`, and a static header is re-sent
+    verbatim across a cross-domain redirect — handing the user's session to
+    whatever third-party host the redirect points at. The jar makes libcurl
+    apply domain and path scoping on every hop.
+  - **The render tier injects before the first navigation**, not after. The
+    request that decides logged-in vs logged-out is the one `goto()` issues.
+    Injection is also allowed to raise, because `_do_render_step` catches and
+    logs tier exceptions properly while the page-hook path swallows them, which
+    would make a failed injection invisible.
+  - **`ProxyPool.assert_safe_for_credentials()` finally has a call site.** It
+    was written to guard exactly this and had none. Credentialed traffic over a
+    free/public proxy pool is now refused before a byte leaves the process;
+    anonymous scraping over the same pool is unaffected.
+
+- **`POST /scrape` returns 403 for cookies on an unauthenticated sidecar.**
+  `SCRAPPER_TOOL_HTTP_API_KEY` is unset by default, which means `/scrape` is
+  open — defensible for anonymous scraping, indefensible once a request body
+  carries a live session cookie, since anyone who can reach the port could
+  replay that session through this host's egress IP. Requests without cookies
+  are unaffected; `SCRAPPER_TOOL_HTTP_ALLOW_UNAUTH_COOKIES=1` is the
+  localhost-development escape hatch.
+
 - **`scrapper-tool cookies export`** — domain-scoped browser-cookie extraction,
   so a logged-in page becomes scrapable. You log in normally in your own
   browser; this reads the resulting cookie for one domain and nothing else. No
