@@ -292,6 +292,11 @@ module = [
     # + crawl4ai), not by [dev] — the extra the CI lint job installs — so mypy
     # there can't find its stubs. The Obscura backend imports it lazily.
     "playwright.*",
+    # Same story as playwright: geoip2 arrives via camoufox[geoip] under the
+    # [llm-agent] extra, so the dev-only lint env has no stubs for it. _extras
+    # imports it inside a function purely to probe whether Camoufox will be
+    # able to launch at all.
+    "geoip2.*",
     "camoufox.*",
     "browserforge.*",
     "langchain_ollama.*",
