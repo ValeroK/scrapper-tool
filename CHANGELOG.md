@@ -23,6 +23,31 @@ All notable changes to `scrapper-tool` are recorded here. Format follows [Keep a
   a stock install could never reach E2 and nothing said so until a request
   escalated that far.
 
+- **`scrapper-tool cookies export`** — domain-scoped browser-cookie extraction,
+  so a logged-in page becomes scrapable. You log in normally in your own
+  browser; this reads the resulting cookie for one domain and nothing else. No
+  automation drives a login form and no password is ever seen. Values are never
+  printed without `--print-values --yes`, jars are written `0600` inside a
+  `0700` directory via an exclusive create (never created-then-chmod'd, never
+  widening an existing file), and `seed-profile` writes a Playwright
+  `storage_state.json` for the Docker path where cookie values never cross the
+  HTTP boundary. Exit `0` found / `1` none matched / `2` usage / `3` no backend.
+
+  New `[cookies]` extra (rookiepy, MIT). `browser_cookie3` is **LGPL** and is
+  deliberately never declared — it is used only if already present in the
+  environment, and a regression test asserts it appears in no dependency list
+  and no lockfile.
+
+  **Not exposed over MCP, deliberately.** An agent that can silently dump a
+  user's browser cookie store is the capability not to build, and a consent
+  prompt is meaningless when the caller is a model. `SKILL.md` documents the
+  asymmetry so agents don't shell out to the CLI to route around it.
+
+  Python support: rookiepy publishes version-specific wheels up to `cp312`
+  (not abi3) plus an sdist, so 3.13/3.14 need a Rust toolchain to build it.
+  That is why `cookies` is **not** in the CI matrix — the unit tests inject a
+  fake backend instead, so coverage never depends on the extra installing.
+
 - The `scrapper-tool` CLI now dispatches subcommands from a new
   `scrapper_tool.cli` module, where each subcommand owns its own
   `add_subparser` / `run_cli` pair. `canary.main` remains as a forwarding shim,

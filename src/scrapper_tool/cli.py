@@ -32,6 +32,7 @@ from __future__ import annotations
 import argparse
 from typing import TYPE_CHECKING, Any, Protocol
 
+from scrapper_tool import _cookies_cli as _cookies_cmd
 from scrapper_tool import canary as _canary_cmd
 from scrapper_tool import doctor as _doctor_cmd
 
@@ -52,6 +53,7 @@ class _Command(Protocol):
 #: Registration order is the order subcommands appear in ``--help``.
 _COMMANDS: dict[str, _Command] = {
     "canary": _canary_cmd,
+    "cookies": _cookies_cmd,
     "doctor": _doctor_cmd,
 }
 
