@@ -38,7 +38,6 @@ import shutil
 import tempfile
 import time
 import warnings
-from pathlib import Path
 from typing import TYPE_CHECKING, Any, Literal
 
 # Pydantic v2 emits a UserWarning when a field name shadows a BaseModel
@@ -53,7 +52,7 @@ warnings.filterwarnings(
 
 from pydantic import BaseModel, ConfigDict, Field  # noqa: E402 — after warnings filter
 
-from scrapper_tool import __version__  # noqa: E402
+from scrapper_tool import __version__, _extras  # noqa: E402
 from scrapper_tool._logging import get_logger  # noqa: E402
 from scrapper_tool.errors import (  # noqa: E402
     AgentBlockedError,
@@ -69,6 +68,7 @@ from scrapper_tool.ladder import IMPERSONATE_LADDER  # noqa: E402
 
 if TYPE_CHECKING:
     from collections.abc import Awaitable, Callable, Sequence
+    from pathlib import Path
 
 
 # ---------------------------------------------------------------------------
@@ -338,176 +338,52 @@ def _require_fastapi() -> None:
 def _agent_available() -> bool:
     """Return True if the ``[llm-agent]`` extra is installed.
 
-    This is a *Python-package* check only — the ``camoufox`` /
-    ``patchright`` / ``crawl4ai`` modules import cleanly. It does NOT
-    guarantee the on-disk browser binary is present (Camoufox's
-    Firefox blob, Playwright Chromium / Firefox, ...). For runtime
-    capability use :func:`_agent_runnable`.
+    Thin delegator to :func:`scrapper_tool._extras.agent_available`. A wrapper
+    rather than a bare alias, deliberately: callers below resolve these names
+    through this module's namespace, so a test that monkeypatches one here
+    still steers every internal use of it.
     """
-    try:
-        import scrapper_tool.agent  # noqa: F401, PLC0415
-
-        return True
-    except ImportError:
-        return False
+    return _extras.agent_available()
 
 
 def _playwright_browsers_root() -> Path:
-    """Return ``$PLAYWRIGHT_BROWSERS_PATH`` (or its default).
-
-    Playwright stores binaries here as ``<browser>-<rev>/...``. Both
-    ``playwright install firefox`` and ``patchright install chromium``
-    write into this directory. ``$PLAYWRIGHT_BROWSERS_PATH`` overrides
-    the default; we honour it.
-    """
-    override = os.environ.get("PLAYWRIGHT_BROWSERS_PATH")
-    if override:
-        return Path(override)
-    return Path.home() / ".cache" / "ms-playwright"
+    """Return ``$PLAYWRIGHT_BROWSERS_PATH`` (or its default)."""
+    return _extras.playwright_browsers_root()
 
 
-def _browser_binary_present(browser: str) -> bool:  # noqa: PLR0911
+def _browser_binary_present(browser: str) -> bool:
     """Probe the on-disk binary for the configured agent browser.
 
-    True when a launchable binary is found for ``browser``; False when
-    the Python module is installed but the binary isn't (the case
-    that bit us on the published 1.1.0 image — ``agent_installed``
-    was true, ``patchright install chromium`` had run, but Firefox
-    wasn't downloaded so any Pattern E1/E2 attempt failed at runtime).
-
-    Returns False rather than raising — ``/ready`` should report
-    ``degraded``, not crash.
+    Resolves the browsers root through :func:`_playwright_browsers_root` above
+    rather than letting ``_extras`` look it up itself, so tests that
+    monkeypatch *that* name keep pointing this probe at ``tmp_path``.
     """
-    root = _playwright_browsers_root()
-
-    if browser == "patchright":
-        # Patchright ships a patched Chromium under chromium-<rev>/. The
-        # subdirectory is ``chrome-linux64/`` on Linux x64 (default
-        # Playwright layout); older images used ``chrome-linux/``. Try
-        # both so the probe works against any reasonable Playwright
-        # version, and against Patchright's headless-shell variant.
-        candidates = (
-            "chromium-*/chrome-linux64/chrome",
-            "chromium-*/chrome-linux/chrome",
-            "chromium_headless_shell-*/chrome-linux64/headless_shell",
-            "chromium_headless_shell-*/chrome-linux/headless_shell",
-        )
-        return any(p.is_file() for pat in candidates for p in root.glob(pat))
-
-    if browser == "camoufox":
-        # Camoufox stores its Firefox fork under its own path; the
-        # python wrapper exposes ``camoufox.path``. browser-use (E2)
-        # also pulls Playwright Firefox, so we treat either as runnable.
-        try:
-            import camoufox  # noqa: PLC0415
-
-            cf_path = getattr(camoufox, "path", None)
-            if cf_path and Path(cf_path).is_file():
-                return True
-        except ImportError:
-            pass
-        # Fallback: Camoufox installs into ms-playwright/firefox-* on
-        # some distributions. browser-use definitely uses Playwright
-        # Firefox.
-        return any(p.is_file() for p in root.glob("firefox-*/firefox/firefox"))
-
-    if browser == "scrapling":
-        # Scrapling ships its own Camoufox; if either binary is present
-        # we call it runnable.
-        if any(p.is_file() for p in root.glob("firefox-*/firefox/firefox")):
-            return True
-        try:
-            import scrapling  # noqa: F401, PLC0415
-        except ImportError:
-            return False
-        return False
-
-    if browser == "obscura":
-        # Obscura is an external CDP server (sidecar), not a local binary.
-        # Probe the configured endpoint with a short TCP connect.
-        return _obscura_endpoint_reachable()
-
-    # Unknown browser — be conservative and report False so /ready
-    # surfaces the configuration mistake rather than silently passing.
-    return False
+    return _extras.browser_binary_present(browser, root=_playwright_browsers_root())
 
 
 def _obscura_endpoint_reachable(timeout_s: float = 0.5) -> bool:
-    """Best-effort TCP reachability probe for the Obscura CDP endpoint.
-
-    Reads ``SCRAPPER_TOOL_AGENT_OBSCURA_CDP_URL`` (default
-    ``http://127.0.0.1:9222``) and attempts a short blocking connect. Returns
-    False on any failure so ``/ready`` reports ``degraded`` rather than
-    crashing.
-    """
-    import socket  # noqa: PLC0415
-    from urllib.parse import urlparse  # noqa: PLC0415
-
-    url = os.environ.get("SCRAPPER_TOOL_AGENT_OBSCURA_CDP_URL", "http://127.0.0.1:9222")
-    parsed = urlparse(url)
-    host = parsed.hostname or "127.0.0.1"
-    port = parsed.port or 9222
-    try:
-        with socket.create_connection((host, port), timeout=timeout_s):
-            return True
-    except OSError:
-        return False
+    """Best-effort TCP reachability probe for the Obscura CDP endpoint."""
+    return _extras.obscura_endpoint_reachable(timeout_s)
 
 
 def _agent_runnable(browser: str) -> bool:
     """True when both the Python extra AND the binary are present.
 
-    ``agent_installed`` ∧ ``browser_binary on disk``. This is the
-    field callers should gate Pattern E1/E2 on; ``agent_installed``
-    alone is necessary but not sufficient.
+    Composed from this module's own wrappers rather than delegating to
+    :func:`_extras.agent_runnable`, so patching either half changes the
+    composed answer.
     """
     return _agent_available() and _browser_binary_present(browser)
 
 
 def _hostile_available() -> bool:
     """Return True if the ``[hostile]`` extra (Scrapling) is installed."""
-    try:
-        import scrapling  # noqa: F401, PLC0415
-
-        return True
-    except ImportError:
-        return False
+    return _extras.hostile_available()
 
 
 def _user_data_dir_supported() -> bool:
-    """v1.3.0: Probe whether installed Crawl4AI / browser-use accept user_data_dir.
-
-    Inspects the ``BrowserConfig`` signatures (no browser launch) — much
-    cheaper than the plan's "spin up a probe browser" approach and
-    sufficient because the failure mode we care about is "library version
-    silently dropped the kwarg." If either lib is uninstalled, returns
-    False with no error (the cascade still works without persistence — D
-    just doesn't share its CF clearance).
-
-    Returns False on any probe error so /ready can surface a warning
-    rather than crashing.
-    """
-    if not _agent_available():
-        return False
-    try:
-        import inspect  # noqa: PLC0415
-
-        from crawl4ai import BrowserConfig as Crawl4AIBrowserConfig  # noqa: PLC0415
-
-        crawl4ai_params = inspect.signature(Crawl4AIBrowserConfig).parameters
-        if "user_data_dir" not in crawl4ai_params:
-            return False
-    except Exception:
-        return False
-    try:
-        import inspect  # noqa: PLC0415
-
-        from browser_use import BrowserConfig as BUBrowserConfig  # noqa: PLC0415
-
-        browseruse_params = inspect.signature(BUBrowserConfig).parameters
-        return "user_data_dir" in browseruse_params
-    except Exception:
-        return False
+    """Probe whether installed Crawl4AI / browser-use accept ``user_data_dir``."""
+    return _extras.user_data_dir_supported()
 
 
 # ---------------------------------------------------------------------------
@@ -2615,66 +2491,14 @@ async def _readiness_payload() -> dict[str, Any]:
     }
 
 
-def _check_browser_module(browser: str) -> str:  # noqa: PLR0911 — one return per backend
+def _check_browser_module(browser: str) -> str:
     """Best-effort: 'ok' / 'missing' / 'unknown' for the configured browser's Python module."""
-    if browser == "patchright":
-        try:
-            import patchright  # noqa: F401, PLC0415
-
-            return "ok"
-        except ImportError:
-            return "missing"
-    if browser == "camoufox":
-        try:
-            import camoufox  # noqa: F401, PLC0415
-
-            return "ok"
-        except ImportError:
-            return "missing"
-    if browser == "scrapling":
-        try:
-            import scrapling  # noqa: F401, PLC0415
-
-            return "ok"
-        except ImportError:
-            return "missing"
-    if browser == "obscura":
-        # Obscura needs Playwright (to connect over CDP) plus a reachable
-        # external server. The module check just verifies the client lib.
-        try:
-            import playwright  # noqa: F401, PLC0415
-
-            return "ok"
-        except ImportError:
-            return "missing"
-    return "unknown"
+    return _extras.check_browser_module(browser)
 
 
 async def _probe_llm(cfg: Any) -> tuple[bool | None, bool | None]:
-    """Probe the configured LLM endpoint. Returns (reachable, model_available).
-
-    Returns (None, None) for backends we can't probe (llama_cpp / vllm).
-    Delegates to the agent-layer backend probes so auth headers, endpoint
-    paths, and model-availability logic live in one place.
-    """
-    if cfg.llm in {"llama_cpp", "vllm"}:
-        return None, None
-
-    try:
-        from scrapper_tool.agent.backends.llm import get_llm_backend  # noqa: PLC0415
-        from scrapper_tool.errors import AgentLLMError  # noqa: PLC0415
-    except ImportError:
-        return None, None
-
-    try:
-        await get_llm_backend(cfg).probe()
-        return True, True
-    except AgentLLMError as exc:
-        if "unreachable" in str(exc).lower():
-            return False, False
-        return True, False
-    except Exception:
-        return False, False
+    """Probe the configured LLM endpoint. Returns (reachable, model_available)."""
+    return await _extras.probe_llm(cfg)
 
 
 # ---------------------------------------------------------------------------

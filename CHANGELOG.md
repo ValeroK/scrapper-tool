@@ -4,6 +4,21 @@ All notable changes to `scrapper-tool` are recorded here. Format follows [Keep a
 
 ## [Unreleased]
 
+### Changed
+
+- **Capability probes now live in one stdlib-only module,
+  `scrapper_tool._extras`.** The "is this extra installed / is the browser binary
+  actually on disk / is the LLM reachable" probes were defined inside
+  `http_server.py`, which means they only loaded when the `[http]` extra was
+  present, and `mcp.py` carried a hand-copied reimplementation of one of them
+  purely to avoid importing FastAPI. `_extras` imports nothing heavier than the
+  standard library at module level (every optional dependency is imported inside
+  the function that needs it), so the same probes are now available to any
+  caller, including a bare `pip install scrapper-tool`. `http_server` keeps its
+  private probe names as thin delegators rather than aliases, deliberately: the
+  sidecar's internal callers resolve them through the module namespace, so
+  monkeypatching one name still steers every use of it. No behaviour change.
+
 ### Fixed
 
 - **The render tier failed on its own default path.** Whenever a profile dir was in
