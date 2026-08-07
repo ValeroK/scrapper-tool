@@ -84,7 +84,7 @@ that fixes each one:
 
 ```console
 $ scrapper-tool doctor
-scrapper-tool doctor - v2.0.0     Status: degraded
+scrapper-tool doctor - v2.1.0     Status: degraded
 
 Tier     | Status   | Detail
 -------- | -------- | ------------------------------------------------

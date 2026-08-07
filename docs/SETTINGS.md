@@ -211,9 +211,9 @@ version, and the backend resolver will use it if it is already importable. It is
 **LGPL**, which is why this project never declares it as a dependency —
 installing it is your decision, not one the package makes for you.
 
-> The `cookies` extra is **not** in the 2.0.0 release on PyPI; it lands in the
-> next one. Until then the commands above only resolve from a source checkout
-> (`uv pip install --python .venv-cookies -e '.[cookies]'`).
+The `cookies` extra is new in **2.1.0**. On 2.0.0 it does not exist, so
+`pip install 'scrapper-tool[cookies]'` there resolves without rookiepy and
+`cookies export` reports no backend — pin `scrapper-tool>=2.1.0`.
 
 ### The cascade does not remember your login between requests
 

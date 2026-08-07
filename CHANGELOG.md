@@ -2,64 +2,7 @@
 
 All notable changes to `scrapper-tool` are recorded here. Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning follows [SemVer](https://semver.org/).
 
-## [Unreleased]
-
-### Fixed
-
-- **`cookies export --format netscape|header` no longer corrupts the default
-  jar.** Every format with no `--out` wrote to `<domain>.json` — the exact path
-  `load_cookies()` reads — so a Netscape export left the jar unparseable and the
-  next `load_cookies(domain)` died on a raw `JSONDecodeError`. Non-JSON formats
-  now get their own filenames (`<domain>.cookies.txt`,
-  `<domain>.cookie-header.txt`), and `load_cookies` reports a malformed jar by
-  name and shape instead of surfacing the decoder's error.
-
-- **`doctor` can exit `0` on a correct default install.** E2 on Camoufox is
-  `blocked` — Firefox has no CDP for browser-use to attach to — and that counted
-  as a fault, so a healthy stock machine reported `degraded` and exited `1`
-  forever, defeating the container-healthcheck use the command documents.
-  Configuration-blocked tiers no longer count against overall health;
-  `--require-tier e2` still fails, which is how you assert you need it.
-
-- **A declined or non-confirmable export exits `2`, not `0`.** Declining the
-  prompt, or piping without `--yes`, wrote nothing and reported success — so a
-  script that checked the exit code and then read the jar believed an export had
-  happened.
-
-- **`cookies export` keeps looking past an empty browser profile.** A readable
-  profile with no cookies for the domain counted as a successful read and ended
-  the search. Firefox leads the order deliberately, so a user logged in on
-  Chrome got "no cookies found" from an empty Firefox profile. The message now
-  names the browsers actually searched and points at `--browser`.
-
-- **`cookies export` no longer collects subdomain cookies for a parent domain.**
-  The filter matched both directions, so `--domain example.com` also exported
-  cookies scoped to `sub.example.com` — credentials `example.com` will never
-  receive. The reverse (a parent cookie for a subdomain export) is genuine and
-  still works.
-
-- **The Netscape export no longer widens every cookie to its subdomains.** Field
-  1 of that format is the include-subdomains flag and was hardcoded `TRUE`, so a
-  host-only cookie handed to curl was also sent to sibling subdomains.
-
-- **`doctor` output is ASCII.** The report header contained an em dash, which
-  the Windows console renders as a replacement character — visible mojibake in
-  the first line of a diagnostic that exists to be read on broken machines.
-
-- **The `[cookies]` install hint says what it costs.** rookiepy publishes wheels
-  for CPython 3.12 only, so on 3.13/3.14 the suggested command builds a Rust
-  extension from source. This project pins 3.13.
-
-- **`SCRAPPER_TOOL_HTTP_ALLOW_UNAUTH_COOKIES` is documented** in `.env.example`
-  and `docs/SETTINGS.md`. It disables the 403 that refuses cookies on an
-  unauthenticated sidecar, and it appeared in neither.
-
-- **The test suite and `mypy --strict` pass on Windows.** Six cookie tests
-  asserted POSIX mode bits, which NTFS reports as `0o666` regardless of how a
-  file was opened; one patched `$HOME`, which Windows `expanduser` ignores in
-  favour of `USERPROFILE`, so it asserted nothing; and `_harden_dir` branched on
-  `sys.platform`, which mypy narrows to the checking host and then declares the
-  rest of the function unreachable. Linux CI saw none of it.
+## [2.1.0] - 2026-08-07
 
 ### Added
 
@@ -242,6 +185,61 @@ All notable changes to `scrapper-tool` are recorded here. Format follows [Keep a
   prefers an already-open context, and only creates one when none exists —
   preferring the existing context also avoids attaching to a fresh *incognito*
   context on CDP-connected backends such as Obscura.
+
+- **`cookies export --format netscape|header` no longer corrupts the default
+  jar.** Every format with no `--out` wrote to `<domain>.json` — the exact path
+  `load_cookies()` reads — so a Netscape export left the jar unparseable and the
+  next `load_cookies(domain)` died on a raw `JSONDecodeError`. Non-JSON formats
+  now get their own filenames (`<domain>.cookies.txt`,
+  `<domain>.cookie-header.txt`), and `load_cookies` reports a malformed jar by
+  name and shape instead of surfacing the decoder's error.
+
+- **`doctor` can exit `0` on a correct default install.** E2 on Camoufox is
+  `blocked` — Firefox has no CDP for browser-use to attach to — and that counted
+  as a fault, so a healthy stock machine reported `degraded` and exited `1`
+  forever, defeating the container-healthcheck use the command documents.
+  Configuration-blocked tiers no longer count against overall health;
+  `--require-tier e2` still fails, which is how you assert you need it.
+
+- **A declined or non-confirmable export exits `2`, not `0`.** Declining the
+  prompt, or piping without `--yes`, wrote nothing and reported success — so a
+  script that checked the exit code and then read the jar believed an export had
+  happened.
+
+- **`cookies export` keeps looking past an empty browser profile.** A readable
+  profile with no cookies for the domain counted as a successful read and ended
+  the search. Firefox leads the order deliberately, so a user logged in on
+  Chrome got "no cookies found" from an empty Firefox profile. The message now
+  names the browsers actually searched and points at `--browser`.
+
+- **`cookies export` no longer collects subdomain cookies for a parent domain.**
+  The filter matched both directions, so `--domain example.com` also exported
+  cookies scoped to `sub.example.com` — credentials `example.com` will never
+  receive. The reverse (a parent cookie for a subdomain export) is genuine and
+  still works.
+
+- **The Netscape export no longer widens every cookie to its subdomains.** Field
+  1 of that format is the include-subdomains flag and was hardcoded `TRUE`, so a
+  host-only cookie handed to curl was also sent to sibling subdomains.
+
+- **`doctor` output is ASCII.** The report header contained an em dash, which
+  the Windows console renders as a replacement character — visible mojibake in
+  the first line of a diagnostic that exists to be read on broken machines.
+
+- **The `[cookies]` install hint says what it costs.** rookiepy publishes wheels
+  for CPython 3.12 only, so on 3.13/3.14 the suggested command builds a Rust
+  extension from source. This project pins 3.13.
+
+- **`SCRAPPER_TOOL_HTTP_ALLOW_UNAUTH_COOKIES` is documented** in `.env.example`
+  and `docs/SETTINGS.md`. It disables the 403 that refuses cookies on an
+  unauthenticated sidecar, and it appeared in neither.
+
+- **The test suite and `mypy --strict` pass on Windows.** Six cookie tests
+  asserted POSIX mode bits, which NTFS reports as `0o666` regardless of how a
+  file was opened; one patched `$HOME`, which Windows `expanduser` ignores in
+  favour of `USERPROFILE`, so it asserted nothing; and `_harden_dir` branched on
+  `sys.platform`, which mypy narrows to the checking host and then declares the
+  rest of the function unreachable. Linux CI saw none of it.
 
 ## [2.0.0] - 2026-07-24
 
