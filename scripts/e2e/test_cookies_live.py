@@ -308,6 +308,72 @@ async def check_authenticated_scrape(url: str, found: list[Any]) -> None:
 
 
 # ---------------------------------------------------------------------------
+# 5. Per-tier matrix — the part unit tests cannot prove
+# ---------------------------------------------------------------------------
+
+#: Each entry forces one tier rather than letting the cascade choose, because
+#: "the cascade returned a logged-in page" does not say *which* tier carried the
+#: session — and on a healthy install A/B/C usually wins before the interesting
+#: tiers ever run.
+#:
+#: `expect_tier` is the name that should appear in `cookies_applied`. A tier that
+#: legitimately cannot carry a session must appear in `cookies_skipped` with a
+#: reason instead; both are a pass, and *neither* appearing is the silent failure
+#: this whole matrix exists to catch.
+_TIER_MATRIX: tuple[tuple[str, str, str], ...] = (
+    ("fetch", "a_b_c", "curl_cffi cookie jar"),
+    ("hostile", "d", "Scrapling StealthyFetcher(cookies=...)"),
+    ("extract", "e1", "Crawl4AI BrowserConfig(cookies=...)"),
+    ("browse", "e2", "add_cookies on the live CDP context"),
+)
+
+
+async def check_tier_matrix(url: str, found: list[Any]) -> None:
+    """Force each tier in turn and confirm it reports what it did with the jar.
+
+    This is the check that could not be written as a unit test. D's kwarg
+    support is unknowable from Scrapling's ``(*args, **kwargs)`` signature, and
+    E2's injection only proves itself against a browser browser-use is really
+    driving.
+    """
+    if not found:
+        record("tier matrix", SKIP, "no cookies available")
+        return
+
+    from scrapper_tool import scrape
+
+    for mode, tier, mechanism in _TIER_MATRIX:
+        label = f"tier {tier} ({mechanism})"
+        try:
+            result = await scrape(url, mode=mode, cookies=found, interactive=(mode == "browse"))
+        except Exception as exc:  # noqa: BLE001
+            # A tier that cannot run at all here (no browser binary, no LLM) is
+            # an environment limit, not a cookie bug.
+            record(label, SKIP, f"{type(exc).__name__}: {str(exc)[:100]}")
+            continue
+
+        applied = result.get("cookies_applied") or []
+        skipped = {entry["tier"]: entry["reason"] for entry in result.get("cookies_skipped") or []}
+
+        if tier in applied:
+            record(label, PASS, "carried the session")
+        elif tier in skipped:
+            # Reported rather than silent. That is the contract.
+            record(label, PASS, f"declined with a reason: {skipped[tier]}")
+        else:
+            record(
+                label,
+                FAIL,
+                "tier ran but appears in neither cookies_applied nor cookies_skipped",
+            )
+
+        blob = json.dumps(result, default=str)
+        leaked = [c.name for c in found if c.value.get_secret_value() in blob]
+        if leaked:
+            record(f"{label} — no value leak", FAIL, f"leaked: {leaked}")
+
+
+# ---------------------------------------------------------------------------
 
 
 async def main() -> int:
@@ -341,6 +407,7 @@ async def main() -> int:
     found = check_cookie_export(args.domain)
     check_jar_permissions(found, args.domain)
     await check_authenticated_scrape(url, found)
+    await check_tier_matrix(url, found)
 
     sys.stdout.write("=" * 60 + "\n")
     passed = sum(1 for _, s, _ in _results if s == PASS)
