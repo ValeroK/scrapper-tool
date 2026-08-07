@@ -61,7 +61,7 @@ _COMMANDS: dict[str, _Command] = {
 def _build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="scrapper-tool",
-        description="Reusable web-scraping toolkit — Pattern A/B/C/D ladder.",
+        description="Reusable web-scraping toolkit - Pattern A/B/C/D ladder.",
     )
     sub = parser.add_subparsers(dest="command", required=True)
     for command in _COMMANDS.values():
