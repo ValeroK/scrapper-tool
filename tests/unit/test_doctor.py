@@ -205,8 +205,26 @@ class TestStatusResolution:
         assert (status, code) == ("ready", 0)
 
     def test_one_broken_tier_is_degraded(self) -> None:
-        status, code = doctor_module._resolve_status(self._tiers(e2="blocked"), require_tier=None)
+        status, code = doctor_module._resolve_status(
+            self._tiers(render="degraded"), require_tier=None
+        )
         assert (status, code) == ("degraded", 1)
+
+    def test_blocked_by_configuration_does_not_count_against_health(self) -> None:
+        """E2 on Camoufox is 'blocked' on every correct default install.
+
+        Firefox has no CDP for browser-use to attach to, so a stock config can
+        never run E2. Counting that as a fault made `doctor` exit 1 forever on a
+        healthy machine, which defeats the container-healthcheck use this command
+        documents itself as.
+        """
+        status, code = doctor_module._resolve_status(self._tiers(e2="blocked"), require_tier=None)
+        assert (status, code) == ("ready", 0)
+
+    def test_require_tier_still_fails_for_a_blocked_tier(self) -> None:
+        """Tolerating 'blocked' overall must not weaken an explicit gate on it."""
+        status, code = doctor_module._resolve_status(self._tiers(e2="blocked"), require_tier="e2")
+        assert (status, code) == ("not_ready", 2)
 
     def test_broken_a_b_c_is_not_ready(self) -> None:
         """A/B/C is the floor: below it the install isn't merely degraded."""

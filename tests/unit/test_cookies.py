@@ -200,11 +200,35 @@ class TestConversions:
 
     def test_netscape_marks_secure_and_expiry(self) -> None:
         text = cookies_mod.to_netscape([make_cookie(expires=1800000000.0, secure=True)])
-        row = next(line for line in text.splitlines() if not line.startswith("#"))
-        fields = row.split("\t")
-        assert fields[0] == ".example.com"
-        assert fields[3] == "TRUE"
+        fields = self._row(text)
+        assert fields[0] == "example.com"
+        assert fields[3] == "TRUE"  # field 3 is the secure flag
         assert fields[4] == "1800000000"
+
+    @staticmethod
+    def _row(text: str) -> list[str]:
+        return next(line for line in text.splitlines() if not line.startswith("#")).split("\t")
+
+    def test_a_host_only_cookie_is_not_widened_to_subdomains(self) -> None:
+        """Field 1 is include-subdomains. Every row used to be TRUE.
+
+        curl reads this file. Writing ``.app.example.com`` + TRUE for a cookie
+        the browser scoped to ``app.example.com`` alone hands it to
+        ``other.app.example.com`` too.
+        """
+        fields = self._row(
+            cookies_mod.to_netscape([make_cookie(domain="app.example.com")], host="app.example.com")
+        )
+        assert fields[0] == "app.example.com"
+        assert fields[1] == "FALSE"
+
+    def test_a_parent_domain_cookie_keeps_its_subdomain_scope(self) -> None:
+        """A cookie on example.com genuinely does reach app.example.com."""
+        fields = self._row(
+            cookies_mod.to_netscape([make_cookie(domain="example.com")], host="app.example.com")
+        )
+        assert fields[0] == ".example.com"
+        assert fields[1] == "TRUE"
 
     def test_playwright_round_trip_preserves_fields(self) -> None:
         original = make_cookie(path="/x", http_only=True, secure=False, expires=1800000000.0)
@@ -325,6 +349,18 @@ class TestJarPersistence:
     def test_missing_jar_returns_empty_not_error(self, tmp_path: Path) -> None:
         assert cookies_mod.load_cookies("never-saved.com", directory=tmp_path) == []
 
+    def test_a_non_json_jar_raises_something_actionable(self, tmp_path: Path) -> None:
+        """A bare JSONDecodeError from load_cookies("example.com") is baffling."""
+        (tmp_path / "example.com.json").write_text("# Netscape HTTP Cookie File\n")
+        with pytest.raises(ValueError, match="not a scrapper-tool cookie jar"):
+            cookies_mod.load_cookies("example.com", directory=tmp_path)
+
+    def test_a_json_scalar_jar_is_rejected_too(self, tmp_path: Path) -> None:
+        """Valid JSON of the wrong shape must not reach .get() and AttributeError."""
+        (tmp_path / "example.com.json").write_text('"just a string"')
+        with pytest.raises(ValueError, match="expected a JSON object"):
+            cookies_mod.load_cookies("example.com", directory=tmp_path)
+
     def test_never_widens_an_existing_file(self, tmp_path: Path) -> None:
         """O_EXCL means we create fresh; we must never chmod someone else's file open."""
         victim = tmp_path / "example.com.json"
@@ -395,6 +431,37 @@ class TestBrowserCookieShim:
         backend = _FakeBackend(fail=True)
         with pytest.raises(_browser_cookies.BrowserCookieError, match="keyring locked"):
             _browser_cookies.read_browser_cookies("example.com", browser="firefox", backend=backend)
+
+    def test_an_empty_browser_does_not_end_the_search(self) -> None:
+        """Firefox leads the order; a Chrome user must still be found.
+
+        A readable profile holding nothing for this domain used to count as a
+        successful read and return ``[]``, so a session in Chrome was reported
+        as "no cookies found" from an empty Firefox profile.
+        """
+
+        class _TwoBrowsers:
+            def __init__(self) -> None:
+                self.calls: list[str] = []
+
+            def firefox(self, _domains: list[str]) -> list[dict[str, Any]]:
+                self.calls.append("firefox")
+                return []
+
+            def chrome(self, _domains: list[str]) -> list[dict[str, Any]]:
+                self.calls.append("chrome")
+                return [{"domain": "example.com", "name": "s", "value": "v"}]
+
+        backend = _TwoBrowsers()
+        rows = _browser_cookies.read_browser_cookies("example.com", backend=backend)
+        assert [r["name"] for r in rows] == ["s"]
+        assert backend.calls == ["firefox", "chrome"]
+
+    def test_all_browsers_empty_names_what_was_searched(self) -> None:
+        backend = _FakeBackend([])
+        with pytest.raises(_browser_cookies.NoCookiesFound) as excinfo:
+            _browser_cookies.read_browser_cookies("example.com", backend=backend)
+        assert excinfo.value.browsers_searched == ["firefox"]
 
     def test_unknown_browser_name_is_an_error_not_a_silent_empty(self) -> None:
         backend = _FakeBackend()
