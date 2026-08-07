@@ -94,6 +94,16 @@ curl -s -X POST http://localhost:5792/scrape \
     "url":"https://hostile.com/p",
     "persist_browser_profile_dir": "/var/lib/scrapper/profiles/tasca/"
   }'
+
+# Scrape a logged-in page. Export the jar on the host first with
+#   scrapper-tool cookies export --domain app.example.com
+# Requires an API key — see "Sending cookies" below.
+curl -s -X POST http://localhost:5792/scrape \
+  -H "X-API-Key: $SCRAPPER_TOOL_HTTP_API_KEY" \
+  -d '{
+    "url":"https://app.example.com/account",
+    "cookies":[{"name":"session","value":"...","domain":"app.example.com"}]
+  }'
 ```
 
 **Rule of thumb**: if your call site is "scrape this URL, give me the data," use the simple path. If your call site is "I know this vendor's exact failure mode and I want to avoid wasted attempts," reach for the explicit fields. Both run on the same internal pipeline; neither is faster, the difference is who decides which pattern runs.
@@ -147,6 +157,16 @@ Fields you'll usually consume:
 - **`pattern_used`** — which step won.
 - **`escalation_log`** *(v1.4.0+)* — structured per-step trace with `outcome`/`reason`/`duration_s`. Ops debugging gold; replaces the opaque `pattern_attempts` list.
 - **`intermediate_raw_text`** *(v1.4.0+)* — Pattern D's HTML, always populated when D ran (even when D was rejected and the cascade escalated). Adapters that want their own in-process parser read this regardless of `pattern_used`.
+
+### Cookie reporting
+
+Three more keys appear when the request supplied `cookies`. They exist because "I passed cookies and still got the logged-out page" is otherwise unfalsifiable:
+
+- **`cookies_applied`** — tiers that actually carried the session, e.g. `["a_b_c", "render"]`.
+- **`cookies_skipped`** — `[{"tier": ..., "reason": ...}]` for tiers that ran **without** them. Reasons are specific and actionable: `no_cookie_matched_this_url` (the jar is scoped to a different host), `camoufox_exposes_no_cdp_endpoint` (E2 cannot carry a session on the default backend — Firefox has no CDP), `crawl4ai_browserconfig_has_no_cookies_param`, `scrapling_rejected_cookies_kwarg`.
+- **`cookies_harvested_from`** — tiers that *won* a cookie during the request (typically a `cf_clearance` from a render) and passed it forward to later tiers. Present whenever it happened, cookies supplied or not. Metadata only — never a value, since a response body is what every reverse proxy in the path writes to its access log.
+
+**How to read them together.** If the tier named in `pattern_used` appears in `cookies_applied`, the session was carried and a logged-out page means the session itself is stale — re-export. If it appears in `cookies_skipped`, the page is logged-out for the stated reason and a fresh export will not help. If cookies were sent and the winning tier appears in *neither*, that is a bug — please report it.
 
 ---
 
@@ -218,11 +238,29 @@ The one you'll call 95% of the time. Give it a URL and (optionally) a schema, ge
   "timeout_s": 60.0,
   "max_steps": 30,
   "headful": false,
-  "force_llm_extract": false
+  "force_llm_extract": false,
+  "persist_browser_profile_dir": "/var/lib/scrapper/profiles/tasca/",
+  "cookies": [
+    {"name": "session", "value": "...", "domain": "app.example.com", "path": "/",
+     "secure": true, "http_only": true, "same_site": "Lax", "expires": 1800000000}
+  ]
 }
 ```
 
 All fields except `url` are optional. With no `schema_json`, you get an auto-detected `ProductOffer` from JSON-LD/microdata when A/B/C succeeds.
+
+#### Sending cookies
+
+`cookies` carries an authenticated session into every tier that can hold one. Export a jar on the host with `scrapper-tool cookies export --domain <host>` — the sidecar never reads a browser itself, and cannot (it needs the OS credential store, which a container does not have).
+
+Only `name`, `value` and `domain` are required per entry; `path` defaults to `/` and `secure` defaults to `true`. Values are **write-only**: they are never echoed in a response and never reach a log. Each tier is given only the cookies that legitimately match the request URL by domain, path, scheme and expiry.
+
+Two behaviours worth knowing before you deploy:
+
+- **A sidecar with no API key refuses cookies with `403`.** `SCRAPPER_TOOL_HTTP_API_KEY` is unset by default, so `/scrape` is open — fine for anonymous scraping, and not fine once a request body carries a live session, because anyone who can reach the port could replay it through this host's egress IP. Set the key and send `X-API-Key`, or set `SCRAPPER_TOOL_HTTP_ALLOW_UNAUTH_COOKIES=1` for localhost development. Requests without cookies are unaffected.
+- **A request carrying cookies will not go through an untrusted proxy pool.** If `SCRAPPER_TOOL_PROXIES` names a pool that isn't marked trusted, the request is refused before a byte leaves the process rather than routing someone's session through a free proxy.
+
+The response then reports which tiers actually carried them — see [Response anatomy](#response-anatomy-v140).
 
 ### When does `mode=auto` escalate? (1.1.2 + 1.1.3 behaviour)
 

@@ -146,7 +146,11 @@ print(result["pattern_used"], result["product"])
 ```
 
 `scrape(url, schema=None, *, interactive=False, mode="auto", browser=None,
-model=None, timeout_s=None, instruction=None)` — same params as `auto_scrape`.
+model=None, timeout_s=None, instruction=None, persist_browser_profile_dir=None,
+cookies=None)` — same params as `auto_scrape`, plus two the MCP surface does not
+expose: `cookies` (see "It needs me to be logged in") and
+`persist_browser_profile_dir` (reuse a browser profile across requests so
+Cloudflare clearance survives).
 
 ```python
 # Structured extraction with a CSS schema:
@@ -182,7 +186,8 @@ Start with `scrapper-tool-serve` (needs `pip install 'scrapper-tool[http]'`),
 default port 5792.
 
 ```
-POST /scrape   {"url": "...", "schema_json": {...}, "interactive": false}
+POST /scrape   {"url": "...", "schema_json": {...}, "interactive": false,
+                "cookies": [ ... ]}
 POST /map      {"url": "...", "max_urls": 200}
 POST /crawl    {"url": "...", "depth": 2, "max_pages": 50}
 GET  /health   /ready   /metrics    (Prometheus)
@@ -190,6 +195,13 @@ GET  /health   /ready   /metrics    (Prometheus)
 
 `POST /scrape` takes the same fields as `auto_scrape` and returns the same
 payload. Also: `/fetch` (tier 1 only), `/extract` (force E1), `/browse` (force E2).
+
+Sending `cookies` to a sidecar with no API key configured is refused with **403**
+— an open port that accepts session cookies lets anyone replay someone's login
+through that host. The operator sets `SCRAPPER_TOOL_HTTP_API_KEY` (and you send
+`X-API-Key`), or `SCRAPPER_TOOL_HTTP_ALLOW_UNAUTH_COOKIES=1` for localhost
+development. If you get that 403, report it — it is a deployment fix, not
+something to retry around.
 
 ---
 
@@ -226,6 +238,9 @@ Every scrape returns a dict. The keys that matter:
 | `blocked` | true when every tier failed |
 | `is_structured` | whether a real structured payload was produced |
 | `escalation_log` | per-tier trace: what ran, what it cost, why it escalated |
+| `cookies_applied` | tiers that carried your cookies. Present only when you sent some |
+| `cookies_skipped` | `[{tier, reason}]` for tiers that ran **without** them. Same condition |
+| `cookies_harvested_from` | tiers that *won* a cookie (e.g. a `cf_clearance`) and passed it forward |
 
 **How to act on it:** if `blocked` is true, the site defeated every available
 tier — retry with `interactive=true` only if the page genuinely needs
@@ -264,6 +279,13 @@ data is in the DOM.
 - The toolkit cannot manufacture IP reputation. If a site blocks every tier from
   your IP, that's an IP-trust limit — a residential/mobile proxy is the fix, not
   a different tier.
+- **When several tiers fail at once, suspect the install before the site.** Ask
+  the user to run `scrapper-tool doctor`: it reports each tier as ok / degraded /
+  missing / blocked with the one command that fixes it. The common causes are a
+  browser *module* that imports while its *binary* was never downloaded, and a
+  local LLM that isn't running. `e2 | blocked` on the default `camoufox` backend
+  is expected, not a fault — Firefox has no CDP, so E2 needs
+  `SCRAPPER_TOOL_AGENT_BROWSER=patchright`.
 
 ## Reference
 

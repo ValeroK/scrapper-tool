@@ -171,7 +171,14 @@ pip install scrapper-tool                   # core: httpx + curl_cffi + selectol
 pip install scrapper-tool[agent]            # adds the MCP server
 pip install scrapper-tool[hostile]          # Pattern D — Scrapling
 pip install scrapper-tool[llm-agent]        # Pattern E — Camoufox + browser-use + Crawl4AI + Ollama
+pip install scrapper-tool[cookies]          # `cookies export` — read a local browser profile
 ```
+
+`[cookies]` pulls rookiepy, which publishes wheels for **CPython 3.12 only**, so
+on 3.13+ pip builds a Rust extension from source. You don't need a toolchain:
+extraction is a one-shot host-side step and the jar it writes is plain JSON, so
+run the export under 3.12 and load it anywhere. See
+[Settings](docs/SETTINGS.md#installing-cookies-without-a-rust-toolchain).
 
 `[hostile]` and `[llm-agent]` are **mutually exclusive under plain `pip`**
 (lxml conflict). For both in one env, use `uv pip install scrapper-tool[full,agent]`
@@ -198,6 +205,37 @@ asyncio.run(main())
 Pass a schema for structured extraction, or `interactive=True` for flows that
 need login / pagination. To crawl a whole site through the same cascade,
 `crawl_site(seed, depth=...)` streams a result per page.
+
+### Scraping a page that needs a login
+
+A member-only page usually doesn't fail — it returns the *logged-out* version,
+which is worse, because it looks like a successful scrape. The fix is a session
+cookie, and scrapper-tool never asks for a password: you log in normally in your
+own browser and it reads the resulting cookie.
+
+```console
+$ scrapper-tool cookies export --domain app.example.com
+```
+
+```python
+from scrapper_tool import load_cookies, scrape
+
+result = await scrape("https://app.example.com/account",
+                      cookies=load_cookies("app.example.com"))
+print(result["cookies_applied"])   # e.g. ["a_b_c", "render"] — tiers that carried it
+print(result["cookies_skipped"])   # [{"tier": ..., "reason": ...}] for those that couldn't
+```
+
+Those last two keys are the point: a tier that *can't* carry a session says so
+with a reason rather than silently handing back an anonymous page. Extraction is
+host-side only — it needs the OS credential store, so it cannot run in a
+container — and it is deliberately **absent from the MCP surface**, because an
+agent that can silently dump your cookie store is exactly the capability not to
+build. For Docker, `cookies seed-profile` writes a `storage_state.json` you
+bind-mount, so values never cross the HTTP boundary at all.
+
+Full detail, including the sidecar's `403`-without-an-API-key rule:
+[Settings](docs/SETTINGS.md#cookies-and-the-sidecar).
 
 Prefer the low-level building blocks? They're still here:
 
