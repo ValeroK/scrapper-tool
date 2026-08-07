@@ -98,3 +98,46 @@ class TestCanaryShim:
     def test_canary_still_exports_its_public_names(self) -> None:
         for name in ("main", "run_canary", "probe_profile", "add_subparser", "run_cli"):
             assert name in canary_module.__all__, name
+
+
+class TestTerminalOutputIsAscii:
+    """Every byte this CLI prints must survive a legacy Windows code page.
+
+    The Windows console defaults to cp1252 on an en-GB/en-US box, so a single
+    em dash in a help string or a report header comes back as a replacement
+    character. Docstrings are exempt — they are never written to a terminal —
+    which is exactly why this has to be asserted against *rendered output*
+    rather than against the source.
+
+    Checked as a sweep rather than per-string because the failure mode is drift:
+    the em dash is the house style in prose here, and it only becomes a bug at
+    the moment prose turns into stdout.
+    """
+
+    SURFACES = (
+        ["--help"],
+        ["doctor", "--help"],
+        ["cookies", "--help"],
+        ["cookies", "export", "--help"],
+        ["cookies", "seed-profile", "--help"],
+        ["canary", "--help"],
+    )
+
+    @pytest.mark.parametrize("argv", SURFACES, ids=" ".join)
+    def test_help_output_is_ascii(
+        self, argv: list[str], capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        with pytest.raises(SystemExit):
+            cli_module.main(argv)
+        captured = capsys.readouterr()
+        rendered = captured.out + captured.err
+        offenders = sorted({c for c in rendered if ord(c) > 127})
+        assert not offenders, f"non-ASCII in `scrapper-tool {' '.join(argv)}`: {offenders}"
+
+    def test_doctor_report_is_ascii(self, capsys: pytest.CaptureFixture[str]) -> None:
+        """The report header carried an em dash, and it is the first line you read."""
+        cli_module.main(["doctor"])
+        captured = capsys.readouterr()
+        rendered = captured.out + captured.err
+        offenders = sorted({c for c in rendered if ord(c) > 127})
+        assert not offenders, f"non-ASCII in the doctor report: {offenders}"

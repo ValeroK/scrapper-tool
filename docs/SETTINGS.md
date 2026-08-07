@@ -174,6 +174,47 @@ E2     browser-use agent            -> priciest, interactive=true only
 | `SCRAPPER_TOOL_DOMAIN_POLICY` | `1` (on) | Per-domain tier memory (see below). Set `0` to always run the full cascade. |
 | `SCRAPPER_TOOL_COOKIE_DIR` | `~/.scrapper-tool/cookies` | Where `scrapper-tool cookies export` writes jars. Created `0700`; each jar is `0600`. |
 
+### Installing `[cookies]` without a Rust toolchain
+
+`pip install 'scrapper-tool[cookies]'` pulls rookiepy, which publishes wheels for
+**CPython 3.12 only** — not `abi3`. On 3.13 and 3.14 pip therefore falls back to
+the sdist and builds a Rust extension, which needs a toolchain. This project's
+own `.python-version` is 3.13, so you will hit it.
+
+You do not need the toolchain. Extraction is a one-shot, host-side step and the
+jar it writes is plain JSON, so **the extractor and the cascade do not have to
+share an interpreter**. Run the export under 3.12:
+
+```console
+$ uv run --python 3.12 --with 'scrapper-tool[cookies]' \
+    scrapper-tool cookies export --domain app.example.com
+```
+
+That builds a throwaway 3.12 environment, installs rookiepy from its wheel, and
+writes the jar to `SCRAPPER_TOOL_COOKIE_DIR` — nothing is left behind and your
+main environment is untouched. A persistent venv works identically:
+
+```console
+$ uv venv --python 3.12 .venv-cookies
+$ uv pip install --python .venv-cookies 'scrapper-tool[cookies]'
+```
+
+Then load it from your normal 3.13/3.14 environment:
+
+```python
+from scrapper_tool import load_cookies, scrape
+result = await scrape(url, cookies=load_cookies("app.example.com"))
+```
+
+`browser_cookie3` is a pure-Python alternative that needs no toolchain on any
+version, and the backend resolver will use it if it is already importable. It is
+**LGPL**, which is why this project never declares it as a dependency —
+installing it is your decision, not one the package makes for you.
+
+> The `cookies` extra is **not** in the 2.0.0 release on PyPI; it lands in the
+> next one. Until then the commands above only resolve from a source checkout
+> (`uv pip install --python .venv-cookies -e '.[cookies]'`).
+
 ### The cascade does not remember your login between requests
 
 By design. Cookies you pass in are held for the life of one request and then
@@ -433,6 +474,34 @@ Available since v1.1.0. See [`http-sidecar.md`](http-sidecar.md) for the endpoin
 | `host` | `SCRAPPER_TOOL_HTTP_HOST` | `0.0.0.0` | Bind address. Use `127.0.0.1` to restrict to localhost. |
 | `port` | `SCRAPPER_TOOL_HTTP_PORT` | `5792` | TCP port. Avoids the crowded 8000/8080 range. |
 | `api_key` | `SCRAPPER_TOOL_HTTP_API_KEY` | (unset) | When set, all `/fetch /scrape /extract /browse` requests must include `X-API-Key: <value>`. Leave unset for internal-only sidecar networks. |
-| `cors_origins` | `SCRAPPER_TOOL_HTTP_CORS_ORIGINS` | `*` | Comma-separated CORS allowed origins. Use explicit origins (`https://app.example.com`) in production. |
+| `cors_origins` | `SCRAPPER_TOOL_HTTP_CORS_ORIGINS` | `*` | Comma-separated CORS allowed origins. Use explicit origins (`https://app.example.com`) in production. **`*` disables credentialed CORS** — see below. |
+| — | `SCRAPPER_TOOL_HTTP_ALLOW_UNAUTH_COOKIES` | (unset) | Allow `POST /scrape` to accept a `cookies` body when no API key is configured. Localhost development only — see below. |
 | `log_level` | `SCRAPPER_TOOL_HTTP_LOG_LEVEL` | `info` | Uvicorn log level. One of: `debug` / `info` / `warning` / `error` / `critical`. |
 | `serve_docs` | `SCRAPPER_TOOL_HTTP_DOCS` | `1` | When `0`, `/docs` and `/redoc` are not served. `/openapi.json` always works. Disable in production for reduced attack surface. |
+
+### Cookies and the sidecar
+
+Two settings above interact with credentialed requests, and both default to the
+safe side rather than the convenient one.
+
+**Wildcard CORS disables credentials.** The CORS spec forbids
+`Access-Control-Allow-Origin: *` together with
+`Access-Control-Allow-Credentials: true`, and the assumption that browsers make
+the pairing inert does not hold here: against the pinned Starlette, wildcard
+origins cause the request's `Origin` to be *reflected* verbatim while
+`allow-credentials: true` is still sent. Any page on any origin could then make
+credentialed cross-origin requests to the sidecar and read the responses. So
+when origins are wildcarded, credentialed CORS is switched off. Nothing
+legitimate is lost — the spec requires enumerating origins for credentials
+anyway. List them explicitly if you need it.
+
+**Cookies on an unauthenticated sidecar are refused.** `SCRAPPER_TOOL_HTTP_API_KEY`
+is unset by default, so `/scrape` is open out of the box. That is defensible for
+anonymous scraping and indefensible once a request body carries a live session
+cookie: anyone who can reach the port could replay someone's session through
+this host's egress IP. A `cookies` body without an API key therefore returns
+`403`. Only requests that actually carry cookies are affected.
+
+`SCRAPPER_TOOL_HTTP_ALLOW_UNAUTH_COOKIES=1` disables that check. It exists for
+localhost development. Do not set it on anything reachable from another machine
+— set an API key instead.

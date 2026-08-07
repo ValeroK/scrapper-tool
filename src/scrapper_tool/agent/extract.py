@@ -132,7 +132,7 @@ async def run_extract(
     # pass it to Crawl4AI's BrowserConfig so cookies (cf_clearance) persist
     # on disk between launches against the same dir. Crawl4AI honors
     # user_data_dir only when use_persistent_context=True — both must be set.
-    browser_cfg = BrowserConfig(**_browser_cfg_kwargs(config))
+    browser_cfg = BrowserConfig(**_browser_cfg_kwargs(config, url))
     run_cfg = CrawlerRunConfig(
         cache_mode=CacheMode.BYPASS,
         extraction_strategy=extraction_strategy,
@@ -203,10 +203,10 @@ def _looks_like_css_schema(schema: dict[str, object]) -> bool:
     return "baseSelector" in schema and "fields" in schema
 
 
-def _browser_cfg_kwargs(config: AgentConfig) -> dict[str, Any]:
+def _browser_cfg_kwargs(config: AgentConfig, url: str | None = None) -> dict[str, Any]:
     """Assemble Crawl4AI ``BrowserConfig`` kwargs for E1.
 
-    Two backend-specific branches:
+    Three backend-specific branches:
 
     * ``user_data_dir`` — a persistent on-disk profile so cf_clearance survives
       between launches. Crawl4AI honours it only with ``use_persistent_context``.
@@ -215,6 +215,11 @@ def _browser_cfg_kwargs(config: AgentConfig) -> dict[str, Any]:
       ``use_managed_browser`` (otherwise it launches its own and the endpoint is
       silently ignored), and that attach is mutually exclusive with a persistent
       profile — the external browser owns its own — so the profile is dropped.
+    * ``cookies`` — the caller's session. Crawl4AI launches its *own* browser
+      here (``AsyncWebCrawler(config=browser_cfg)``), so ``BrowserConfig`` is the
+      correct seam; there is no live context to inject into the way E2 has.
+      ``url`` is threaded in purely so the jar can be narrowed to the cookies
+      that may legitimately be sent there.
     """
     kwargs: dict[str, Any] = {
         "headless": not config.headful,
@@ -225,6 +230,17 @@ def _browser_cfg_kwargs(config: AgentConfig) -> dict[str, Any]:
     if config.user_data_dir:
         kwargs["user_data_dir"] = config.user_data_dir
         kwargs["use_persistent_context"] = True
+    if config.cookies:
+        from scrapper_tool import _extras  # noqa: PLC0415
+        from scrapper_tool.cookies import cookies_for_url, to_playwright  # noqa: PLC0415
+
+        # Never pass a kwarg the installed version doesn't declare — Crawl4AI's
+        # BrowserConfig raises on unexpected kwargs rather than ignoring them,
+        # which would turn a missing session into a failed tier.
+        if _extras.crawl4ai_accepts("cookies"):
+            applicable = cookies_for_url(config.cookies, url) if url else config.cookies
+            if applicable:
+                kwargs["cookies"] = to_playwright(applicable)
     if config.browser == "obscura":
         from scrapper_tool.agent.backends.browser import (  # noqa: PLC0415
             resolve_obscura_cdp_url,

@@ -16,6 +16,12 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, SecretStr
 
+# Runtime import, not TYPE_CHECKING: CookieIn appears in an AgentConfig field
+# annotation and pydantic resolves those against module globals when it builds
+# the model. `cookies` imports nothing but the stdlib and pydantic, so this
+# stays inside the "importable without the [llm-agent] extra" contract above.
+from scrapper_tool.cookies import CookieIn  # noqa: TC001
+
 # --- Result types ---------------------------------------------------------
 
 
@@ -108,6 +114,15 @@ class AgentConfig(BaseModel):
     # callers of agent_extract / agent_browse can also pass it via
     # SCRAPPER_TOOL_AGENT_USER_DATA_DIR for cross-call session sharing.
     user_data_dir: str | None = None
+    # Caller-supplied cookies for this one request, threaded to whichever tier
+    # runs. Set per-call by the cascade orchestrator (_build_overrides), exactly
+    # like user_data_dir above.
+    #
+    # Deliberately absent from ``from_env``: a cookie is a per-request identity,
+    # and an ambient env-configured session would silently apply the same login
+    # to every caller of a shared sidecar. ``value`` is a ``SecretStr``, so this
+    # field stays masked in ``repr`` and ``model_dump``.
+    cookies: list[CookieIn] | None = None
     # v1.5.0: CDP WebSocket URL for the Obscura backend (experimental Rust
     # headless browser run as an external ``obscura serve`` sidecar). Only
     # consulted when ``browser="obscura"``. Defaults to the conventional

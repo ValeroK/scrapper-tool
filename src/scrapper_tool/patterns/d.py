@@ -74,6 +74,8 @@ from scrapper_tool._logging import get_logger
 if TYPE_CHECKING:
     from collections.abc import AsyncIterator
 
+    from scrapper_tool.cookies import CookieIn
+
 _logger = get_logger(__name__)
 
 
@@ -84,6 +86,16 @@ _HOSTILE_NOT_INSTALLED = (
 )
 
 
+class CookieKwargUnsupported(TypeError):
+    """Raised when the installed Scrapling rejects the ``cookies`` kwarg.
+
+    A distinct type so the cascade can tell "this Scrapling build cannot carry a
+    session" — a reportable, non-fatal fact worth a ``cookies_skipped`` entry —
+    apart from "Pattern D blew up", which is a tier failure. Subclasses
+    ``TypeError`` so any caller that was already catching that keeps working.
+    """
+
+
 @asynccontextmanager
 async def hostile_client(
     *,
@@ -91,6 +103,7 @@ async def hostile_client(
     headless: bool = True,
     block_resources: bool = True,
     extra_kwargs: dict[str, Any] | None = None,
+    cookies: list[CookieIn] | None = None,
 ) -> AsyncIterator[Any]:
     """Yield a Scrapling ``StealthyFetcher`` configured for scraping.
 
@@ -114,6 +127,19 @@ async def hostile_client(
         Forwarded to ``StealthyFetcher.__init__``. Use for advanced
         Scrapling features (custom Playwright launch args, profile
         directory, etc.). Avoid in normal flows — defaults are tuned.
+    cookies : list[CookieIn], optional
+        Caller-supplied cookies, converted to Playwright shape and passed to
+        ``StealthyFetcher``. Callers are expected to have narrowed these to the
+        target URL already.
+
+        Passed inside a guard, unlike every other kwarg here.
+        ``StealthyFetcher.__init__`` is declared ``(*args, **kwargs)`` and
+        ``async_fetch`` is ``(url, **kwargs)``, so there is no signature to
+        inspect and no way to know statically whether this version accepts
+        ``cookies``. A rejected kwarg raises :class:`CookieKwargUnsupported`
+        rather than being swallowed, so the caller can record the tier as
+        skipped with a real reason instead of silently returning a logged-out
+        page.
 
     Yields
     ------
@@ -125,6 +151,8 @@ async def hostile_client(
     ------
     ImportError
         If the ``[hostile]`` extra is not installed.
+    CookieKwargUnsupported
+        If ``cookies`` was supplied and this Scrapling version rejects it.
     """
     try:
         from scrapling.fetchers import (  # noqa: PLC0415
@@ -139,15 +167,27 @@ async def hostile_client(
     }
     if extra_kwargs:
         init_kwargs.update(extra_kwargs)
+    if cookies:
+        from scrapper_tool.cookies import to_playwright  # noqa: PLC0415
+
+        init_kwargs["cookies"] = to_playwright(cookies)
 
     _logger.info(
         "patterns.d.hostile_client.start",
         timeout=timeout,
         headless=headless,
         block_resources=block_resources,
+        cookies=len(cookies) if cookies else 0,
     )
     # Scrapling is untyped on some installs but typed on others; tolerate both.
-    fetcher = StealthyFetcher(**init_kwargs)  # type: ignore[no-untyped-call,unused-ignore]
+    try:
+        fetcher = StealthyFetcher(**init_kwargs)  # type: ignore[no-untyped-call,unused-ignore]
+    except TypeError as exc:
+        # Only a cookie-shaped rejection is translated. Every other TypeError is
+        # a real bug in our kwargs and must keep propagating unchanged.
+        if cookies and "cookie" in str(exc).lower():
+            raise CookieKwargUnsupported(str(exc)) from exc
+        raise
     try:
         yield fetcher
     finally:
@@ -163,5 +203,6 @@ async def hostile_client(
 
 
 __all__ = [
+    "CookieKwargUnsupported",
     "hostile_client",
 ]

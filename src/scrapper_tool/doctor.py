@@ -19,7 +19,8 @@ half-working, each of which fails late and opaquely:
 Exit codes
 ----------
 
-- ``0`` — ready: every tier is ``ok`` or deliberately disabled.
+- ``0`` — ready: every tier is ``ok``, deliberately disabled, or blocked by a
+  configuration choice rather than a broken install (see ``_OK_STATES``).
 - ``1`` — degraded: the cheap A/B/C path works, something above it doesn't.
 - ``2`` — not ready: even A/B/C is broken, doctor itself errored, or a
   ``--require-tier`` gate was not met.
@@ -60,9 +61,19 @@ _STATUS_READY = "ready"
 _STATUS_DEGRADED = "degraded"
 _STATUS_NOT_READY = "not_ready"
 
-#: Tier states that don't count against overall health. ``disabled`` is an
-#: operator's explicit choice, not a fault.
-_OK_STATES = frozenset({"ok", "disabled"})
+#: Tier states that don't count against overall health.
+#:
+#: ``disabled`` is an operator's explicit choice, not a fault.
+#:
+#: ``blocked`` means "this tier cannot run in this configuration, and that is a
+#: property of the configuration rather than a broken install" — today only E2
+#: on a Firefox-family backend, which has no CDP for browser-use to attach to.
+#: Counting it as a fault made a *correct* default install report ``degraded``
+#: and exit ``1`` forever, which is useless as the container healthcheck this
+#: command documents itself as. An operator who genuinely needs E2 asks for it
+#: with ``--require-tier e2``, and that still fails — see :func:`_resolve_status`,
+#: which only accepts ``ok`` for an explicitly required tier.
+_OK_STATES = frozenset({"ok", "disabled", "blocked"})
 
 
 class _TierResult:
@@ -227,7 +238,7 @@ def _probe_cookies() -> _TierResult:
         return _TierResult("missing", "rookiepy not installed", [_hint("cookies")])
 
     platform_note = {
-        "darwin": "macOS: Chrome's key is in the login Keychain — the first read prompts",
+        "darwin": "macOS: Chrome's key is in the login Keychain - the first read prompts",
         "win32": "Windows: Chrome 127+ App-Bound Encryption may need admin; Firefox is reliable",
     }.get(sys.platform, "Linux: Chrome needs the Secret Service; Firefox reads unencrypted")
     return _TierResult("ok", f"cookie backend present. {platform_note}")
@@ -264,13 +275,26 @@ def _environment_checks(cfg: Any) -> tuple[dict[str, Any], list[str]]:
 
     checks["user_data_dir_supported"] = _extras.user_data_dir_supported()
 
-    # Whether caller-supplied cookies can actually reach the LLM tiers. These
-    # are the two kwargs the cascade threads them through, and they are the
+    # Whether caller-supplied cookies can actually reach the LLM tiers — the
     # difference between "cookies were applied" and a silently logged-out page.
+    #
+    # The two tiers are asked different questions on purpose, because they carry
+    # a session by different mechanisms:
+    #
+    # * E1 lets Crawl4AI launch its own browser, so the session rides on
+    #   ``BrowserConfig(cookies=...)`` and the probe is "does this build declare
+    #   that parameter".
+    # * E2 attaches over CDP to a browser we already launched and sets cookies on
+    #   the live context, so no browser-use kwarg is involved at all. What
+    #   decides it is whether the configured backend exposes a CDP endpoint —
+    #   Camoufox is Firefox, and Firefox dropped CDP. An earlier version of this
+    #   probe reported ``e2_accepts_storage_state`` from a browser-use signature;
+    #   that kwarg is not on E2's path, so it answered True for a route that did
+    #   not exist.
     if _extras.crawl4ai_available():
         checks["e1_accepts_cookies"] = _extras.crawl4ai_accepts("cookies")
-    if _extras.agent_available():
-        checks["e2_accepts_storage_state"] = _extras.browser_use_accepts("storage_state")
+    if _extras.agent_available() and cfg is not None:
+        checks["e2_accepts_cookies"] = cfg.browser != "camoufox"
 
     checks["captcha_key"] = "set" if os.environ.get("SCRAPPER_TOOL_CAPTCHA_KEY") else "not set"
 
@@ -410,8 +434,17 @@ def _resolve_status(tiers: dict[str, _TierResult], *, require_tier: str | None) 
 
 
 def _format_text(report: dict[str, Any]) -> str:
+    """Render the report as a terminal table.
+
+    Everything emitted here is plain ASCII. The Windows console defaults to a
+    legacy code page (cp1252 on an en-GB/en-US box), and an em dash written to
+    it comes back as a replacement character — so the one non-ASCII byte in this
+    function's output was visible mojibake in the very first line of the report.
+    Diagnostics are read on broken machines; they should not add a second
+    puzzle.
+    """
     lines: list[str] = []
-    lines.append(f"scrapper-tool doctor — v{report['version']}     Status: {report['status']}")
+    lines.append(f"scrapper-tool doctor - v{report['version']}     Status: {report['status']}")
     lines.append("")
     lines.append(f"{'Tier':<8} | {'Status':<8} | Detail")
     lines.append(f"{'-' * 8} | {'-' * 8} | {'-' * 48}")

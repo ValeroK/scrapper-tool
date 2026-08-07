@@ -27,7 +27,7 @@ from __future__ import annotations
 
 from typing import Any
 
-__all__ = ["BrowserCookieError", "read_browser_cookies", "resolve_backend"]
+__all__ = ["BrowserCookieError", "NoCookiesFound", "read_browser_cookies", "resolve_backend"]
 
 #: Browsers we try, in order, when the caller doesn't name one. Names match
 #: rookiepy's module-level functions (verified against 0.5.6).
@@ -58,6 +58,20 @@ class BrowserCookieError(RuntimeError):
     """Raised when no backend is installed, or a backend refuses to read."""
 
 
+class NoCookiesFound(BrowserCookieError):
+    """Every browser profile was readable; none held a cookie for this domain.
+
+    Distinct from its parent because it is not a failure of the *backend* — it
+    is the ordinary "you aren't logged in there, or you're logged in somewhere
+    else" outcome, and it maps to a different exit code. ``browsers_searched``
+    carries the names actually read so the CLI can name them.
+    """
+
+    def __init__(self, browsers_searched: list[str]) -> None:
+        self.browsers_searched = browsers_searched
+        super().__init__(f"no cookies for this domain in: {', '.join(browsers_searched)}")
+
+
 def resolve_backend() -> Any:
     """Import and return the cookie backend module, or raise.
 
@@ -82,7 +96,12 @@ def resolve_backend() -> Any:
 
     msg = (
         "No browser-cookie backend installed. Install the extra:\n"
-        "    pip install 'scrapper-tool[cookies]'"
+        "    pip install 'scrapper-tool[cookies]'\n"
+        "\n"
+        "rookiepy ships wheels for CPython 3.12 only, so on 3.13+ that builds a\n"
+        "Rust extension from source. If you would rather not, run the export from\n"
+        "a 3.12 environment - the jar is plain JSON and load_cookies() reads it\n"
+        "from any interpreter."
     )
     raise BrowserCookieError(msg)
 
@@ -100,6 +119,7 @@ def read_browser_cookies(
     names = (browser,) if browser else _BROWSER_ORDER
 
     errors: list[str] = []
+    read_but_empty: list[str] = []
     for name in names:
         reader = getattr(module, name, None)
         if reader is None:
@@ -109,8 +129,21 @@ def read_browser_cookies(
         except Exception as exc:
             errors.append(f"{name}: {_first_line(exc)}")
             continue
+        if not rows:
+            # Keep looking. A readable profile with no cookies for this domain
+            # is not an answer — Firefox leads _BROWSER_ORDER deliberately, so
+            # stopping here meant a user logged in on Chrome got "no cookies
+            # found" from an empty Firefox profile and no hint to try
+            # --browser chrome.
+            read_but_empty.append(name)
+            continue
         return [dict(row) for row in rows]
 
+    if read_but_empty:
+        # Not an error: every profile was readable, none held this domain. The
+        # caller turns this into an exit-1 "are you logged in?" message, and
+        # naming the browsers actually searched is what makes that actionable.
+        raise NoCookiesFound(read_but_empty)
     if errors:
         # One line per backend. rookiepy surfaces multi-line Rust panics with
         # source locations; pasting ten of those verbatim buries the one fact

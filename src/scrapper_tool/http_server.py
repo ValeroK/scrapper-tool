@@ -58,7 +58,7 @@ from scrapper_tool._logging import get_logger  # noqa: E402
 # CookieIn is a runtime import, not a TYPE_CHECKING one: it appears in a
 # Pydantic field annotation, and pydantic resolves those against module globals
 # when it builds the model. Deferring it would make ScrapeRequest fail to build.
-from scrapper_tool.cookies import CookieIn  # noqa: E402, TC001
+from scrapper_tool.cookies import CookieIn, cookies_for_url  # noqa: E402
 from scrapper_tool.errors import (  # noqa: E402
     AgentBlockedError,
     AgentError,
@@ -796,6 +796,12 @@ def _build_overrides(req: Any) -> dict[str, Any]:
         # persistent. None when no cascade ran (mode=extract / mode=browse
         # direct) — agent layer falls back to env var or its own default.
         "user_data_dir": req.__dict__.get("_resolved_profile_dir"),
+        # The request-scoped cookie jar, so E1/E2 can carry the caller's
+        # session. Travels the same route as user_data_dir above rather than
+        # as a separate kwarg: agent_extract / agent_browse funnel every
+        # per-call knob through AgentConfig.merged(), and a second channel
+        # would be one more thing to keep in sync.
+        "cookies": _request_cookies(req),
     }
     return {k: v for k, v in candidates.items() if v is not None}
 
@@ -1324,7 +1330,7 @@ async def _d_fetch_with_smart_defaults(req: Any) -> tuple[str, int, str]:
 
     Both behaviors can be disabled by explicitly setting the flags.
     """
-    from scrapper_tool.patterns.d import hostile_client  # noqa: PLC0415
+    from scrapper_tool.patterns.d import CookieKwargUnsupported, hostile_client  # noqa: PLC0415
 
     timeout_s = req.timeout_s or 30.0
     network_idle = bool(getattr(req, "pattern_d_network_idle", False))
@@ -1353,12 +1359,33 @@ async def _d_fetch_with_smart_defaults(req: Any) -> tuple[str, int, str]:
     if profile_dir:
         base_kwargs["user_data_dir"] = profile_dir
 
+    # Narrow the jar to this URL once, rather than per pass — _fetch_once can run
+    # up to three times (CF retry, network-idle retry) and the answer is the same
+    # every time.
+    d_cookies = _cookies_for_tier(req, "d")
+
     async def _fetch_once(*, solve: bool, ni: bool) -> tuple[str, int, str]:
+        nonlocal d_cookies
         kw = dict(base_kwargs)
         kw["solve_cloudflare"] = solve
         kw["network_idle"] = ni
-        async with hostile_client(timeout=effective_timeout) as fetcher:
-            response = await fetcher.async_fetch(req.url, **kw)
+        try:
+            async with hostile_client(timeout=effective_timeout, cookies=d_cookies) as fetcher:
+                response = await fetcher.async_fetch(req.url, **kw)
+        except CookieKwargUnsupported as exc:
+            # This Scrapling build cannot carry a session. Report it and retry
+            # once without cookies: a logged-out page is still worth more than a
+            # failed tier, and cookies_skipped tells the caller why the result
+            # looks anonymous. Clearing d_cookies stops later passes re-trying
+            # a kwarg we now know is rejected.
+            _logger.warning("scrape.d.cookies_unsupported", url=req.url, error=str(exc)[:120])
+            _mark_cookies_skipped(req, "d", "scrapling_rejected_cookies_kwarg")
+            d_cookies = None
+            async with hostile_client(timeout=effective_timeout) as fetcher:
+                response = await fetcher.async_fetch(req.url, **kw)
+        else:
+            if d_cookies:
+                _mark_cookies_applied(req, "d")
         html = getattr(response, "html_content", None) or getattr(response, "body", None) or ""
         status = int(getattr(response, "status", 0) or getattr(response, "status_code", 0) or 0)
         url = str(getattr(response, "url", req.url) or req.url)
@@ -1470,9 +1497,14 @@ def _make_ladder_fetch(req: Any) -> Callable[[], Awaitable[tuple[str, int, str]]
     async def fetch() -> tuple[str, int, str]:
         from scrapper_tool.ladder import request_with_ladder  # noqa: PLC0415
 
+        # This is the replay tier's HTTP leg, and it is the one place replay can
+        # carry a session: the recipe supplies selectors, the fetch is ours.
+        replay_cookies = _cookies_for_tier(req, "replay")
         response, _profile = await request_with_ladder(
-            "GET", req.url, timeout=req.timeout_s or 30.0, cookies=_request_cookies(req)
+            "GET", req.url, timeout=req.timeout_s or 30.0, cookies=replay_cookies
         )
+        if replay_cookies:
+            _mark_cookies_applied(req, "replay")
         return response.text or "", response.status_code, str(response.url)
 
     return fetch
@@ -1489,6 +1521,7 @@ def _make_render_fetch(req: Any) -> Callable[[], Awaitable[tuple[str, int, str]]
         from scrapper_tool.patterns.render import render_html  # noqa: PLC0415
 
         cfg = AgentConfig.from_env().merged(**_build_overrides(req))
+        replay_cookies = _cookies_for_tier(req, "replay")
         result = await render_html(
             req.url,
             browser=cfg.browser,
@@ -1504,7 +1537,10 @@ def _make_render_fetch(req: Any) -> Callable[[], Awaitable[tuple[str, int, str]]
                 locale=cfg.camoufox_locale,
             ),
             cdp_url=cfg.obscura_cdp_url,
+            cookies=replay_cookies,
         )
+        if replay_cookies:
+            _mark_cookies_applied(req, "replay")
         return result.html, result.status, result.final_url
 
     return render
@@ -1682,6 +1718,84 @@ def _request_cookies(req: Any) -> list[CookieIn] | None:
     return jar or None
 
 
+def _cookies_for_tier(req: Any, tier: str) -> list[CookieIn] | None:
+    """The caller's cookies narrowed to ``req.url``, or None when none apply.
+
+    Every tier that injects cookies goes through here rather than reaching for
+    ``_request_cookies`` directly, so the domain/path/secure/expiry rules are
+    applied in exactly one place. A jar that matches nothing for this URL is
+    reported as skipped — "I sent cookies and nothing happened" should never be
+    silent, and "none of them were scoped to this host" is the single most
+    likely explanation.
+    """
+    jar = _request_cookies(req)
+    if not jar:
+        return None
+    applicable = cookies_for_url(jar, req.url)
+    if not applicable:
+        _mark_cookies_skipped(req, tier, "no_cookie_matched_this_url")
+        return None
+    return applicable
+
+
+def _agent_cfg_for(req: Any, tier: str) -> Any:
+    """Build this request's :class:`AgentConfig` and record its cookie outcome.
+
+    The two always belong together — the config is what carries the jar into the
+    tier, so the moment it is built is the moment we can say whether the jar will
+    actually be carried. Pairing them in one call also keeps the answer from
+    drifting away from the config it describes.
+    """
+    from scrapper_tool.agent import AgentConfig  # noqa: PLC0415
+
+    cfg = AgentConfig.from_env().merged(**_build_overrides(req))
+    if tier == "e1":
+        _record_e1_cookie_outcome(req, cfg)
+    else:
+        _record_e2_cookie_outcome(req, cfg)
+    return cfg
+
+
+def _record_e1_cookie_outcome(req: Any, cfg: Any) -> None:
+    """Record whether E1 will actually carry the caller's cookies.
+
+    The injection itself lives in ``agent.extract._browser_cfg_kwargs`` — the
+    agent layer must not import this module — so applicability is decided here,
+    against the same probe the injection uses. Crawl4AI launches its own browser
+    and takes cookies on ``BrowserConfig``; a build whose ``BrowserConfig`` has
+    no ``cookies`` parameter simply cannot carry one.
+    """
+    if not _cookies_for_tier(req, "e1"):
+        return
+    if not _extras.crawl4ai_accepts("cookies"):
+        _mark_cookies_skipped(req, "e1", "crawl4ai_browserconfig_has_no_cookies_param")
+        return
+    if not getattr(cfg, "cookies", None):
+        # _build_overrides drops falsy values, so an empty jar never reaches the
+        # config. Nothing to carry, and nothing to claim.
+        return
+    _mark_cookies_applied(req, "e1")
+
+
+def _record_e2_cookie_outcome(req: Any, cfg: Any) -> None:
+    """Record whether E2 will actually carry the caller's cookies.
+
+    E2 injects into the live context via CDP (``agent.browse._inject_cookies``),
+    so the question is not "does browser-use accept a kwarg" but "is there a CDP
+    endpoint at all". Camoufox is Firefox, Firefox dropped CDP, and
+    ``agent_browse`` refuses to run without one — so on the default backend E2
+    never starts, let alone carries a session.
+    """
+    if not _cookies_for_tier(req, "e2"):
+        return
+    if getattr(cfg, "browser", None) == "camoufox":
+        _mark_cookies_skipped(req, "e2", "camoufox_exposes_no_cdp_endpoint")
+        return
+    if not getattr(cfg, "cookies", None):
+        return
+    _mark_cookies_applied(req, "e2")
+
+
 def _mark_cookies_applied(req: Any, tier: str) -> None:
     """Record that ``tier`` actually carried the caller's cookies.
 
@@ -1828,15 +1942,17 @@ async def _do_render_step(
             os=cfg.camoufox_os,
             locale=cfg.camoufox_locale,
         )
+        render_cookies = _cookies_for_tier(req, "render")
         result = await render_html(
             req.url,
             browser=cfg.browser,
             timeout_s=cfg.timeout_s,
             options=options,
             cdp_url=cfg.obscura_cdp_url,
-            cookies=_request_cookies(req),
+            cookies=render_cookies,
         )
-        _mark_cookies_applied(req, "render")
+        if render_cookies:
+            _mark_cookies_applied(req, "render")
     except Exception as exc:
         _logger.warning("scrape.render.failed", url=req.url, error=str(exc)[:200])
         log.append(
@@ -2003,11 +2119,11 @@ async def _do_scrape_e_tier(
         attempts.append("e1")
         e1_start = time.perf_counter()
         try:
-            from scrapper_tool.agent import AgentConfig, agent_extract  # noqa: PLC0415
+            from scrapper_tool.agent import agent_extract  # noqa: PLC0415
         except ImportError as exc:
             raise ConfigurationError(_AGENT_NOT_INSTALLED) from exc
 
-        cfg = AgentConfig.from_env().merged(**_build_overrides(req))
+        cfg = _agent_cfg_for(req, "e1")
         schema = (
             req.schema_json
             if req.schema_json is not None
@@ -2093,7 +2209,7 @@ async def _do_scrape_e_tier(
     attempts.append("e2")
     e2_start = time.perf_counter()
     try:
-        from scrapper_tool.agent import AgentConfig, agent_browse  # noqa: PLC0415
+        from scrapper_tool.agent import agent_browse  # noqa: PLC0415
     except ImportError as exc:
         raise ConfigurationError(_AGENT_NOT_INSTALLED) from exc
 
@@ -2102,7 +2218,7 @@ async def _do_scrape_e_tier(
         if req.schema_json is not None
         else "Extract the main content of this page"
     )
-    cfg = AgentConfig.from_env().merged(**_build_overrides(req))
+    cfg = _agent_cfg_for(req, "e2")
     schema = req.schema_json if isinstance(req.schema_json, dict) else None
     try:
         result = await agent_browse(req.url, instruction, schema=schema, config=cfg)
@@ -2303,10 +2419,12 @@ async def _do_scrape_inner(req: Any, attempts: list[str], start: float) -> dict[
         try:
             from scrapper_tool.ladder import request_with_ladder  # noqa: PLC0415
 
+            a_b_c_cookies = _cookies_for_tier(req, "a_b_c")
             response, profile = await request_with_ladder(
-                "GET", req.url, timeout=req.timeout_s or 30.0, cookies=_request_cookies(req)
+                "GET", req.url, timeout=req.timeout_s or 30.0, cookies=a_b_c_cookies
             )
-            _mark_cookies_applied(req, "a_b_c")
+            if a_b_c_cookies:
+                _mark_cookies_applied(req, "a_b_c")
             text = response.text or ""
             # Kept for the recipe learner: if a later tier's selectors also
             # match this raw body, its recipe can replay without a browser.

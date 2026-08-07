@@ -67,7 +67,19 @@ INSTALL_HINTS: dict[str, str] = {
     "llm-agent": "pip install 'scrapper-tool[llm-agent]'",
     "agent": "pip install 'scrapper-tool[agent]'",
     "http": "pip install 'scrapper-tool[http]'",
-    "cookies": "pip install 'scrapper-tool[cookies]'",
+    # rookiepy 0.5.6 publishes version-specific wheels only up to cp312 (not
+    # abi3), so on 3.13/3.14 this builds the Rust extension from source, and
+    # this project's own .python-version is 3.13.
+    #
+    # The hint names the way past that rather than just the obstacle. Extraction
+    # is a one-shot host-side step and the jar it writes is plain JSON, so the
+    # extractor and the cascade do not have to share an interpreter: export
+    # under 3.12, `load_cookies()` anywhere.
+    "cookies": (
+        "pip install 'scrapper-tool[cookies]'  "
+        "(rookiepy ships wheels for CPython 3.12 only; on 3.13+ either add a Rust "
+        "toolchain or run the export from a 3.12 env - the jar it writes is portable)"
+    ),
     "camoufox-binary": "camoufox fetch",
     "playwright-firefox": "playwright install firefox",
     "patchright-chromium": "patchright install chromium",
@@ -169,7 +181,7 @@ def playwright_browsers_root() -> Path:
     return Path.home() / ".cache" / "ms-playwright"
 
 
-def browser_binary_present(browser: str, *, root: Path | None = None) -> bool:  # noqa: PLR0911
+def browser_binary_present(browser: str, *, root: Path | None = None) -> bool:
     """Probe the on-disk binary for ``browser``.
 
     True when a launchable binary is found; False when the Python module is
@@ -215,15 +227,12 @@ def browser_binary_present(browser: str, *, root: Path | None = None) -> bool:  
         return any(p.is_file() for p in search_root.glob("firefox-*/firefox/firefox"))
 
     if browser == "scrapling":
-        # Scrapling ships its own Camoufox; if either binary is present we call
-        # it runnable.
-        if any(p.is_file() for p in search_root.glob("firefox-*/firefox/firefox")):
-            return True
-        try:
-            import scrapling  # noqa: F401, PLC0415
-        except ImportError:
-            return False
-        return False
+        # Scrapling drives its own Camoufox, which lands in the Playwright root
+        # as a Firefox build. The binary being there is the whole question —
+        # whether the Python package imports is `check_browser_module`'s job,
+        # and this used to ask it too, in a try/except whose branches both
+        # returned False.
+        return any(p.is_file() for p in search_root.glob("firefox-*/firefox/firefox"))
 
     if browser == "obscura":
         # Obscura is an external CDP server (sidecar), not a local binary.

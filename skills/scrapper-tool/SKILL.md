@@ -71,6 +71,17 @@ Two related things worth knowing:
 - Extraction only works on the user's host. It needs the OS credential store, so
   it cannot run in a container no matter how the environment is configured.
 
+If the user reports that `pip install 'scrapper-tool[cookies]'` tries to compile
+Rust: rookiepy publishes wheels for CPython 3.12 only. They do not need a
+toolchain — they can run the export from a 3.12 environment instead, because the
+jar is plain JSON and `load_cookies()` reads it from any interpreter.
+
+Check `cookies_applied` and `cookies_skipped` on the response before concluding
+anything. A tier that could not carry the session says so there with a reason
+(`camoufox_exposes_no_cdp_endpoint`, `no_cookie_matched_this_url`, …). If the
+tier that won appears in `cookies_skipped`, the logged-out page is explained and
+a fresh export will not help — report the reason instead.
+
 ## Three ways to call it — pick one
 
 | You are… | Use | How |

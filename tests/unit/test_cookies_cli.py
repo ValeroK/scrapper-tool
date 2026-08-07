@@ -11,6 +11,7 @@ The browser store is always faked. Nothing here touches a real profile.
 from __future__ import annotations
 
 import json
+import os
 import stat
 from pathlib import Path
 from typing import Any
@@ -19,6 +20,20 @@ import pytest
 
 from scrapper_tool import _cookies_cli
 from scrapper_tool import cli as cli_module
+
+
+def assert_mode(path: Path, expected: int) -> None:
+    """Assert a POSIX file mode, skipping the check on Windows.
+
+    NTFS carries permissions in ACLs rather than mode bits, so ``os.stat``
+    reports 0o666 for every file however it was opened. Mirrors the helper in
+    ``test_cookies.py``; duplicated rather than shared because ``tests`` is not
+    an importable package and no test module cross-imports today.
+    """
+    if os.name == "nt":
+        return
+    assert stat.S_IMODE(path.stat().st_mode) == expected
+
 
 _ROWS = [
     {
@@ -74,7 +89,7 @@ class TestExport:
         assert run(["export", "--domain", "example.com", "--yes"]) == 0
         written = jar_dir / "example.com.json"
         assert written.is_file()
-        assert stat.S_IMODE(written.stat().st_mode) == 0o600
+        assert_mode(written, 0o600)
         assert "Wrote 2 cookies" in capsys.readouterr().out
 
     def test_hides_values_by_default(
@@ -129,7 +144,7 @@ class TestExport:
         )
         assert code == 0
         assert out.read_text().startswith("# Netscape HTTP Cookie File")
-        assert stat.S_IMODE(out.stat().st_mode) == 0o600
+        assert_mode(out, 0o600)
 
     def test_header_format_is_pasteable(self, tmp_path: Path) -> None:
         out = tmp_path / "h.txt"
@@ -144,10 +159,25 @@ class TestExport:
     def test_non_tty_without_yes_aborts_without_writing(
         self, jar_dir: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """A piped invocation must not silently export a credential."""
+        """A piped invocation must not silently export a credential.
+
+        Exit 2, not 0: nothing was written, and a script that checks the code
+        and then reads the jar would otherwise believe the export succeeded.
+        """
         monkeypatch.setattr("sys.stdin.isatty", lambda: False)
-        assert run(["export", "--domain", "example.com"]) == 0
+        assert run(["export", "--domain", "example.com"]) == 2
         assert not (jar_dir / "example.com.json").exists()
+
+    def test_netscape_default_filename_does_not_clobber_the_json_jar(self, jar_dir: Path) -> None:
+        """The jar path is what load_cookies() reads; only JSON may land there."""
+        from scrapper_tool import cookies as cookies_mod
+
+        assert run(["export", "--domain", "example.com", "--yes", "--format", "netscape"]) == 0
+        assert not (jar_dir / "example.com.json").exists()
+        written = jar_dir / "example.com.cookies.txt"
+        assert written.read_text().startswith("# Netscape HTTP Cookie File")
+        # The round-trip the old behaviour broke: load_cookies must still work.
+        assert cookies_mod.load_cookies("example.com", directory=jar_dir) == []
 
 
 class TestNoCookies:
@@ -167,6 +197,46 @@ class TestNoCookies:
             lambda d, browser=None: [{"domain": "evil-example.com", "name": "x", "value": "v"}],
         )
         assert run(["export", "--domain", "example.com", "--yes"]) == 1
+
+    def test_a_subdomain_cookie_is_not_collected_for_the_parent(
+        self, monkeypatch: pytest.MonkeyPatch, jar_dir: Path
+    ) -> None:
+        """A cookie on sub.example.com is never sent to example.com.
+
+        The filter used to match both directions, so asking for the parent
+        collected credentials the target host would never receive.
+        """
+        monkeypatch.setattr(
+            _cookies_cli,
+            "read_browser_cookies",
+            lambda d, browser=None: [{"domain": "sub.example.com", "name": "x", "value": "v"}],
+        )
+        assert run(["export", "--domain", "example.com", "--yes"]) == 1
+
+    def test_a_parent_cookie_is_collected_for_the_subdomain(
+        self, monkeypatch: pytest.MonkeyPatch, jar_dir: Path
+    ) -> None:
+        """The other direction is genuinely in scope and must keep working."""
+        monkeypatch.setattr(
+            _cookies_cli,
+            "read_browser_cookies",
+            lambda d, browser=None: [{"domain": "example.com", "name": "x", "value": "v"}],
+        )
+        assert run(["export", "--domain", "app.example.com", "--yes"]) == 0
+
+    def test_the_empty_result_names_the_browsers_searched(
+        self, monkeypatch: pytest.MonkeyPatch, jar_dir: Path, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        from scrapper_tool._browser_cookies import NoCookiesFound
+
+        def _none_found(domain: str, browser: str | None = None) -> Any:
+            raise NoCookiesFound(["firefox", "chrome"])
+
+        monkeypatch.setattr(_cookies_cli, "read_browser_cookies", _none_found)
+        assert run(["export", "--domain", "example.com", "--yes"]) == 1
+        err = capsys.readouterr().err
+        assert "firefox, chrome" in err
+        assert "--browser" in err
 
 
 class TestBackendUnavailable:
@@ -200,8 +270,8 @@ class TestSeedProfile:
         )
         state = profile / "storage_state.json"
         assert state.is_file()
-        assert stat.S_IMODE(profile.stat().st_mode) == 0o700
-        assert stat.S_IMODE(state.stat().st_mode) == 0o600
+        assert_mode(profile, 0o700)
+        assert_mode(state, 0o600)
         payload = json.loads(state.read_text())
         assert payload["origins"] == []
         assert len(payload["cookies"]) == 2
@@ -216,7 +286,11 @@ class TestSeedProfile:
         )
 
     def test_refuses_home(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-        monkeypatch.setenv("HOME", str(tmp_path))
+        # Patch Path.home directly rather than $HOME: on Windows, expanduser
+        # reads USERPROFILE and ignores HOME entirely, so setting the env var
+        # left the guard pointing at the real home and the test asserted
+        # nothing. Patching the function exercises the guard on both platforms.
+        monkeypatch.setattr(Path, "home", classmethod(lambda cls: tmp_path))
         assert (
             run(
                 ["seed-profile", "--domain", "example.com", "--profile-dir", str(tmp_path), "--yes"]

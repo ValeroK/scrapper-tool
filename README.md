@@ -84,7 +84,7 @@ that fixes each one:
 
 ```console
 $ scrapper-tool doctor
-scrapper-tool doctor — v2.0.0     Status: degraded
+scrapper-tool doctor - v2.0.0     Status: degraded
 
 Tier     | Status   | Detail
 -------- | -------- | ------------------------------------------------
@@ -100,12 +100,19 @@ Fixes:
   playwright install firefox
   camoufox fetch
   ollama serve && ollama pull qwen3-vl:8b
+  pip install 'scrapper-tool[cookies]'  (rookiepy ships wheels for CPython 3.12 only; ...)
   set SCRAPPER_TOOL_AGENT_BROWSER=patchright to enable E2
 ```
 
 Exit `0` ready / `1` degraded / `2` not ready. `--json` for machine-readable
 output, and `--require-tier <name>` turns it into a CI or container healthcheck
 gate that only passes when that specific tier is `ok`.
+
+`e2 | blocked` above does **not** make the install unhealthy. Camoufox is
+Firefox, Firefox has no CDP, and browser-use attaches over CDP only — so E2
+cannot run on the default backend, and that is a configuration choice rather
+than a broken install. Say `--require-tier e2` if you actually need it; that
+still fails.
 
 Two things it will tell you that nothing else does: whether a browser *module*
 imports while its *binary* is missing (the published image once shipped exactly
