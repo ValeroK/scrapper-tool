@@ -68,12 +68,17 @@ INSTALL_HINTS: dict[str, str] = {
     "agent": "pip install 'scrapper-tool[agent]'",
     "http": "pip install 'scrapper-tool[http]'",
     # rookiepy 0.5.6 publishes version-specific wheels only up to cp312 (not
-    # abi3), so on 3.13/3.14 this builds the Rust extension from source. Saying
-    # so here is the difference between a one-line fix and a confusing build
-    # failure — and this project's own .python-version is 3.13.
+    # abi3), so on 3.13/3.14 this builds the Rust extension from source, and
+    # this project's own .python-version is 3.13.
+    #
+    # The hint names the way past that rather than just the obstacle. Extraction
+    # is a one-shot host-side step and the jar it writes is plain JSON, so the
+    # extractor and the cascade do not have to share an interpreter: export
+    # under 3.12, `load_cookies()` anywhere.
     "cookies": (
         "pip install 'scrapper-tool[cookies]'  "
-        "(needs a Rust toolchain on Python 3.13+; rookiepy ships wheels for 3.12 only)"
+        "(rookiepy ships wheels for CPython 3.12 only; on 3.13+ either add a Rust "
+        "toolchain or run the export from a 3.12 env - the jar it writes is portable)"
     ),
     "camoufox-binary": "camoufox fetch",
     "playwright-firefox": "playwright install firefox",

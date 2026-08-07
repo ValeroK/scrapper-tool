@@ -84,13 +84,22 @@ turnstile-solver = ["turnstile-solver>=0.1.4"]
 # if a user already has it installed, discovered via find_spec. There is a
 # regression test asserting it appears in no dependency list.
 #
-# Python support, checked against PyPI 2026-08-01: rookiepy 0.5.6 publishes
-# version-specific wheels (cp37..cp312), NOT abi3, plus an sdist. This project
-# requires >=3.12, so 3.12 installs from a wheel while 3.13 and 3.14 fall back to
-# building the Rust extension from source and need a toolchain. That is why
-# `cookies` is NOT in the CI test matrix — adding it would break two of the three
-# rows. The unit tests inject a fake backend into sys.modules instead, so
-# coverage of the cookie logic never depends on the extra being installable.
+# Python support, re-checked against PyPI 2026-08-07: rookiepy 0.5.6 publishes
+# version-specific wheels (cp37..cp312 plus pp37..pp310), NOT abi3, plus an
+# sdist. This project requires >=3.12, so 3.12 installs from a wheel while 3.13
+# and 3.14 fall back to building the Rust extension from source and need a
+# toolchain. That is why `cookies` is NOT in the CI test matrix — adding it
+# would break two of the three rows. The unit tests inject a fake backend into
+# sys.modules instead, so coverage of the cookie logic never depends on the
+# extra being installable.
+#
+# Nobody has to compile anything, though. Extraction is a one-shot host-side
+# step and the jar it writes is plain JSON, so the extractor and the cascade do
+# not need to share an interpreter: install this extra in a 3.12 environment,
+# run `cookies export` there, and `load_cookies()` reads the result from 3.13 or
+# 3.14. Verified end to end. (browser_cookie3 is pure-Python and needs no
+# toolchain at all, but see the LGPL note above — that is the user's call to
+# make, not ours to declare.)
 cookies = ["rookiepy>=0.5.6"]
 # Pattern D (Scrapling) + Pattern E (Crawl4AI) in one environment.
 # Requires the lxml override declared in [tool.uv]. Both libraries

@@ -96,7 +96,12 @@ def resolve_backend() -> Any:
 
     msg = (
         "No browser-cookie backend installed. Install the extra:\n"
-        "    pip install 'scrapper-tool[cookies]'"
+        "    pip install 'scrapper-tool[cookies]'\n"
+        "\n"
+        "rookiepy ships wheels for CPython 3.12 only, so on 3.13+ that builds a\n"
+        "Rust extension from source. If you would rather not, run the export from\n"
+        "a 3.12 environment - the jar is plain JSON and load_cookies() reads it\n"
+        "from any interpreter."
     )
     raise BrowserCookieError(msg)
 

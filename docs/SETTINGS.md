@@ -174,6 +174,47 @@ E2     browser-use agent            -> priciest, interactive=true only
 | `SCRAPPER_TOOL_DOMAIN_POLICY` | `1` (on) | Per-domain tier memory (see below). Set `0` to always run the full cascade. |
 | `SCRAPPER_TOOL_COOKIE_DIR` | `~/.scrapper-tool/cookies` | Where `scrapper-tool cookies export` writes jars. Created `0700`; each jar is `0600`. |
 
+### Installing `[cookies]` without a Rust toolchain
+
+`pip install 'scrapper-tool[cookies]'` pulls rookiepy, which publishes wheels for
+**CPython 3.12 only** — not `abi3`. On 3.13 and 3.14 pip therefore falls back to
+the sdist and builds a Rust extension, which needs a toolchain. This project's
+own `.python-version` is 3.13, so you will hit it.
+
+You do not need the toolchain. Extraction is a one-shot, host-side step and the
+jar it writes is plain JSON, so **the extractor and the cascade do not have to
+share an interpreter**. Run the export under 3.12:
+
+```console
+$ uv run --python 3.12 --with 'scrapper-tool[cookies]' \
+    scrapper-tool cookies export --domain app.example.com
+```
+
+That builds a throwaway 3.12 environment, installs rookiepy from its wheel, and
+writes the jar to `SCRAPPER_TOOL_COOKIE_DIR` — nothing is left behind and your
+main environment is untouched. A persistent venv works identically:
+
+```console
+$ uv venv --python 3.12 .venv-cookies
+$ uv pip install --python .venv-cookies 'scrapper-tool[cookies]'
+```
+
+Then load it from your normal 3.13/3.14 environment:
+
+```python
+from scrapper_tool import load_cookies, scrape
+result = await scrape(url, cookies=load_cookies("app.example.com"))
+```
+
+`browser_cookie3` is a pure-Python alternative that needs no toolchain on any
+version, and the backend resolver will use it if it is already importable. It is
+**LGPL**, which is why this project never declares it as a dependency —
+installing it is your decision, not one the package makes for you.
+
+> The `cookies` extra is **not** in the 2.0.0 release on PyPI; it lands in the
+> next one. Until then the commands above only resolve from a source checkout
+> (`uv pip install --python .venv-cookies -e '.[cookies]'`).
+
 ### The cascade does not remember your login between requests
 
 By design. Cookies you pass in are held for the life of one request and then
