@@ -43,7 +43,6 @@ from __future__ import annotations
 import json
 import os
 import stat
-import sys
 import time
 from pathlib import Path
 from typing import Any, Literal
@@ -519,8 +518,14 @@ def _harden_dir(path: Path) -> None:
     On Windows the POSIX mode bits are advisory, so this can succeed while
     granting nothing. Callers that care should warn rather than claim the
     directory is protected — see the CLI, which does exactly that.
+
+    The guard tests ``os.name``, not ``sys.platform``, on purpose: mypy
+    special-cases ``sys.platform`` and narrows it to the *checking* host, so on
+    a Windows machine it proves the rest of this function is dead and
+    ``--strict`` fails with ``[unreachable]``. ``os.name`` gets no such
+    treatment, so the same source type-checks on every platform.
     """
-    if sys.platform == "win32":  # pragma: no cover — POSIX-only CI
+    if os.name == "nt":  # pragma: no cover — POSIX-only CI
         return
     try:
         current = stat.S_IMODE(path.stat().st_mode)

@@ -11,6 +11,7 @@ The browser store is always faked. Nothing here touches a real profile.
 from __future__ import annotations
 
 import json
+import os
 import stat
 from pathlib import Path
 from typing import Any
@@ -19,6 +20,20 @@ import pytest
 
 from scrapper_tool import _cookies_cli
 from scrapper_tool import cli as cli_module
+
+
+def assert_mode(path: Path, expected: int) -> None:
+    """Assert a POSIX file mode, skipping the check on Windows.
+
+    NTFS carries permissions in ACLs rather than mode bits, so ``os.stat``
+    reports 0o666 for every file however it was opened. Mirrors the helper in
+    ``test_cookies.py``; duplicated rather than shared because ``tests`` is not
+    an importable package and no test module cross-imports today.
+    """
+    if os.name == "nt":
+        return
+    assert stat.S_IMODE(path.stat().st_mode) == expected
+
 
 _ROWS = [
     {
@@ -74,7 +89,7 @@ class TestExport:
         assert run(["export", "--domain", "example.com", "--yes"]) == 0
         written = jar_dir / "example.com.json"
         assert written.is_file()
-        assert stat.S_IMODE(written.stat().st_mode) == 0o600
+        assert_mode(written, 0o600)
         assert "Wrote 2 cookies" in capsys.readouterr().out
 
     def test_hides_values_by_default(
@@ -129,7 +144,7 @@ class TestExport:
         )
         assert code == 0
         assert out.read_text().startswith("# Netscape HTTP Cookie File")
-        assert stat.S_IMODE(out.stat().st_mode) == 0o600
+        assert_mode(out, 0o600)
 
     def test_header_format_is_pasteable(self, tmp_path: Path) -> None:
         out = tmp_path / "h.txt"
@@ -200,8 +215,8 @@ class TestSeedProfile:
         )
         state = profile / "storage_state.json"
         assert state.is_file()
-        assert stat.S_IMODE(profile.stat().st_mode) == 0o700
-        assert stat.S_IMODE(state.stat().st_mode) == 0o600
+        assert_mode(profile, 0o700)
+        assert_mode(state, 0o600)
         payload = json.loads(state.read_text())
         assert payload["origins"] == []
         assert len(payload["cookies"]) == 2
@@ -216,7 +231,11 @@ class TestSeedProfile:
         )
 
     def test_refuses_home(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-        monkeypatch.setenv("HOME", str(tmp_path))
+        # Patch Path.home directly rather than $HOME: on Windows, expanduser
+        # reads USERPROFILE and ignores HOME entirely, so setting the env var
+        # left the guard pointing at the real home and the test asserted
+        # nothing. Patching the function exercises the guard on both platforms.
+        monkeypatch.setattr(Path, "home", classmethod(lambda cls: tmp_path))
         assert (
             run(
                 ["seed-profile", "--domain", "example.com", "--profile-dir", str(tmp_path), "--yes"]

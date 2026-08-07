@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import stat
 import time
 from pathlib import Path
@@ -31,6 +32,23 @@ from pydantic import SecretStr, ValidationError
 from scrapper_tool import _browser_cookies
 from scrapper_tool import cookies as cookies_mod
 from scrapper_tool.cookies import CookieIn
+
+
+def assert_mode(path: Path, expected: int) -> None:
+    """Assert a POSIX file mode, skipping the check on Windows.
+
+    NTFS carries permissions in ACLs, not mode bits; ``os.stat`` reports 0o666
+    for every file regardless of how it was opened. Asserting an exact mode
+    there tests the filesystem rather than our code.
+
+    A helper rather than a ``skipif`` on the whole test, deliberately: these
+    tests also assert round-trips, refusals and file contents, and all of that
+    is platform-independent and worth running everywhere. Only the mode check
+    is POSIX-specific.
+    """
+    if os.name == "nt":
+        return
+    assert stat.S_IMODE(path.stat().st_mode) == expected
 
 
 def make_cookie(
@@ -279,8 +297,9 @@ class TestRedaction:
 class TestJarPersistence:
     def test_save_creates_0600_file_in_0700_dir(self, tmp_path: Path) -> None:
         target = cookies_mod.save_cookies([make_cookie()], "example.com", directory=tmp_path)
-        assert stat.S_IMODE(target.stat().st_mode) == 0o600
-        assert stat.S_IMODE(tmp_path.stat().st_mode) == 0o700
+        assert target.is_file()
+        assert_mode(target, 0o600)
+        assert_mode(tmp_path, 0o700)
 
     def test_round_trip_through_disk(self, tmp_path: Path) -> None:
         original = [make_cookie(name="sid", value="v1"), make_cookie(name="csrf", value="v2")]
@@ -299,7 +318,7 @@ class TestJarPersistence:
         target = cookies_mod.save_cookies(
             [make_cookie(value="new")], "example.com", directory=tmp_path, overwrite=True
         )
-        assert stat.S_IMODE(target.stat().st_mode) == 0o600
+        assert_mode(target, 0o600)
         loaded = cookies_mod.load_cookies("example.com", directory=tmp_path)
         assert loaded[0].value.get_secret_value() == "new"
 
@@ -313,7 +332,10 @@ class TestJarPersistence:
         victim.chmod(0o644)
         with pytest.raises(FileExistsError):
             cookies_mod.save_cookies([make_cookie()], "example.com", directory=tmp_path)
-        assert stat.S_IMODE(victim.stat().st_mode) == 0o644
+        assert_mode(victim, 0o644)
+        # The refusal itself is the platform-independent half: whatever the mode
+        # bits say, the existing file must survive untouched.
+        assert victim.read_text() == "{}"
 
     def test_jar_dir_honours_env_override(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
