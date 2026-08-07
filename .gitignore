@@ -39,6 +39,12 @@ ENV/
 reports/
 docs/_evidence/
 
+# Claude Code per-machine state. Listed individually rather than ignoring
+# .claude/ wholesale: shared config (settings.json, skills/) is meant to be
+# committed, and a blanket rule would drop it silently.
+.claude/settings.local.json
+.claude/scheduled_tasks.lock
+
 # OS
 .DS_Store
 Thumbs.db
