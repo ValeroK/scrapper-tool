@@ -4,6 +4,15 @@ All notable changes to `scrapper-tool` are recorded here. Format follows [Keep a
 
 ## [Unreleased]
 
+### Fixed
+
+- **The test suite and `mypy --strict` pass on Windows.** Six cookie tests
+  asserted POSIX mode bits, which NTFS reports as `0o666` regardless of how a
+  file was opened; one patched `$HOME`, which Windows `expanduser` ignores in
+  favour of `USERPROFILE`, so it asserted nothing; and `_harden_dir` branched on
+  `sys.platform`, which mypy narrows to the checking host and then declares the
+  rest of the function unreachable. Linux CI saw none of it.
+
 ### Added
 
 - **`scrapper-tool doctor`** — preflights every cascade tier and reports which
@@ -49,13 +58,32 @@ All notable changes to `scrapper-tool` are recorded here. Format follows [Keep a
   `cookies_skipped` (tiers that ran without them, with a reason) — without
   that, "I passed cookies and still got the logged-out page" is unfalsifiable.
 
-  Three decisions worth recording:
+  Each tier carries a session by a different mechanism, and the differences are
+  the whole substance of this feature:
 
-  - **A/B/C sets the curl_cffi cookie jar, not a `Cookie:` header.** That
-    session runs with `allow_redirects=True`, and a static header is re-sent
-    verbatim across a cross-domain redirect — handing the user's session to
-    whatever third-party host the redirect points at. The jar makes libcurl
-    apply domain and path scoping on every hop.
+  - **A/B/C and replay's HTTP leg set the curl_cffi cookie jar, not a `Cookie:`
+    header.** That session runs with `allow_redirects=True`, and a static header
+    is re-sent verbatim across a cross-domain redirect — handing the user's
+    session to whatever third-party host the redirect points at. The jar makes
+    libcurl apply domain and path scoping on every hop.
+  - **D passes them to Scrapling's `StealthyFetcher`, inside a guard.**
+    `StealthyFetcher.__init__` is declared `(*args, **kwargs)` and `async_fetch`
+    is `(url, **kwargs)`, so no signature probe can tell whether a given build
+    accepts `cookies`. A rejection is caught, reported as
+    `scrapling_rejected_cookies_kwarg`, and the fetch retried without them: a
+    logged-out page beats a failed tier, provided the caller can see why it
+    looks anonymous.
+  - **E1 passes them on Crawl4AI's `BrowserConfig`**, which is the right seam
+    because Crawl4AI launches its own browser. Gated on the parameter actually
+    existing — Crawl4AI raises on unexpected kwargs rather than ignoring them.
+  - **E2 sets them on the live browser context before browser-use attaches**,
+    and deliberately *not* via `storage_state`. That is a launch argument, and
+    by that point the browser and its context already exist: our stealth backend
+    launched them and browser-use attaches over CDP to that same instance. A
+    `storage_state` would at best seed a fresh context that nothing then drives.
+    On the default `camoufox` backend E2 cannot carry a session at all, because
+    Firefox has no CDP — reported as `camoufox_exposes_no_cdp_endpoint` rather
+    than left to look like a working path.
   - **The render tier injects before the first navigation**, not after. The
     request that decides logged-in vs logged-out is the one `goto()` issues.
     Injection is also allowed to raise, because `_do_render_step` catches and

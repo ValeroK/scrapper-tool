@@ -179,6 +179,18 @@ async def _run_with_handle(
 
     use_vision = is_vision_model(config.model)
 
+    # Inject the caller's session into the LIVE context, before browser-use
+    # attaches and before the agent navigates.
+    #
+    # Not `storage_state`: that is a *launch* argument, and by this point the
+    # browser and its context already exist — our stealth backend launched them
+    # and browser-use is about to attach over CDP to that same instance. A
+    # storage_state passed to BrowserSession would at best seed a fresh context
+    # that nothing then drives. Setting cookies on the resolved context is the
+    # same mechanism the render tier uses, and it lands on the context the agent
+    # actually gets.
+    await _inject_cookies(handle.playwright_browser, config, url)
+
     # Attach browser-use to the LIVE browser our stealth backend launched, so it
     # drives THAT one instead of starting its own default Chromium.
     #
@@ -233,6 +245,35 @@ async def _run_with_handle(
         duration_s=duration,
         schema=schema,
     )
+
+
+async def _inject_cookies(pw_browser: Any, config: AgentConfig, url: str) -> None:
+    """Set the caller's cookies on the live context E2 is about to drive.
+
+    Mirrors the render tier (``patterns.render.render_html``) exactly, and for
+    the same reasons: resolve the context through
+    :func:`~scrapper_tool.agent.backends.browser.resolve_context` because
+    Camoufox in persistent mode hands back a ``BrowserContext`` rather than a
+    ``Browser``, and narrow the jar with ``cookies_for_url`` so nothing is sent
+    to a host it isn't scoped to.
+
+    Exceptions propagate. ``run_browse`` already classifies and reports tier
+    failures, and a silently missing session would surface as the agent
+    cheerfully reporting it could not find the logged-in page.
+    """
+    if not config.cookies:
+        return
+
+    from scrapper_tool.agent.backends.browser import resolve_context  # noqa: PLC0415
+    from scrapper_tool.cookies import cookies_for_url, redact, to_playwright  # noqa: PLC0415
+
+    applicable = cookies_for_url(config.cookies, url)
+    if not applicable:
+        return
+
+    context = await resolve_context(pw_browser)
+    await context.add_cookies(to_playwright(applicable))
+    _logger.debug("agent.browse.cookies_applied", url=url, cookies=redact(applicable))
 
 
 def _schema_for_prompt(schema: type[BaseModel] | dict[str, object]) -> str:

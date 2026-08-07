@@ -264,13 +264,26 @@ def _environment_checks(cfg: Any) -> tuple[dict[str, Any], list[str]]:
 
     checks["user_data_dir_supported"] = _extras.user_data_dir_supported()
 
-    # Whether caller-supplied cookies can actually reach the LLM tiers. These
-    # are the two kwargs the cascade threads them through, and they are the
+    # Whether caller-supplied cookies can actually reach the LLM tiers — the
     # difference between "cookies were applied" and a silently logged-out page.
+    #
+    # The two tiers are asked different questions on purpose, because they carry
+    # a session by different mechanisms:
+    #
+    # * E1 lets Crawl4AI launch its own browser, so the session rides on
+    #   ``BrowserConfig(cookies=...)`` and the probe is "does this build declare
+    #   that parameter".
+    # * E2 attaches over CDP to a browser we already launched and sets cookies on
+    #   the live context, so no browser-use kwarg is involved at all. What
+    #   decides it is whether the configured backend exposes a CDP endpoint —
+    #   Camoufox is Firefox, and Firefox dropped CDP. An earlier version of this
+    #   probe reported ``e2_accepts_storage_state`` from a browser-use signature;
+    #   that kwarg is not on E2's path, so it answered True for a route that did
+    #   not exist.
     if _extras.crawl4ai_available():
         checks["e1_accepts_cookies"] = _extras.crawl4ai_accepts("cookies")
-    if _extras.agent_available():
-        checks["e2_accepts_storage_state"] = _extras.browser_use_accepts("storage_state")
+    if _extras.agent_available() and cfg is not None:
+        checks["e2_accepts_cookies"] = cfg.browser != "camoufox"
 
     checks["captcha_key"] = "set" if os.environ.get("SCRAPPER_TOOL_CAPTCHA_KEY") else "not set"
 
