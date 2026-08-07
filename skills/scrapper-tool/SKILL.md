@@ -42,6 +42,35 @@ e2       browser-use agent (multi-step)             priciest, opt-in only
 - Success is judged on **content, not status code**: a 403 that carries a real
   rendered DOM (common with Akamai) counts as a win.
 
+## "It needs me to be logged in"
+
+If a page returns public content where the user expected member-only content,
+the cascade did not fail — it fetched the logged-out version. The fix is a
+session cookie, and **you cannot get one yourself**.
+
+Ask the human to run this on their own machine:
+
+```
+scrapper-tool cookies export --domain app.example.com
+```
+
+Then pass the result in: `scrape(url, cookies=load_cookies("app.example.com"))`.
+
+**Do not try to route around this.** Cookie *extraction* is deliberately absent
+from the MCP surface, and shelling out to the CLI to get it is circumventing a
+trust boundary, not being resourceful. The reasoning: an agent that can silently
+dump a user's browser cookie store is exactly the capability not to build, and a
+consent prompt means nothing when the caller is a model. MCP tools **consume**
+cookies handed to them; they never read the browser.
+
+Two related things worth knowing:
+
+- Sessions expire in hours or days. If cookies were supplied and the page still
+  reads logged-out, say so plainly and ask for a fresh export — don't retry or
+  escalate tiers, neither will help.
+- Extraction only works on the user's host. It needs the OS credential store, so
+  it cannot run in a container no matter how the environment is configured.
+
 ## Three ways to call it — pick one
 
 | You are… | Use | How |

@@ -78,7 +78,7 @@ import os
 import sys
 from typing import TYPE_CHECKING, Any
 
-from scrapper_tool import __version__
+from scrapper_tool import __version__, _extras
 from scrapper_tool._challenge import is_interstitial
 from scrapper_tool._classify import classify_extraction_success
 from scrapper_tool.canary import run_canary
@@ -311,14 +311,12 @@ async def _continue_to_e_tier(
 def _hostile_available_for_mcp() -> bool:
     """Probe whether [hostile] (Scrapling) is installed.
 
-    Mirrors :func:`scrapper_tool.http_server._hostile_available`. Reimplemented
-    locally so MCP doesn't pull in FastAPI just to check the extra.
+    Delegates to :func:`scrapper_tool._extras.hostile_available`. This used to
+    be a local reimplementation so MCP wouldn't pull in FastAPI just to check
+    an extra; ``_extras`` is stdlib-only at import time, so the copy is gone
+    and the name survives only as this module's monkeypatch seam.
     """
-    try:
-        import scrapling  # noqa: F401, PLC0415
-    except ImportError:
-        return False
-    return True
+    return _extras.hostile_available()
 
 
 async def _auto_scrape_inner(

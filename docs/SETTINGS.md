@@ -172,6 +172,22 @@ E2     browser-use agent            -> priciest, interactive=true only
 | `SCRAPPER_TOOL_RECIPE_CACHE` | `1` (on) | Learn-once / replay. Set `0` to disable both learning and replay. |
 | `SCRAPPER_TOOL_RECIPE_DIR` | temp dir | Where learned recipes and domain policies are stored (one JSON file per domain). |
 | `SCRAPPER_TOOL_DOMAIN_POLICY` | `1` (on) | Per-domain tier memory (see below). Set `0` to always run the full cascade. |
+| `SCRAPPER_TOOL_COOKIE_DIR` | `~/.scrapper-tool/cookies` | Where `scrapper-tool cookies export` writes jars. Created `0700`; each jar is `0600`. |
+
+### The cascade does not remember your login between requests
+
+By design. Cookies you pass in are held for the life of one request and then
+dropped — they are never written to the recipe store. That store is keyed by
+*domain*, but cookies are per-*identity*, so two callers scraping one domain as
+different users would silently share a session. Its TTL is 14 days while a
+`cf_clearance` lasts about 30 minutes, and its whole contract is "every read
+failure is silent" — fine for a CSS selector, wrong for a credential, where the
+worst case of a *successful* read is impersonating the wrong user.
+
+If you want a login to persist across requests, use the mechanism that already
+exists for it: export once with `scrapper-tool cookies seed-profile`, then point
+`persist_browser_profile_dir` at that directory. It is caller-owned and isolated
+per vendor.
 
 The render tier is on by default because it is both cheaper and more reliable
 than escalating to an LLM. Measured on real targets: one site returned 403 on

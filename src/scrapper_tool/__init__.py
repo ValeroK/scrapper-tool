@@ -40,6 +40,11 @@ from __future__ import annotations
 
 from scrapper_tool.adapter import Adapter
 from scrapper_tool.cascade import crawl_site, scrape
+from scrapper_tool.cookies import (
+    CookieIn,
+    load_cookies,
+    save_cookies,
+)
 from scrapper_tool.errors import (
     AgentBlockedError,
     AgentError,
@@ -90,6 +95,7 @@ def __getattr__(name: str) -> object:  # PEP 562
         "agent_session",
         "AgentConfig",
         "AgentResult",
+        "CookieIn",
         "ActionTrace",
         "AgentSession",
     }:
@@ -113,6 +119,7 @@ __all__ = [
     "BlockedError",
     "CaptchaSolveError",
     "ConfigurationError",
+    "CookieIn",
     "ParseError",
     "ProxyPool",
     "ScrapingError",
@@ -124,8 +131,10 @@ __all__ = [
     "agent_extract",
     "agent_session",
     "crawl_site",
+    "load_cookies",
     "request_with_ladder",
     "request_with_retry",
+    "save_cookies",
     "scrape",
     "vendor_client",
 ]

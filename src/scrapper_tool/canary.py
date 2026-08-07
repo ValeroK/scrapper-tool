@@ -47,12 +47,11 @@ Output (--json, machine-readable)::
 
 from __future__ import annotations
 
-import argparse
 import asyncio
 import json
 import sys
 import time
-from typing import TYPE_CHECKING, cast
+from typing import TYPE_CHECKING, Any, cast
 
 from scrapper_tool._logging import get_logger
 from scrapper_tool.errors import BlockedError, VendorHTTPError
@@ -63,6 +62,7 @@ from scrapper_tool.ladder import (
 )
 
 if TYPE_CHECKING:
+    import argparse
     from collections.abc import Sequence
 
     import httpx
@@ -197,13 +197,8 @@ def _format_text(report: dict[str, object]) -> str:
     return "\n".join(lines)
 
 
-def _build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(
-        prog="scrapper-tool",
-        description="Reusable web-scraping toolkit — Pattern A/B/C/D ladder.",
-    )
-    sub = parser.add_subparsers(dest="command", required=True)
-
+def add_subparser(sub: Any) -> None:
+    """Register the ``canary`` subcommand on ``scrapper-tool``'s dispatcher."""
     canary = sub.add_parser(
         "canary",
         help="Probe a URL through the impersonation ladder; report which profile won.",
@@ -242,17 +237,9 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Emit machine-readable JSON instead of a text table.",
     )
 
-    return parser
 
-
-def main(argv: Sequence[str] | None = None) -> int:
-    """Entry point for ``scrapper-tool`` console script."""
-    parser = _build_parser()
-    args = parser.parse_args(argv)
-
-    if args.command != "canary":  # pragma: no cover — argparse rejects others
-        parser.error(f"unknown command: {args.command}")
-
+def run_cli(args: argparse.Namespace, parser: argparse.ArgumentParser) -> int:
+    """Handler invoked by the ``scrapper-tool`` dispatcher."""
     ladder: tuple[str, ...]
     if args.profiles:
         ladder = tuple(p.strip() for p in args.profiles.split(",") if p.strip())
@@ -286,12 +273,28 @@ def main(argv: Sequence[str] | None = None) -> int:
     return exit_code
 
 
+def main(argv: Sequence[str] | None = None) -> int:
+    """Entry point for the ``scrapper-tool`` console script.
+
+    Kept as a forwarding shim after the dispatcher moved to
+    :mod:`scrapper_tool.cli`. Two reasons it stays: an editable install still
+    has ``scrapper-tool`` pointing here until it is reinstalled, and this is a
+    documented public entry point. The import is function-local because
+    ``cli`` imports *this* module to register the subcommand.
+    """
+    from scrapper_tool.cli import main as _cli_main  # noqa: PLC0415
+
+    return _cli_main(argv)
+
+
 if __name__ == "__main__":  # pragma: no cover
     raise SystemExit(main())
 
 
 __all__ = [
+    "add_subparser",
     "main",
     "probe_profile",
     "run_canary",
+    "run_cli",
 ]

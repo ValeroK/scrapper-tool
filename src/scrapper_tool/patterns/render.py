@@ -35,12 +35,15 @@ from scrapper_tool.agent.backends.browser import (
     BrowserLaunchOptions,
     get_browser_backend,
     open_browser,
+    resolve_context,
 )
+from scrapper_tool.cookies import cookies_for_url, redact, to_playwright
 from scrapper_tool.proxy import resolve_proxy
 
 if TYPE_CHECKING:
     from collections.abc import Sequence
 
+    from scrapper_tool.cookies import CookieIn
     from scrapper_tool.proxy import ProxyPool
 
 _logger = get_logger(__name__)
@@ -77,6 +80,7 @@ async def render_html(
     fingerprint: str = "browserforge",
     behavior: str = "off",
     proxy_pool: ProxyPool | None = None,
+    cookies: list[CookieIn] | None = None,
 ) -> RenderResult:
     """Render ``url`` with a stealth browser and return the HTML. No LLM.
 
@@ -95,6 +99,10 @@ async def render_html(
         profile, so clearance cookies survive), proxy, and the render knobs.
     cdp_url
         CDP endpoint for the Obscura backend.
+    cookies
+        Caller-supplied cookies. Only those matching ``url`` by domain, path,
+        scheme and expiry are injected, and injection happens *before* the
+        first navigation.
 
     Raises
     ------
@@ -131,11 +139,25 @@ async def render_html(
             msg = f"browser backend {handle.name!r} exposes no Playwright Browser to render with"
             raise ImportError(msg)
 
-        context = (
-            pw_browser.contexts[0]
-            if getattr(pw_browser, "contexts", None)
-            else await pw_browser.new_context()
-        )
+        context = await resolve_context(pw_browser)
+
+        # Inject before the first navigation, never after. The request that
+        # decides logged-in vs logged-out is the one goto() issues, so an
+        # after-goto hook would fetch the logged-out page and then helpfully
+        # attach the session to nothing. Letting add_cookies raise is also
+        # deliberate: _do_render_step catches and logs tier exceptions properly,
+        # whereas the page-hook consumer path swallows them, which would make a
+        # failed injection invisible.
+        if cookies:
+            applicable = cookies_for_url(cookies, url)
+            if applicable:
+                await context.add_cookies(to_playwright(applicable))
+                _logger.debug(
+                    "patterns.render.cookies_applied",
+                    url=url,
+                    cookies=redact(applicable),
+                )
+
         page = context.pages[0] if getattr(context, "pages", None) else await context.new_page()
 
         response = await page.goto(url, wait_until=wait_until, timeout=timeout_s * 1000)
@@ -145,11 +167,14 @@ async def render_html(
         html = await page.content()
         status = int(getattr(response, "status", 200) or 200)
         final_url = str(getattr(page, "url", url) or url)
-        cookies: Sequence[dict[str, Any]] = ()
+        # Named `harvested` rather than `cookies` to keep it distinct from the
+        # caller-supplied `cookies` parameter above. These are what the render
+        # *won* — a cf_clearance, say — and they flow out on RenderResult.
+        harvested: Sequence[dict[str, Any]] = ()
         get_cookies = getattr(context, "cookies", None)
         if callable(get_cookies):
             try:
-                cookies = tuple(await get_cookies())
+                harvested = tuple(await get_cookies())
             except Exception as exc:  # pragma: no cover — defensive
                 _logger.debug("patterns.render.cookies_failed", error=str(exc))
 
@@ -175,7 +200,7 @@ async def render_html(
             bytes=len(html),
             proxied=attempt_proxy is not None,
         )
-        return RenderResult(html=html, status=status, final_url=final_url, cookies=cookies)
+        return RenderResult(html=html, status=status, final_url=final_url, cookies=harvested)
 
 
 async def _render_via_scrapling(

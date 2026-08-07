@@ -38,7 +38,6 @@ import shutil
 import tempfile
 import time
 import warnings
-from pathlib import Path
 from typing import TYPE_CHECKING, Any, Literal
 
 # Pydantic v2 emits a UserWarning when a field name shadows a BaseModel
@@ -53,8 +52,13 @@ warnings.filterwarnings(
 
 from pydantic import BaseModel, ConfigDict, Field  # noqa: E402 — after warnings filter
 
-from scrapper_tool import __version__  # noqa: E402
+from scrapper_tool import __version__, _extras  # noqa: E402
 from scrapper_tool._logging import get_logger  # noqa: E402
+
+# CookieIn is a runtime import, not a TYPE_CHECKING one: it appears in a
+# Pydantic field annotation, and pydantic resolves those against module globals
+# when it builds the model. Deferring it would make ScrapeRequest fail to build.
+from scrapper_tool.cookies import CookieIn  # noqa: E402, TC001
 from scrapper_tool.errors import (  # noqa: E402
     AgentBlockedError,
     AgentError,
@@ -69,6 +73,7 @@ from scrapper_tool.ladder import IMPERSONATE_LADDER  # noqa: E402
 
 if TYPE_CHECKING:
     from collections.abc import Awaitable, Callable, Sequence
+    from pathlib import Path
 
 
 # ---------------------------------------------------------------------------
@@ -120,6 +125,16 @@ class ScrapeRequest(BaseModel):
             "On D failure, falls through to E1/E2 unless hostile_fallback=false. "
             "Use for vendors recon-classified as hostile (Cloudflare Turnstile, "
             "Akamai EVA, DataDome) where A/B/C is known to fail."
+        ),
+    )
+    cookies: list[CookieIn] | None = Field(
+        None,
+        description=(
+            "Caller-supplied cookies, threaded to every tier that can carry them. "
+            "Export them with `scrapper-tool cookies export --domain <host>`. "
+            "Values are write-only: they are never echoed back in a response and "
+            "never appear in logs. Sending these to an unauthenticated sidecar is "
+            "refused with 403 — see SCRAPPER_TOOL_HTTP_API_KEY."
         ),
     )
     browser: str | None = Field(None, description="Override SCRAPPER_TOOL_AGENT_BROWSER")
@@ -338,176 +353,52 @@ def _require_fastapi() -> None:
 def _agent_available() -> bool:
     """Return True if the ``[llm-agent]`` extra is installed.
 
-    This is a *Python-package* check only — the ``camoufox`` /
-    ``patchright`` / ``crawl4ai`` modules import cleanly. It does NOT
-    guarantee the on-disk browser binary is present (Camoufox's
-    Firefox blob, Playwright Chromium / Firefox, ...). For runtime
-    capability use :func:`_agent_runnable`.
+    Thin delegator to :func:`scrapper_tool._extras.agent_available`. A wrapper
+    rather than a bare alias, deliberately: callers below resolve these names
+    through this module's namespace, so a test that monkeypatches one here
+    still steers every internal use of it.
     """
-    try:
-        import scrapper_tool.agent  # noqa: F401, PLC0415
-
-        return True
-    except ImportError:
-        return False
+    return _extras.agent_available()
 
 
 def _playwright_browsers_root() -> Path:
-    """Return ``$PLAYWRIGHT_BROWSERS_PATH`` (or its default).
-
-    Playwright stores binaries here as ``<browser>-<rev>/...``. Both
-    ``playwright install firefox`` and ``patchright install chromium``
-    write into this directory. ``$PLAYWRIGHT_BROWSERS_PATH`` overrides
-    the default; we honour it.
-    """
-    override = os.environ.get("PLAYWRIGHT_BROWSERS_PATH")
-    if override:
-        return Path(override)
-    return Path.home() / ".cache" / "ms-playwright"
+    """Return ``$PLAYWRIGHT_BROWSERS_PATH`` (or its default)."""
+    return _extras.playwright_browsers_root()
 
 
-def _browser_binary_present(browser: str) -> bool:  # noqa: PLR0911
+def _browser_binary_present(browser: str) -> bool:
     """Probe the on-disk binary for the configured agent browser.
 
-    True when a launchable binary is found for ``browser``; False when
-    the Python module is installed but the binary isn't (the case
-    that bit us on the published 1.1.0 image — ``agent_installed``
-    was true, ``patchright install chromium`` had run, but Firefox
-    wasn't downloaded so any Pattern E1/E2 attempt failed at runtime).
-
-    Returns False rather than raising — ``/ready`` should report
-    ``degraded``, not crash.
+    Resolves the browsers root through :func:`_playwright_browsers_root` above
+    rather than letting ``_extras`` look it up itself, so tests that
+    monkeypatch *that* name keep pointing this probe at ``tmp_path``.
     """
-    root = _playwright_browsers_root()
-
-    if browser == "patchright":
-        # Patchright ships a patched Chromium under chromium-<rev>/. The
-        # subdirectory is ``chrome-linux64/`` on Linux x64 (default
-        # Playwright layout); older images used ``chrome-linux/``. Try
-        # both so the probe works against any reasonable Playwright
-        # version, and against Patchright's headless-shell variant.
-        candidates = (
-            "chromium-*/chrome-linux64/chrome",
-            "chromium-*/chrome-linux/chrome",
-            "chromium_headless_shell-*/chrome-linux64/headless_shell",
-            "chromium_headless_shell-*/chrome-linux/headless_shell",
-        )
-        return any(p.is_file() for pat in candidates for p in root.glob(pat))
-
-    if browser == "camoufox":
-        # Camoufox stores its Firefox fork under its own path; the
-        # python wrapper exposes ``camoufox.path``. browser-use (E2)
-        # also pulls Playwright Firefox, so we treat either as runnable.
-        try:
-            import camoufox  # noqa: PLC0415
-
-            cf_path = getattr(camoufox, "path", None)
-            if cf_path and Path(cf_path).is_file():
-                return True
-        except ImportError:
-            pass
-        # Fallback: Camoufox installs into ms-playwright/firefox-* on
-        # some distributions. browser-use definitely uses Playwright
-        # Firefox.
-        return any(p.is_file() for p in root.glob("firefox-*/firefox/firefox"))
-
-    if browser == "scrapling":
-        # Scrapling ships its own Camoufox; if either binary is present
-        # we call it runnable.
-        if any(p.is_file() for p in root.glob("firefox-*/firefox/firefox")):
-            return True
-        try:
-            import scrapling  # noqa: F401, PLC0415
-        except ImportError:
-            return False
-        return False
-
-    if browser == "obscura":
-        # Obscura is an external CDP server (sidecar), not a local binary.
-        # Probe the configured endpoint with a short TCP connect.
-        return _obscura_endpoint_reachable()
-
-    # Unknown browser — be conservative and report False so /ready
-    # surfaces the configuration mistake rather than silently passing.
-    return False
+    return _extras.browser_binary_present(browser, root=_playwright_browsers_root())
 
 
 def _obscura_endpoint_reachable(timeout_s: float = 0.5) -> bool:
-    """Best-effort TCP reachability probe for the Obscura CDP endpoint.
-
-    Reads ``SCRAPPER_TOOL_AGENT_OBSCURA_CDP_URL`` (default
-    ``http://127.0.0.1:9222``) and attempts a short blocking connect. Returns
-    False on any failure so ``/ready`` reports ``degraded`` rather than
-    crashing.
-    """
-    import socket  # noqa: PLC0415
-    from urllib.parse import urlparse  # noqa: PLC0415
-
-    url = os.environ.get("SCRAPPER_TOOL_AGENT_OBSCURA_CDP_URL", "http://127.0.0.1:9222")
-    parsed = urlparse(url)
-    host = parsed.hostname or "127.0.0.1"
-    port = parsed.port or 9222
-    try:
-        with socket.create_connection((host, port), timeout=timeout_s):
-            return True
-    except OSError:
-        return False
+    """Best-effort TCP reachability probe for the Obscura CDP endpoint."""
+    return _extras.obscura_endpoint_reachable(timeout_s)
 
 
 def _agent_runnable(browser: str) -> bool:
     """True when both the Python extra AND the binary are present.
 
-    ``agent_installed`` ∧ ``browser_binary on disk``. This is the
-    field callers should gate Pattern E1/E2 on; ``agent_installed``
-    alone is necessary but not sufficient.
+    Composed from this module's own wrappers rather than delegating to
+    :func:`_extras.agent_runnable`, so patching either half changes the
+    composed answer.
     """
     return _agent_available() and _browser_binary_present(browser)
 
 
 def _hostile_available() -> bool:
     """Return True if the ``[hostile]`` extra (Scrapling) is installed."""
-    try:
-        import scrapling  # noqa: F401, PLC0415
-
-        return True
-    except ImportError:
-        return False
+    return _extras.hostile_available()
 
 
 def _user_data_dir_supported() -> bool:
-    """v1.3.0: Probe whether installed Crawl4AI / browser-use accept user_data_dir.
-
-    Inspects the ``BrowserConfig`` signatures (no browser launch) — much
-    cheaper than the plan's "spin up a probe browser" approach and
-    sufficient because the failure mode we care about is "library version
-    silently dropped the kwarg." If either lib is uninstalled, returns
-    False with no error (the cascade still works without persistence — D
-    just doesn't share its CF clearance).
-
-    Returns False on any probe error so /ready can surface a warning
-    rather than crashing.
-    """
-    if not _agent_available():
-        return False
-    try:
-        import inspect  # noqa: PLC0415
-
-        from crawl4ai import BrowserConfig as Crawl4AIBrowserConfig  # noqa: PLC0415
-
-        crawl4ai_params = inspect.signature(Crawl4AIBrowserConfig).parameters
-        if "user_data_dir" not in crawl4ai_params:
-            return False
-    except Exception:
-        return False
-    try:
-        import inspect  # noqa: PLC0415
-
-        from browser_use import BrowserConfig as BUBrowserConfig  # noqa: PLC0415
-
-        browseruse_params = inspect.signature(BUBrowserConfig).parameters
-        return "user_data_dir" in browseruse_params
-    except Exception:
-        return False
+    """Probe whether installed Crawl4AI / browser-use accept ``user_data_dir``."""
+    return _extras.user_data_dir_supported()
 
 
 # ---------------------------------------------------------------------------
@@ -558,10 +449,41 @@ def _build_app(
         redoc_url="/redoc" if serve_docs else None,
     )
 
+    # Wildcard origins and credentialed CORS must not be combined.
+    #
+    # The CORS spec forbids `Access-Control-Allow-Origin: *` together with
+    # `Access-Control-Allow-Credentials: true`, and the assumption used to be
+    # that this pairing was merely misconfigured-but-inert because browsers
+    # reject it. Checked against the pinned Starlette (1.3.1) it is not inert:
+    # with allow_origins=["*"] and allow_credentials=True, Starlette *reflects*
+    # the request's Origin header verbatim and still sends
+    # allow-credentials: true. A page on any origin can then make credentialed
+    # cross-origin requests to this sidecar and read the responses — which for
+    # a sidecar that holds API keys and session cookies is a real exfiltration
+    # path, not a lint finding.
+    #
+    # So when origins are wildcarded we drop credentials rather than keep an
+    # exploitable pairing. Nothing legitimate is lost: credentialed CORS
+    # requires enumerating origins under the spec anyway, so a deployment that
+    # genuinely needs it must list them, and one that doesn't is unaffected.
+    wildcard_origins = "*" in (cors_origins or [])
+    if wildcard_origins:
+        _logger.warning(
+            "http.cors.credentials_disabled",
+            reason="allow_origins=* cannot be combined with credentialed CORS",
+            remedy="set SCRAPPER_TOOL_HTTP_CORS_ORIGINS to an explicit origin list",
+        )
+        if api_key is None:
+            _logger.warning(
+                "http.cors.open_and_unauthenticated",
+                reason="wildcard CORS with no API key configured",
+                remedy="set SCRAPPER_TOOL_HTTP_API_KEY",
+            )
+
     app.add_middleware(
         CORSMiddleware,
         allow_origins=cors_origins,
-        allow_credentials=True,
+        allow_credentials=not wildcard_origins,
         allow_methods=["*"],
         allow_headers=["*"],
     )
@@ -576,6 +498,40 @@ def _build_app(
                 status_code=status.HTTP_401_UNAUTHORIZED,
                 detail="Invalid or missing X-API-Key header.",
             )
+
+    async def _check_cookie_auth(req: ScrapeRequest) -> None:
+        """Refuse caller-supplied cookies on an unauthenticated sidecar.
+
+        ``_check_api_key`` is a no-op when ``SCRAPPER_TOOL_HTTP_API_KEY`` is
+        unset, which is the default — so ``/scrape`` is open out of the box.
+        That is defensible for anonymous scraping and indefensible the moment a
+        request body carries a live session cookie: anyone who can reach the
+        port could replay someone's session through this host's egress IP.
+
+        Breaking "works out of the box" is the right call here, but only for
+        requests that actually carry cookies; everything else is unaffected.
+        ``SCRAPPER_TOOL_HTTP_ALLOW_UNAUTH_COOKIES=1`` is the localhost-dev
+        escape hatch.
+        """
+        if not req.cookies:
+            return
+        if api_key is not None:
+            return
+        if os.environ.get("SCRAPPER_TOOL_HTTP_ALLOW_UNAUTH_COOKIES", "").strip().lower() in {
+            "1",
+            "true",
+            "yes",
+            "on",
+        }:
+            return
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail=(
+                "Refusing cookies on an unauthenticated sidecar. Set "
+                "SCRAPPER_TOOL_HTTP_API_KEY and send X-API-Key, or set "
+                "SCRAPPER_TOOL_HTTP_ALLOW_UNAUTH_COOKIES=1 for localhost development."
+            ),
+        )
 
     # ---- Exception handlers ---------------------------------------------
 
@@ -737,7 +693,11 @@ def _build_app(
             "cascade falls through to E1 and the response carries hostile_skipped=true."
         ),
     )
-    async def scrape(req: ScrapeRequest, _: None = Depends(_check_api_key)) -> dict[str, Any]:
+    async def scrape(
+        req: ScrapeRequest,
+        _: None = Depends(_check_api_key),
+        __: None = Depends(_check_cookie_auth),
+    ) -> dict[str, Any]:
         return await _do_scrape(req)
 
     @app.post(
@@ -1511,7 +1471,7 @@ def _make_ladder_fetch(req: Any) -> Callable[[], Awaitable[tuple[str, int, str]]
         from scrapper_tool.ladder import request_with_ladder  # noqa: PLC0415
 
         response, _profile = await request_with_ladder(
-            "GET", req.url, timeout=req.timeout_s or 30.0
+            "GET", req.url, timeout=req.timeout_s or 30.0, cookies=_request_cookies(req)
         )
         return response.text or "", response.status_code, str(response.url)
 
@@ -1701,12 +1661,114 @@ def _record_policy(payload: dict[str, Any] | None, req: Any) -> None:
         _logger.debug("scrape.policy.record_failed", url=req.url, error=str(exc)[:120])
 
 
+# ---------------------------------------------------------------------------
+# Caller-supplied cookies
+# ---------------------------------------------------------------------------
+
+
+def _request_cookies(req: Any) -> list[CookieIn] | None:
+    """The request-scoped cookie jar, or None when the caller sent none.
+
+    Stashed on ``req.__dict__`` following the convention already used for
+    ``_resolved_profile_dir`` and ``_render_intermediate_html``: request-scoped
+    state that several cascade steps need, held for exactly one request and
+    never persisted. Returning None rather than an empty list lets call sites
+    pass it straight through as an optional argument.
+    """
+    jar = req.__dict__.get("_cookie_jar")
+    if jar is None:
+        jar = list(getattr(req, "cookies", None) or [])
+        req.__dict__["_cookie_jar"] = jar
+    return jar or None
+
+
+def _mark_cookies_applied(req: Any, tier: str) -> None:
+    """Record that ``tier`` actually carried the caller's cookies.
+
+    Without this, "I passed cookies and still got the logged-out page" is an
+    unfalsifiable complaint. Mirrors the ``hostile_skipped`` convention.
+    """
+    if not _request_cookies(req):
+        return
+    applied: list[str] = req.__dict__.setdefault("_cookies_applied", [])
+    if tier not in applied:
+        applied.append(tier)
+
+
+def _mark_cookies_skipped(req: Any, tier: str, reason: str) -> None:
+    """Record that ``tier`` ran but could NOT carry the caller's cookies."""
+    if not _request_cookies(req):
+        return
+    skipped: list[dict[str, str]] = req.__dict__.setdefault("_cookies_skipped", [])
+    if not any(entry["tier"] == tier for entry in skipped):
+        skipped.append({"tier": tier, "reason": reason})
+
+
+def _assert_cookies_safe_to_send(req: Any) -> None:
+    """Refuse to route credentialed traffic through an untrusted proxy pool.
+
+    Asserted at the entrypoint boundary rather than threaded as a kwarg: a
+    defaulted kwarg that mypy won't enforce drifts, and the failure mode here is
+    silent credential disclosure to whoever runs a free proxy. Raises
+    ``ConfigurationError`` (503-class) before a byte leaves the process.
+    """
+    if not _request_cookies(req):
+        return
+    try:
+        from scrapper_tool.proxy import ProxyPool  # noqa: PLC0415
+
+        pool = ProxyPool.from_env()
+    except Exception:  # pragma: no cover — a broken pool config fails elsewhere
+        return
+    if pool is not None:
+        pool.assert_safe_for_credentials()
+
+
+def _harvest_cookies(req: Any, harvested: Any, *, tier: str) -> None:
+    """Fold cookies a tier *won* into the request-scoped jar.
+
+    A `cf_clearance` bought with an expensive render was previously computed,
+    returned on ``RenderResult.cookies``, and then dropped on the floor by both
+    consumers — so every later tier re-fought the same wall.
+
+    Scope is one request, deliberately. These are **not** written to the recipe
+    store, for five independent reasons, any one of them sufficient: that store
+    lives at a fixed world-readable temp path; it is keyed by *domain* while
+    cookies are per-*identity*, so two callers scraping one domain as different
+    users would silently share a session; its TTL is 14 days against a
+    ~30-minute clearance; its contract is "every read failure is silent", which
+    is right for a selector and wrong for a credential, where the worst case of
+    a *successful* read is impersonating the wrong user; and the sanctioned
+    mechanism for cross-request persistence already exists in
+    ``persist_browser_profile_dir``.
+    """
+    if not harvested:
+        return
+    try:
+        from scrapper_tool.cookies import from_playwright, merge  # noqa: PLC0415
+
+        incoming = from_playwright([dict(entry) for entry in harvested])
+    except Exception as exc:
+        _logger.debug("scrape.cookies.harvest_failed", tier=tier, error=str(exc)[:120])
+        return
+    if not incoming:
+        return
+
+    existing = req.__dict__.get("_cookie_jar") or []
+    req.__dict__["_cookie_jar"] = merge(existing, incoming)
+    harvested_from: list[str] = req.__dict__.setdefault("_cookies_harvested_from", [])
+    if tier not in harvested_from:
+        harvested_from.append(tier)
+    _logger.debug(
+        "scrape.cookies.harvested",
+        tier=tier,
+        count=len(incoming),
+    )
+
+
 def _render_tier_enabled() -> bool:
     """Render tier is on by default; ``SCRAPPER_TOOL_RENDER_TIER=0`` disables it."""
-    raw = os.environ.get("SCRAPPER_TOOL_RENDER_TIER")
-    if raw is None or not raw.strip():
-        return True
-    return raw.strip().lower() in {"1", "true", "yes", "on"}
+    return _extras.render_tier_enabled()
 
 
 async def _do_render_step(
@@ -1772,7 +1834,9 @@ async def _do_render_step(
             timeout_s=cfg.timeout_s,
             options=options,
             cdp_url=cfg.obscura_cdp_url,
+            cookies=_request_cookies(req),
         )
+        _mark_cookies_applied(req, "render")
     except Exception as exc:
         _logger.warning("scrape.render.failed", url=req.url, error=str(exc)[:200])
         log.append(
@@ -1785,6 +1849,13 @@ async def _do_render_step(
             )
         )
         return None, exc
+
+    # Harvest BEFORE the accept/reject branch below. A render can win a
+    # cf_clearance and still produce no accepted signal — that is precisely the
+    # case where E1 should inherit the clearance rather than re-fight the wall
+    # from scratch. Harvesting only on the success path would throw it away in
+    # the one situation it is most valuable.
+    _harvest_cookies(req, result.cookies, tier="render")
 
     html, status_code, final_url = result.html, result.status, result.final_url
     req.__dict__["_render_intermediate_html"] = html
@@ -2161,6 +2232,9 @@ async def _do_scrape(req: Any) -> dict[str, Any]:
     profile_dir, cleanup_dir = _resolve_profile_dir(req)
     req.__dict__["_resolved_profile_dir"] = profile_dir
 
+    # Before any tier runs, and before a byte leaves the process.
+    _assert_cookies_safe_to_send(req)
+
     payload: dict[str, Any] | None = None
     raised = False
     try:
@@ -2168,6 +2242,17 @@ async def _do_scrape(req: Any) -> dict[str, Any]:
         # Surfaced here rather than in each tier's return: the vendor that
         # walled us is worth reporting no matter which tier eventually won.
         payload["challenge_detected"] = req.__dict__.get("_challenge_detected")
+        # Which tiers actually carried the caller's cookies, and which ran
+        # without them. Both keys are always present when cookies were supplied
+        # so a caller can tell "not applied" from "field absent".
+        if _request_cookies(req):
+            payload["cookies_applied"] = req.__dict__.get("_cookies_applied", [])
+            payload["cookies_skipped"] = req.__dict__.get("_cookies_skipped", [])
+        harvested_from = req.__dict__.get("_cookies_harvested_from")
+        if harvested_from:
+            # Metadata only — never the cookies themselves. The response body is
+            # what every reverse proxy in the path writes to its access log.
+            payload["cookies_harvested_from"] = harvested_from
         # F2: remember which tier reached content so the next request for this
         # domain can start there. One place, so every winning tier is recorded.
         _record_policy(payload, req)
@@ -2219,8 +2304,9 @@ async def _do_scrape_inner(req: Any, attempts: list[str], start: float) -> dict[
             from scrapper_tool.ladder import request_with_ladder  # noqa: PLC0415
 
             response, profile = await request_with_ladder(
-                "GET", req.url, timeout=req.timeout_s or 30.0
+                "GET", req.url, timeout=req.timeout_s or 30.0, cookies=_request_cookies(req)
             )
+            _mark_cookies_applied(req, "a_b_c")
             text = response.text or ""
             # Kept for the recipe learner: if a later tier's selectors also
             # match this raw body, its recipe can replay without a browser.
@@ -2615,66 +2701,14 @@ async def _readiness_payload() -> dict[str, Any]:
     }
 
 
-def _check_browser_module(browser: str) -> str:  # noqa: PLR0911 — one return per backend
+def _check_browser_module(browser: str) -> str:
     """Best-effort: 'ok' / 'missing' / 'unknown' for the configured browser's Python module."""
-    if browser == "patchright":
-        try:
-            import patchright  # noqa: F401, PLC0415
-
-            return "ok"
-        except ImportError:
-            return "missing"
-    if browser == "camoufox":
-        try:
-            import camoufox  # noqa: F401, PLC0415
-
-            return "ok"
-        except ImportError:
-            return "missing"
-    if browser == "scrapling":
-        try:
-            import scrapling  # noqa: F401, PLC0415
-
-            return "ok"
-        except ImportError:
-            return "missing"
-    if browser == "obscura":
-        # Obscura needs Playwright (to connect over CDP) plus a reachable
-        # external server. The module check just verifies the client lib.
-        try:
-            import playwright  # noqa: F401, PLC0415
-
-            return "ok"
-        except ImportError:
-            return "missing"
-    return "unknown"
+    return _extras.check_browser_module(browser)
 
 
 async def _probe_llm(cfg: Any) -> tuple[bool | None, bool | None]:
-    """Probe the configured LLM endpoint. Returns (reachable, model_available).
-
-    Returns (None, None) for backends we can't probe (llama_cpp / vllm).
-    Delegates to the agent-layer backend probes so auth headers, endpoint
-    paths, and model-availability logic live in one place.
-    """
-    if cfg.llm in {"llama_cpp", "vllm"}:
-        return None, None
-
-    try:
-        from scrapper_tool.agent.backends.llm import get_llm_backend  # noqa: PLC0415
-        from scrapper_tool.errors import AgentLLMError  # noqa: PLC0415
-    except ImportError:
-        return None, None
-
-    try:
-        await get_llm_backend(cfg).probe()
-        return True, True
-    except AgentLLMError as exc:
-        if "unreachable" in str(exc).lower():
-            return False, False
-        return True, False
-    except Exception:
-        return False, False
+    """Probe the configured LLM endpoint. Returns (reachable, model_available)."""
+    return await _extras.probe_llm(cfg)
 
 
 # ---------------------------------------------------------------------------

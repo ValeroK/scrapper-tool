@@ -4,6 +4,169 @@ All notable changes to `scrapper-tool` are recorded here. Format follows [Keep a
 
 ## [Unreleased]
 
+### Added
+
+- **`scrapper-tool doctor`** — preflights every cascade tier and reports which
+  are functional, with the exact command that fixes each one that isn't.
+  `/ready` answers "can this server serve requests"; doctor answers "which tiers
+  work on this machine", and it runs without the REST server (or the `[http]`
+  extra) being involved at all. Tier rows are keyed by `recipe.policy.TIER_ORDER`
+  so the names match `pattern_used` and `escalation_log` exactly. Exit `0` ready
+  / `1` degraded / `2` not ready; `--json` for machine-readable output;
+  `--require-tier <name>` turns it into a CI or container healthcheck gate.
+
+  Two findings it surfaces that nothing else did: a browser *module* that
+  imports while its *binary* is absent (the `camoufox fetch || true` in the
+  Dockerfile means a build-time blip ships exactly that image), and that **E2
+  cannot run on the default configuration** — the default backend is `camoufox`,
+  Firefox has no CDP, and `agent_browse` hard-raises without a CDP endpoint, so
+  a stock install could never reach E2 and nothing said so until a request
+  escalated that far.
+
+- **Cookies won by one tier are reused by later tiers.** A `cf_clearance`
+  bought with an expensive render was computed, returned on
+  `RenderResult.cookies`, and then discarded by both consumers — so every later
+  tier re-fought the same wall. It is now folded into a request-scoped jar and
+  carried forward, and the response reports `cookies_harvested_from`.
+
+  Harvesting happens **before** the accept/reject branch, not after. A render
+  can win a clearance and still produce no accepted signal, and that is exactly
+  the case where the next tier should inherit it rather than start over.
+
+  Scope is one request. These are deliberately never written to the recipe
+  store: it lives at a fixed world-readable temp path, it is keyed by *domain*
+  while cookies are per-*identity* (two callers scraping one domain as different
+  users would silently share a session), its TTL is 14 days against a
+  ~30-minute clearance, and its contract of "every read failure is silent" is
+  right for a CSS selector and wrong for a credential, where the worst case of a
+  *successful* read is impersonating the wrong user. `persist_browser_profile_dir`
+  remains the sanctioned way to persist a session across requests.
+
+- **Caller-supplied cookies are threaded through the cascade.** `scrape(url,
+  cookies=...)` and the `cookies` field on `POST /scrape` carry an
+  authenticated session into the tiers that can hold one. Every response that
+  supplied cookies reports `cookies_applied` (tiers that carried them) and
+  `cookies_skipped` (tiers that ran without them, with a reason) — without
+  that, "I passed cookies and still got the logged-out page" is unfalsifiable.
+
+  Three decisions worth recording:
+
+  - **A/B/C sets the curl_cffi cookie jar, not a `Cookie:` header.** That
+    session runs with `allow_redirects=True`, and a static header is re-sent
+    verbatim across a cross-domain redirect — handing the user's session to
+    whatever third-party host the redirect points at. The jar makes libcurl
+    apply domain and path scoping on every hop.
+  - **The render tier injects before the first navigation**, not after. The
+    request that decides logged-in vs logged-out is the one `goto()` issues.
+    Injection is also allowed to raise, because `_do_render_step` catches and
+    logs tier exceptions properly while the page-hook path swallows them, which
+    would make a failed injection invisible.
+  - **`ProxyPool.assert_safe_for_credentials()` finally has a call site.** It
+    was written to guard exactly this and had none. Credentialed traffic over a
+    free/public proxy pool is now refused before a byte leaves the process;
+    anonymous scraping over the same pool is unaffected.
+
+- **`POST /scrape` returns 403 for cookies on an unauthenticated sidecar.**
+  `SCRAPPER_TOOL_HTTP_API_KEY` is unset by default, which means `/scrape` is
+  open — defensible for anonymous scraping, indefensible once a request body
+  carries a live session cookie, since anyone who can reach the port could
+  replay that session through this host's egress IP. Requests without cookies
+  are unaffected; `SCRAPPER_TOOL_HTTP_ALLOW_UNAUTH_COOKIES=1` is the
+  localhost-development escape hatch.
+
+- **`scrapper-tool cookies export`** — domain-scoped browser-cookie extraction,
+  so a logged-in page becomes scrapable. You log in normally in your own
+  browser; this reads the resulting cookie for one domain and nothing else. No
+  automation drives a login form and no password is ever seen. Values are never
+  printed without `--print-values --yes`, jars are written `0600` inside a
+  `0700` directory via an exclusive create (never created-then-chmod'd, never
+  widening an existing file), and `seed-profile` writes a Playwright
+  `storage_state.json` for the Docker path where cookie values never cross the
+  HTTP boundary. Exit `0` found / `1` none matched / `2` usage / `3` no backend.
+
+  New `[cookies]` extra (rookiepy, MIT). `browser_cookie3` is **LGPL** and is
+  deliberately never declared — it is used only if already present in the
+  environment, and a regression test asserts it appears in no dependency list
+  and no lockfile.
+
+  **Not exposed over MCP, deliberately.** An agent that can silently dump a
+  user's browser cookie store is the capability not to build, and a consent
+  prompt is meaningless when the caller is a model. `SKILL.md` documents the
+  asymmetry so agents don't shell out to the CLI to route around it.
+
+  Python support: rookiepy publishes version-specific wheels up to `cp312`
+  (not abi3) plus an sdist, so 3.13/3.14 need a Rust toolchain to build it.
+  That is why `cookies` is **not** in the CI matrix — the unit tests inject a
+  fake backend instead, so coverage never depends on the extra installing.
+
+- The `scrapper-tool` CLI now dispatches subcommands from a new
+  `scrapper_tool.cli` module, where each subcommand owns its own
+  `add_subparser` / `run_cli` pair. `canary.main` remains as a forwarding shim,
+  so editable installs and the documented entry point keep working.
+
+### Changed
+
+- **Capability probes now live in one stdlib-only module,
+  `scrapper_tool._extras`.** The "is this extra installed / is the browser binary
+  actually on disk / is the LLM reachable" probes were defined inside
+  `http_server.py`, which means they only loaded when the `[http]` extra was
+  present, and `mcp.py` carried a hand-copied reimplementation of one of them
+  purely to avoid importing FastAPI. `_extras` imports nothing heavier than the
+  standard library at module level (every optional dependency is imported inside
+  the function that needs it), so the same probes are now available to any
+  caller, including a bare `pip install scrapper-tool`. `http_server` keeps its
+  private probe names as thin delegators rather than aliases, deliberately: the
+  sidecar's internal callers resolve them through the module namespace, so
+  monkeypatching one name still steers every use of it. No behaviour change.
+
+### Fixed
+
+- **Wildcard CORS no longer grants credentials (security).** The sidecar
+  configured `allow_origins=["*"]` together with `allow_credentials=True`. That
+  pairing is forbidden by the CORS spec, and the assumption had been that it was
+  inert because browsers reject it. Checked against the pinned Starlette
+  (1.3.1), it is not inert: with a wildcard origin list Starlette **reflects the
+  request's `Origin` header verbatim** and still sends
+  `access-control-allow-credentials: true`. Any page on any origin could
+  therefore make credentialed cross-origin requests to the sidecar and read the
+  responses — which for a service holding an API key, and now session cookies,
+  is an exfiltration path rather than a lint finding. Wildcard origins now
+  disable credentialed CORS and log a warning naming the remedy. Nothing
+  legitimate is lost: the spec requires enumerating origins for credentialed
+  CORS anyway, and anonymous cross-origin requests still work.
+
+- **`user_data_dir_supported` was a false negative on every current install.**
+  The probe imported `browser_use.BrowserConfig` and returned False when that
+  raised. browser-use 0.13 — the version this project pins — removed that class
+  in favour of `BrowserProfile` / `BrowserSession`, both of which accept
+  `user_data_dir` perfectly well. So `/ready` emitted
+  `user_data_dir_unsupported` on correctly installed systems, advising operators
+  to upgrade libraries that were already new enough, and implying Pattern D's
+  Cloudflare clearance would not carry forward when in fact it would. The probe
+  now walks a list of candidate config classes, which also stops the next
+  upstream rename from silently reproducing the bug. Found by running the new
+  `doctor` command against this repo's own environment.
+
+- **The render tier failed on its own default path.** Whenever a profile dir was in
+  play, the Camoufox backend set `persistent_context=True`, which makes Camoufox
+  call `launch_persistent_context()` and return a Playwright **BrowserContext**
+  rather than a Browser (its `__aenter__` is annotated
+  `Union[Browser, BrowserContext]`). `render_html` then ran
+  `browser.contexts[0] if ... else await browser.new_context()` against it — and a
+  context has neither attribute — so every such render raised `AttributeError`.
+  The cascade allocates an ephemeral profile dir on *every* `mode="auto"` run once
+  `[hostile]` is installed (`_resolve_profile_dir`), and `[hostile]` ships in the
+  recommended `[full]` install while `camoufox` is the default backend. So the
+  documented default configuration hit this on every scrape: `_do_render_step`
+  caught the error, logged `scrape.render.failed`, and the cascade escalated
+  straight past the render tier to the expensive LLM tiers. Earlier live
+  validation missed it because those runs drove `render_html` directly, without
+  the cascade-supplied profile dir. Fixed by a new
+  `agent.backends.browser.resolve_context()` that normalizes Browser-or-Context,
+  prefers an already-open context, and only creates one when none exists —
+  preferring the existing context also avoids attaching to a fresh *incognito*
+  context on CDP-connected backends such as Obscura.
+
 ## [2.0.0] - 2026-07-24
 
 The autonomous-cascade release. One `scrape()` call now runs a self-driving
