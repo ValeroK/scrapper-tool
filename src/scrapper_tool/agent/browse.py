@@ -126,6 +126,7 @@ async def run_browse(
             schema=schema,
             config=config,
             llm_chat=llm.to_browser_use_llm(),
+            llm_backend=llm,
             solver=solver,
             behavior=behavior,
             started=started,
@@ -143,6 +144,7 @@ async def _run_with_handle(
     schema: type[BaseModel] | dict[str, object] | None,
     config: AgentConfig,
     llm_chat: Any,
+    llm_backend: Any,
     solver: Any,
     behavior: Any,
     started: float,
@@ -218,8 +220,10 @@ async def _run_with_handle(
     # the live page is checked for a challenge (mechanism-aware solve) and
     # behavior shaping is applied. Consumer errors are swallowed inside the
     # hook so they never abort the loop.
+    # The same `use_vision` verdict gates the grid solver: handing it a text-only
+    # model would burn a round on a reply that cannot be about the image.
     on_step_end = make_on_step_end(
-        make_captcha_consumer(solver),
+        make_captcha_consumer(solver, vision=llm_backend if use_vision else None),
         make_behavior_consumer(behavior, full=True),
     )
 

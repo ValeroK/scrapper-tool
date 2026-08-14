@@ -33,6 +33,7 @@ from scrapper_tool.agent.backends import (
     get_fingerprint_generator,
     get_llm_backend,
     make_after_goto,
+    supports_vision,
 )
 from scrapper_tool.agent.backends.behavior import make_behavior_consumer
 from scrapper_tool.agent.backends.captcha_dom import make_captcha_consumer
@@ -141,8 +142,9 @@ async def run_extract(
     )
 
     try:
+        can_see = await supports_vision(config.model, config.ollama_url)
         after_goto = make_after_goto(
-            make_captcha_consumer(solver),
+            make_captcha_consumer(solver, vision=llm if can_see else None),
             make_behavior_consumer(behavior, full=False),
         )
 
