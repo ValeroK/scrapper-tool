@@ -58,6 +58,7 @@ from scrapper_tool.agent.backends.llm import (
     VLLMBackend,
     get_llm_backend,
     is_vision_model,
+    supports_vision,
 )
 from scrapper_tool.agent.backends.page_hooks import (
     get_e2_page,
@@ -105,4 +106,5 @@ __all__ = [
     "make_after_goto",
     "make_on_step_end",
     "open_browser",
+    "supports_vision",
 ]

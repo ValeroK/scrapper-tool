@@ -229,13 +229,69 @@ def get_llm_backend(config: AgentConfig) -> LLMBackend:
     raise ConfigurationError(msg)
 
 
-def is_vision_model(model: str) -> bool:
-    """Heuristic — used by browse mode to enable/disable vision input.
+# Name fragments that imply a multimodal model. Used only when the server cannot
+# be asked (see `supports_vision`) — naming is genuinely unreliable, which is the
+# whole reason this is now the fallback rather than the answer.
+_VISION_NAME_TAGS: tuple[str, ...] = (
+    "vl",  # qwen2-vl, internvl, smolvlm, cogvlm
+    "vision",  # llama-3.2-vision, phi-3.5-vision
+    "llava",
+    "minicpm-v",
+    "gemma-3",  # Gemma 3 and 4 are multimodal; Gemma 2 is not
+    "gemma-4",
+    "pixtral",
+    "moondream",
+    "idefics",
+    "internvl",
+    "multimodal",
+)
 
-    Saves tokens when running text-only models like Qwen3-Coder.
+
+def is_vision_model(model: str) -> bool:
+    """Name-only heuristic for whether ``model`` accepts image input.
+
+    **Prefer :func:`supports_vision`**, which asks the server. This is the offline
+    fallback and it is known-lossy: it answered False for both ``google/gemma-4-e4b``
+    and ``qwen/qwen3.6-27b`` while LM Studio reported both as ``type=vlm`` — so
+    browse mode disabled vision on models that demonstrably see, and E2 ran blind.
+    Vendors simply do not encode modality in model names consistently.
     """
     needle = model.lower()
-    return any(tag in needle for tag in ("vl", "vision", "llava", "minicpm-v"))
+    return any(tag in needle for tag in _VISION_NAME_TAGS)
+
+
+async def supports_vision(model: str, base_url: str | None = None) -> bool:
+    """Whether ``model`` accepts image input, asking the server when possible.
+
+    LM Studio's ``/api/v0/models`` reports an explicit ``type`` per model
+    (``vlm`` / ``llm`` / ``embeddings``), which is authoritative and costs one
+    local request. Anything else — endpoint absent (plain llama.cpp, vLLM, Ollama),
+    unreachable, or the model simply not listed — falls back to
+    :func:`is_vision_model`, so this is never worse than the old behaviour.
+    """
+    if not base_url:
+        return is_vision_model(model)
+    url = urljoin(base_url.rstrip("/") + "/", "api/v0/models")
+    try:
+        async with httpx.AsyncClient(timeout=3.0) as client:
+            resp = await client.get(url)
+        if resp.status_code >= 400:  # noqa: PLR2004 — HTTP error threshold
+            return is_vision_model(model)
+        entries = resp.json().get("data", [])
+    except (httpx.HTTPError, ValueError, AttributeError, TypeError) as exc:
+        _logger.debug("agent.llm.vision_probe_failed", model=model, error=str(exc))
+        return is_vision_model(model)
+
+    for entry in entries:
+        if not isinstance(entry, dict):
+            continue
+        if entry.get("id") == model:
+            declared = str(entry.get("type", "")).lower()
+            if declared:
+                _logger.info("agent.llm.vision_probe_ok", model=model, declared_type=declared)
+                return declared == "vlm"
+            break
+    return is_vision_model(model)
 
 
 __all__ = [
@@ -246,4 +302,5 @@ __all__ = [
     "VLLMBackend",
     "get_llm_backend",
     "is_vision_model",
+    "supports_vision",
 ]

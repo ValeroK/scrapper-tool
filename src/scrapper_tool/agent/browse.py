@@ -33,8 +33,8 @@ from scrapper_tool.agent.backends import (
     get_captcha_solver,
     get_fingerprint_generator,
     get_llm_backend,
-    is_vision_model,
     make_on_step_end,
+    supports_vision,
 )
 from scrapper_tool.agent.backends.behavior import make_behavior_consumer
 from scrapper_tool.agent.backends.captcha_dom import make_captcha_consumer
@@ -177,7 +177,11 @@ async def _run_with_handle(
             "(no surrounding prose):\n" + _schema_for_prompt(schema)
         )
 
-    use_vision = is_vision_model(config.model)
+    # Ask the server what the model is rather than pattern-matching its name.
+    # The name heuristic reported False for every locally installed VLM, so vision
+    # was silently disabled on models that could see and E2 ran blind. Falls back
+    # to the heuristic when the server has no such endpoint.
+    use_vision = await supports_vision(config.model, config.ollama_url)
 
     # Inject the caller's session into the LIVE context, before browser-use
     # attaches and before the agent navigates.

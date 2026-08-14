@@ -27,7 +27,9 @@ from scrapper_tool.agent.backends import (
     get_fingerprint_generator,
     get_llm_backend,
     is_vision_model,
+    supports_vision,
 )
+from scrapper_tool.agent.backends import llm as llm_mod
 from scrapper_tool.agent.backends.fingerprint import (
     BrowserforgeGenerator,
     NoOpGenerator,
@@ -679,6 +681,111 @@ class TestVisionModelHeuristic:
     def test_detects_vision_models(self, model: str, expected: bool) -> None:
         assert is_vision_model(model) is expected
 
+    @pytest.mark.parametrize("model", ["google/gemma-4-e4b", "pixtral-12b", "internvl3-8b"])
+    def test_known_multimodal_families_are_recognised(self, model: str) -> None:
+        """Families the original four tags missed entirely."""
+        assert is_vision_model(model) is True
+
+
+class TestSupportsVision:
+    """The server, not the model name, is the authority on modality.
+
+    The name heuristic answered False for both locally installed VLMs
+    (``google/gemma-4-e4b``, ``qwen/qwen3.6-27b``) while LM Studio reported both
+    as ``type=vlm``, so browse mode ran E2 blind. These pin the probe and, just as
+    importantly, that every failure mode degrades to the old behaviour instead of
+    raising into the agent loop.
+    """
+
+    @staticmethod
+    def _serve(monkeypatch: pytest.MonkeyPatch, payload: Any, status: int = 200) -> list[str]:
+        seen: list[str] = []
+
+        class _Resp:
+            status_code = status
+
+            @staticmethod
+            def json() -> Any:
+                return payload
+
+        class _Client:
+            def __init__(self, **_: Any) -> None: ...
+            async def __aenter__(self) -> _Client:
+                return self
+
+            async def __aexit__(self, *_: object) -> None: ...
+            async def get(self, url: str) -> _Resp:
+                seen.append(url)
+                return _Resp()
+
+        monkeypatch.setattr(llm_mod.httpx, "AsyncClient", _Client)
+        return seen
+
+    @pytest.mark.asyncio
+    async def test_declared_vlm_wins_over_a_name_that_looks_textual(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The exact regression: a real VLM whose name carries no vision tag."""
+        self._serve(monkeypatch, {"data": [{"id": "qwen/qwen3.6-27b", "type": "vlm"}]})
+        assert is_vision_model("qwen/qwen3.6-27b") is False
+        assert await supports_vision("qwen/qwen3.6-27b", "http://lm.test") is True
+
+    @pytest.mark.asyncio
+    async def test_declared_llm_wins_over_a_name_that_looks_visual(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Authority runs both ways — a 'vl' in the name must not override the server."""
+        self._serve(monkeypatch, {"data": [{"id": "vlad-tuned-7b", "type": "llm"}]})
+        assert is_vision_model("vlad-tuned-7b") is True
+        assert await supports_vision("vlad-tuned-7b", "http://lm.test") is False
+
+    @pytest.mark.asyncio
+    async def test_queries_the_lm_studio_endpoint(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        seen = self._serve(monkeypatch, {"data": []})
+        await supports_vision("m", "http://lm.test/")
+        assert seen == ["http://lm.test/api/v0/models"]
+
+    @pytest.mark.asyncio
+    async def test_model_absent_from_catalogue_falls_back_to_name(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        self._serve(monkeypatch, {"data": [{"id": "other", "type": "llm"}]})
+        assert await supports_vision("qwen2-vl-7b", "http://lm.test") is True
+        assert await supports_vision("qwen3-coder", "http://lm.test") is False
+
+    @pytest.mark.asyncio
+    async def test_no_base_url_uses_name_heuristic(self) -> None:
+        assert await supports_vision("qwen2-vl-7b", None) is True
+
+    @pytest.mark.asyncio
+    async def test_endpoint_absent_falls_back_to_name(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Plain llama.cpp / vLLM / Ollama have no /api/v0/models — a 404, not an error."""
+        self._serve(monkeypatch, {"data": []}, status=404)
+        assert await supports_vision("qwen2-vl-7b", "http://llamacpp.test") is True
+
+    @pytest.mark.asyncio
+    async def test_unreachable_server_falls_back_rather_than_raising(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        class _Client:
+            def __init__(self, **_: Any) -> None: ...
+            async def __aenter__(self) -> _Client:
+                return self
+
+            async def __aexit__(self, *_: object) -> None: ...
+            async def get(self, url: str) -> Any:
+                raise llm_mod.httpx.ConnectError("refused")
+
+        monkeypatch.setattr(llm_mod.httpx, "AsyncClient", _Client)
+        assert await supports_vision("qwen2-vl-7b", "http://down.test") is True
+
+    @pytest.mark.asyncio
+    async def test_garbage_payload_falls_back(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        self._serve(monkeypatch, {"data": ["not-a-dict", {"no_id": 1}]})
+        assert await supports_vision("qwen2-vl-7b", "http://lm.test") is True
+
 
 # --- Captcha cascade ------------------------------------------------------
 
@@ -861,3 +968,178 @@ class TestDependencyCoexistence:
             "the typing-extensions override was lost; scrapling/patchright will "
             "have regressed with it"
         )
+
+
+class TestCaptchaTaskPayloads:
+    """Every declared kind must build a payload the provider will actually accept.
+
+    The sitekey does not live under one field name across task types, and three
+    types take no sitekey at all. The old code sent ``websiteKey`` for
+    everything, so FunCaptcha, DataDome, AWS WAF and image tasks would have been
+    rejected by the API even when the kind was right. Nobody noticed because
+    detection could not produce those kinds in the first place — fixing detection
+    without this would just move the failure one layer down.
+    """
+
+    @staticmethod
+    def _payload(kind: str, **kw: Any) -> dict[str, Any]:
+        from scrapper_tool.agent.backends.captcha import _capsolver_task_payload
+
+        return _capsolver_task_payload(kind, kw.pop("site_key", "KEY"), "https://x.example", **kw)
+
+    def test_sitekey_kinds_use_website_key(self) -> None:
+        for kind in ("turnstile", "hcaptcha", "recaptcha-v2", "recaptcha-v3"):
+            assert self._payload(kind)["websiteKey"] == "KEY", kind
+
+    def test_funcaptcha_uses_website_public_key(self) -> None:
+        payload = self._payload("funcaptcha", extra={"surl": "https://client-api.arkoselabs.com"})
+        assert payload["websitePublicKey"] == "KEY"
+        assert "websiteKey" not in payload
+        assert payload["funcaptchaApiJSSubdomain"] == "https://client-api.arkoselabs.com"
+
+    def test_arkose_maps_to_the_same_funcaptcha_task(self) -> None:
+        assert self._payload("arkose")["type"] == self._payload("funcaptcha")["type"]
+
+    def test_datadome_sends_the_challenge_url_not_a_sitekey(self) -> None:
+        payload = self._payload(
+            "datadome", site_key="", extra={"captchaUrl": "https://geo.captcha-delivery.com/c?x=1"}
+        )
+        assert payload["captchaUrl"] == "https://geo.captcha-delivery.com/c?x=1"
+        assert "websiteKey" not in payload
+
+    def test_aws_waf_forwards_the_goku_props(self) -> None:
+        payload = self._payload(
+            "aws-waf",
+            site_key="",
+            extra={"awsKey": "K", "awsIv": "I", "awsContext": "C", "awsChallengeJS": "https://j"},
+        )
+        assert (payload["awsKey"], payload["awsIv"], payload["awsContext"]) == ("K", "I", "C")
+        assert "websiteKey" not in payload
+
+    def test_image_sends_bytes_and_drops_the_url(self) -> None:
+        """ImageToTextTask is solved from pixels; websiteURL is meaningless to it."""
+        payload = self._payload("image", site_key="", extra={"body": "BASE64", "image_url": "u"})
+        assert payload["body"] == "BASE64"
+        assert "websiteURL" not in payload
+        assert "image_url" not in payload
+
+    def test_geetest_sends_gt_and_challenge(self) -> None:
+        payload = self._payload("geetest", extra={"challenge": "NONCE", "version": "4"})
+        assert payload["gt"] == "KEY"
+        assert payload["challenge"] == "NONCE"
+        # `version` is ours for bookkeeping, not a CapSolver field.
+        assert "version" not in payload
+
+    def test_recaptcha_v3_page_action(self) -> None:
+        assert self._payload("recaptcha-v3", action="login")["pageAction"] == "login"
+
+    def test_every_declared_kind_builds_a_payload(self) -> None:
+        """No CaptchaKind may be un-routable — that was the whole bug."""
+        from typing import get_args
+
+        from scrapper_tool.agent.backends.captcha import CaptchaKind
+
+        for kind in get_args(CaptchaKind):
+            payload = self._payload(kind)
+            assert payload["type"], kind
+
+    def test_unconsumed_extras_still_pass_through(self) -> None:
+        assert self._payload("turnstile", extra={"proxy": "http://p"})["proxy"] == "http://p"
+
+
+class TestTwoCaptchaParams:
+    """2Captcha has the same per-method key-naming trap as CapSolver."""
+
+    @staticmethod
+    async def _params(monkeypatch: pytest.MonkeyPatch, kind: str, **kw: Any) -> dict[str, str]:
+        """Capture the query params 2Captcha's ``in.php`` submit would receive.
+
+        The stub answers ``status: 0``, so ``solve`` raises right after the
+        submit — which is all we need, and keeps the test off the network.
+        """
+        from scrapper_tool.agent.backends import captcha as cap
+
+        captured: dict[str, str] = {}
+
+        class _Resp:
+            status_code = 200
+
+            @staticmethod
+            def raise_for_status() -> None: ...
+
+            @staticmethod
+            def json() -> dict[str, Any]:
+                return {"status": 0, "request": "ERROR_STOP"}
+
+        class _Client:
+            def __init__(self, **_: Any) -> None: ...
+
+            async def __aenter__(self) -> _Client:
+                return self
+
+            async def __aexit__(self, *_: object) -> None: ...
+
+            async def get(self, url: str, params: dict[str, str], timeout: float) -> _Resp:
+                captured.update(params)
+                return _Resp()
+
+        monkeypatch.setattr(cap.httpx, "AsyncClient", _Client)
+        with pytest.raises(cap.CaptchaSolveError):
+            await cap.TwoCaptchaSolver(api_key="k").solve(
+                kind, kw.pop("site_key", "KEY"), "https://x.example", **kw
+            )
+        return captured
+
+    @pytest.mark.asyncio
+    async def test_funcaptcha_uses_publickey(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        params = await self._params(
+            monkeypatch, "funcaptcha", extra={"surl": "https://arkose.test"}
+        )
+        assert params["publickey"] == "KEY"
+        assert "sitekey" not in params
+        assert params["surl"] == "https://arkose.test"
+
+    @pytest.mark.asyncio
+    async def test_geetest_uses_gt_and_challenge(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        params = await self._params(monkeypatch, "geetest", extra={"challenge": "NONCE"})
+        assert params["gt"] == "KEY"
+        assert params["challenge"] == "NONCE"
+        assert "sitekey" not in params
+
+    @pytest.mark.asyncio
+    async def test_image_sends_body_and_drops_pageurl(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        params = await self._params(monkeypatch, "image", site_key="", extra={"body": "B64"})
+        assert params["body"] == "B64"
+        assert "pageurl" not in params
+
+    @pytest.mark.asyncio
+    async def test_ordinary_kinds_keep_sitekey(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        params = await self._params(monkeypatch, "hcaptcha")
+        assert params["sitekey"] == "KEY"
+
+
+class TestAutoCascadeCoverage:
+    def test_supported_reflects_the_configured_tiers(self) -> None:
+        """Was hard-coded to the four free kinds, under-reporting a paid cascade.
+
+        A caller checking ``supported`` before dispatching would conclude the
+        cascade could not handle DataDome when the CapSolver tier inside it can.
+        """
+        from pydantic import SecretStr
+
+        from scrapper_tool.agent.backends.captcha import AutoCascadeSolver
+
+        free = get_captcha_solver(AgentConfig(captcha_solver="auto", captcha_api_key=None))
+        assert isinstance(free, AutoCascadeSolver)
+        assert free.supported == frozenset({"turnstile"})
+
+        paid = get_captcha_solver(
+            AgentConfig(
+                captcha_solver="auto",
+                captcha_api_key=SecretStr("sk"),
+                captcha_paid_fallback="capsolver",
+            )
+        )
+        assert {"datadome", "aws-waf", "funcaptcha", "geetest"} <= paid.supported
