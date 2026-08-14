@@ -23,6 +23,7 @@ import socket
 import subprocess
 import sys
 import textwrap
+import types
 from typing import TYPE_CHECKING
 
 import pytest
@@ -121,18 +122,124 @@ class TestPlaywrightBrowsersRoot:
         monkeypatch.setenv("PLAYWRIGHT_BROWSERS_PATH", str(tmp_path))
         assert _extras.playwright_browsers_root() == tmp_path
 
-    def test_defaults_under_home_cache(self, monkeypatch: pytest.MonkeyPatch) -> None:
+    def test_default_matches_this_platforms_playwright_root(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Playwright's default root is per-OS; hard-coding Linux broke every probe.
+
+        This previously asserted ``.cache/ms-playwright`` unconditionally, which is
+        Linux-only — so on Windows the returned root did not exist and every
+        ``browser_binary_present`` call was a false negative no matter what was
+        installed.
+        """
         monkeypatch.delenv("PLAYWRIGHT_BROWSERS_PATH", raising=False)
         root = _extras.playwright_browsers_root()
-        assert root.parts[-2:] == (".cache", "ms-playwright")
+        assert root.name == "ms-playwright"
+        if sys.platform == "win32":
+            assert root.parent.name == "Local"
+        elif sys.platform == "darwin":
+            assert root.parts[-3:-1] == ("Library", "Caches")
+        else:
+            assert root.parent.name == ".cache"
+
+    @pytest.mark.parametrize(
+        ("platform", "expected_tail"),
+        [
+            ("win32", ("Local", "ms-playwright")),
+            ("darwin", ("Caches", "ms-playwright")),
+            ("linux", (".cache", "ms-playwright")),
+        ],
+    )
+    def test_every_platform_default_is_covered(
+        self, monkeypatch: pytest.MonkeyPatch, platform: str, expected_tail: tuple[str, str]
+    ) -> None:
+        """Pin all three branches, since CI only ever exercises one of them."""
+        monkeypatch.delenv("PLAYWRIGHT_BROWSERS_PATH", raising=False)
+        monkeypatch.setattr(sys, "platform", platform)
+        monkeypatch.setenv("LOCALAPPDATA", "C:\\Users\\someone\\AppData\\Local")
+        assert _extras.playwright_browsers_root().parts[-2:] == expected_tail
 
 
 class TestBrowserBinaryPresent:
     """The probe that distinguishes 'module installed' from 'actually launchable'."""
 
-    def test_empty_root_is_false_for_every_backend(self, tmp_path: Path) -> None:
+    def test_empty_root_is_false_for_every_backend(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # Camoufox keeps its own install tree outside the Playwright root, so a
+        # machine that really has it would answer True here regardless of `root`.
+        # Hide the module to isolate the on-disk-root question this test asks.
+        monkeypatch.setitem(sys.modules, "camoufox", None)
         for browser in ("patchright", "camoufox", "scrapling"):
             assert _extras.browser_binary_present(browser, root=tmp_path) is False
+
+    @pytest.mark.parametrize(
+        "relative",
+        [
+            # Windows — none of these were matched before, so the probe was False
+            # on every Windows install. Verified against a real one (chromium-1208).
+            "chromium-1208/chrome-win64/chrome.exe",
+            "chromium-1208/chrome-win/chrome.exe",
+            "chromium_headless_shell-1208/chrome-headless-shell-win64/chrome-headless-shell.exe",
+            # macOS
+            "chromium-1234/chrome-mac/Chromium.app/Contents/MacOS/Chromium",
+            "chromium_headless_shell-99/chrome-headless-shell-mac-arm64/chrome-headless-shell",
+        ],
+    )
+    def test_finds_chromium_on_non_linux_layouts(self, tmp_path: Path, relative: str) -> None:
+        binary = tmp_path / relative
+        binary.parent.mkdir(parents=True)
+        binary.touch()
+        assert _extras.browser_binary_present("patchright", root=tmp_path) is True
+
+    @pytest.mark.parametrize(
+        "relative",
+        [
+            "firefox-1509/firefox/firefox.exe",  # Windows
+            "firefox-1234/firefox/Nightly.app/Contents/MacOS/firefox",  # macOS
+        ],
+    )
+    def test_finds_firefox_on_non_linux_layouts(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, relative: str
+    ) -> None:
+        monkeypatch.setitem(sys.modules, "camoufox", None)
+        binary = tmp_path / relative
+        binary.parent.mkdir(parents=True)
+        binary.touch()
+        assert _extras.browser_binary_present("scrapling", root=tmp_path) is True
+        assert _extras.browser_binary_present("camoufox", root=tmp_path) is True
+
+    def test_camoufox_uses_pkgman_launch_path(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The headline fix: Camoufox lives outside the Playwright root entirely.
+
+        The old probe read ``camoufox.path`` — an attribute no release defines —
+        then globbed the Playwright root, where Camoufox never installs. So it was
+        False on every install, which made ``doctor`` say ``render: degraded`` and
+        made the P2 e2e check silently SKIP. ``pkgman.launch_path()`` is the real
+        API. Note ``root`` is an empty dir here: the answer must come from pkgman.
+        """
+        binary = tmp_path / "camoufox-store" / "camoufox.exe"
+        binary.parent.mkdir(parents=True)
+        binary.touch()
+        fake = types.SimpleNamespace(launch_path=lambda: str(binary))
+        monkeypatch.setitem(sys.modules, "camoufox", types.SimpleNamespace(pkgman=fake))
+        monkeypatch.setitem(sys.modules, "camoufox.pkgman", fake)
+        assert _extras.browser_binary_present("camoufox", root=tmp_path / "empty") is True
+
+    def test_camoufox_survives_pkgman_raising(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """``launch_path()`` raises when nothing is fetched — that is an answer, not a crash."""
+
+        def boom() -> str:
+            raise RuntimeError("Camoufox binary not found; run `camoufox fetch`")
+
+        fake = types.SimpleNamespace(launch_path=boom)
+        monkeypatch.setitem(sys.modules, "camoufox", types.SimpleNamespace(pkgman=fake))
+        monkeypatch.setitem(sys.modules, "camoufox.pkgman", fake)
+        assert _extras.browser_binary_present("camoufox", root=tmp_path) is False
 
     def test_finds_chromium_modern_layout(self, tmp_path: Path) -> None:
         binary = tmp_path / "chromium-1234" / "chrome-linux64" / "chrome"
