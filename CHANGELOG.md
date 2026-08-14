@@ -90,6 +90,43 @@ silent data corruption. Full measurements in
   in that tab report `aws-waf`), and `new URL(relative, 'about:blank')` throws,
   which aborted the *entire* detection.
 
+- **A free checkbox tier, ahead of the paid solvers.** reCAPTCHA v2 and hCaptcha
+  both begin as a checkbox that frequently passes outright on a good stealth
+  fingerprint. Nothing ever clicked it, and because
+  `CamoufoxAutoSolver.supported` is `{"turnstile"}` those kinds skipped tier 0
+  entirely and went straight to a paid solver — paying for challenges a click can
+  clear.
+
+- **A local-VLM image-grid solver** (`agent.backends.captcha_vision`) between the
+  checkbox and the paid tier, plus the `complete_vision()` call path it needs —
+  until now every `LLMBackend` method handed the model to another framework and
+  nothing could simply ask a question about an image.
+
+  It screenshots the grid rather than parsing it, because reCAPTCHA slices one
+  image across the tiles by CSS and swaps individual tiles in for dynamic
+  challenges while hCaptcha uses per-tile images; a screenshot is identical for
+  all of them.
+
+  **Measured, with reCAPTCHA's own verify button as ground truth:
+  `google/gemma-4-e4b` solves 0/5, and `qwen/qwen3.6-27b` will not load on the
+  test machine.** Replies parse cleanly but are wrong in a consistent way — some
+  correct tiles plus a confident false positive — and reCAPTCHA is
+  all-or-nothing. The tier is kept because it costs nothing when it fails and
+  returns an honest `False` so the cascade escalates, and the plumbing serves a
+  stronger model unchanged. **It is not a replacement for a paid solver on
+  reCAPTCHA today.**
+
+### Fixed (captcha, cont.)
+
+- **A solve was judged by the wrong signal.** `solve_on_page` returned `True`
+  unconditionally after injecting a token, and the re-check asked "is the widget
+  gone". A solved reCAPTCHA or hCaptcha *keeps* its widget — it turns green — so
+  a real success read as a failure, while a foreign Turnstile token failing its
+  environment check (the normal outcome, as that token is bound to the context
+  that requested it) read as a success and stopped the cascade on a challenge
+  still standing. Both now key off the response field, with widget-absence kept
+  only for interstitials, which have none.
+
 ### Known limits
 
 Unchanged and not fixable in code: a Cloudflare or DataDome **interstitial** is
@@ -99,6 +136,13 @@ lever applies. Arkose/FunCaptcha detection is fixture-verified only —
 `2captcha.com/demo/arkoselabs` serves no Arkose resources at all. No end-to-end
 *solve* has been performed; the new kinds are verified as detected and correctly
 routed, which is as far as it goes without a paid key.
+
+Per-kind, what a free tier can reach: reCAPTCHA v3 and AWS WAF have **no puzzle
+to look at** — they are a risk score and a proof-of-work, so no amount of vision
+helps. FunCaptcha/Arkose's rotating 3D objects are beyond a small local model.
+GeeTest and DataDome sliders are gap-alignment puzzles that classic
+template-matching CV solves accurately with no model at all; that is the best
+remaining free-tier win and it is **not built**.
 
 ## [2.1.0] - 2026-08-09
 
