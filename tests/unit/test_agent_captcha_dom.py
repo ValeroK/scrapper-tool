@@ -97,7 +97,10 @@ async def test_solve_on_page_invokes_solver_and_injects() -> None:
     solver = _SpySolver(token="solved-token")
     handled = await captcha_dom.solve_on_page(page, solver, "https://x.example", settle_s=0)
     assert handled is True
-    solver.solve.assert_awaited_once_with("turnstile", "k", "https://x.example")
+    # ``extra`` is threaded through now — DataDome, AWS WAF, GeeTest and image
+    # captchas cannot be solved from (kind, site_key) alone. None here because the
+    # stubbed detection returns no extra parameters.
+    solver.solve.assert_awaited_once_with("turnstile", "k", "https://x.example", extra=None)
     # inject JS ran with the token
     inject_calls = [c for c in page.evaluate.await_args_list if c.args and c.args[1:]]
     assert any(call.args[1] == ["turnstile", "solved-token"] for call in inject_calls)
