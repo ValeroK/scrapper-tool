@@ -64,7 +64,28 @@ _VENDOR_SIGNATURES: dict[str, tuple[str, ...]] = {
     ),
     "datadome": ("geo.captcha-delivery.com", "datadome captcha", "dd_cookie_test"),
     "perimeterx": ("px-captcha", "human verification: px", "/px/captcha"),
-    "akamai": ("reference #18.", "akamai reference", "ak_bmsc_challenge"),
+    # Akamai Bot Manager. The first three are the classic "Access Denied"
+    # reference-number pages. The rest are the *challenge container* ids used by
+    # the interstitial and behavioural (tile-clicking) walls, captured live from
+    # dickssportinggoods.com — see tests/fixtures/challenge/.
+    #
+    # Deliberately NOT here: the Akamai *sensor* script path (a random-looking
+    # `/<segment>/<segment>/...?v=<uuid>` <script src>). It is served on walled
+    # AND on perfectly good pages from the same host — the real Angular shell in
+    # akamai_protected_real_shell_200.html carries it — so matching it would flag
+    # every Akamai-protected page as a wall. Same for `sec-overlay` /
+    # `sec-container`, which the good shell also carries. `sec-if-cpt-container`
+    # (interstitial captcha) and `sec-bc-*` (behavioural challenge) are distinct
+    # ids that appear only on the wall.
+    "akamai": (
+        "reference #18.",
+        "akamai reference",
+        "ak_bmsc_challenge",
+        "sec-if-cpt-container",
+        "sec-bc-tile-container",
+        "sec-bc-text-container",
+        "scf-akamai-protected-by",
+    ),
     "kasada": ("kpsdk-challenge", "/149e9513-01fa/2i/"),
     "incapsula": ("incapsula incident id", "_incapsula_resource"),
 }
@@ -83,6 +104,44 @@ _SPA_SHELL_SIGNATURES: tuple[str, ...] = (
 # `{identifier}` left inside visible heading text = the template never rendered.
 # Scoped to headings (not raw HTML) so ordinary inline JS with braces can't trip it.
 _HEADING_RE = re.compile(r"<h[1-3][^>]*>(.*?)</h[1-3]>", re.IGNORECASE | re.DOTALL)
+
+# --- content-free-shell fallback (catches a 200 wall with no known signature) --
+#
+# A signature miss on a 403 degrades safely to "unknown" via the status gate. On a
+# 200 there is no such net, and the failure is silent *data corruption*: the
+# caller is handed a bot wall as content. This is the net for that case.
+#
+# It is deliberately narrow, because the obvious heuristic does not work. Three
+# real bodies from one host (tests/fixtures/challenge/) constrain it:
+#
+#   akamai_behavioral_200.html      2,365 B  wall            -> must flag
+#   akamai_protected_real_shell_200 3,406 B  real SPA shell  -> must NOT flag
+#   example.com                       559 B  real content    -> must NOT flag
+#
+# "Small body with almost no visible text" flags all three: the legitimate
+# Angular shell's only text is a <noscript> line. The discriminator that actually
+# separates them is the **<title>**: real documents have one (even the shell —
+# "DICK'S Sporting Goods - Official Site"), while the wall ships bare
+# `<html lang="en"><body>` with no <head> at all. A titleless, script-bearing,
+# text-free HTML 200 is not a page anyone meant to serve.
+_TITLE_RE = re.compile(r"<title[^>]*>(.*?)</title>", re.IGNORECASE | re.DOTALL)
+_SCRIPT_RE = re.compile(r"<script[^>]*>.*?</script>", re.IGNORECASE | re.DOTALL)
+_STYLE_RE = re.compile(r"<(style|noscript)[^>]*>.*?</\1>", re.IGNORECASE | re.DOTALL)
+_TAG_RE = re.compile(r"<[^>]+>")
+_SHELL_MAX_BYTES = 15_000
+_SHELL_MAX_TEXT_CHARS = 200
+# Structured data is proof of intent: a bot wall does not publish a schema.org
+# Product or Open Graph tags. Without this escape hatch the check condemns a
+# legitimate page whose payload lives entirely in a JSON-LD block and whose
+# <body> is filled in by JS — which has no title and no visible text either, so
+# it is otherwise indistinguishable from the Akamai wall.
+_STRUCTURED_DATA_MARKERS: tuple[str, ...] = (
+    "application/ld+json",
+    "itemtype=",
+    "itemprop=",
+    'property="og:',
+    "property='og:",
+)
 _PLACEHOLDER_RE = re.compile(r"\{[a-zA-Z_][a-zA-Z0-9_]*\}")
 # Measured on real pages (see looks_unhydrated): a *ratio*, not an absolute count.
 # An absolute threshold false-positives badly — a fully-rendered page keeps stray
@@ -128,7 +187,36 @@ def is_interstitial(html: str, status_code: int = 200) -> str | None:
             return vendor
     if status_code in _BLOCK_STATUS_CODES and len(html) < _CHALLENGE_BODY_MAX_BYTES:
         return "unknown"
+    if looks_like_content_free_shell(html):
+        return "unknown"
     return None
+
+
+def looks_like_content_free_shell(html: str) -> bool:
+    """True for a small, titleless, script-only document with no visible text.
+
+    The last net under :func:`is_interstitial` for a wall served with **HTTP 200**
+    and no recognised vendor signature — the case that has no status gate to fall
+    back on and therefore fails silently, handing a bot wall to the caller as
+    content. See the constants above for the three real bodies this is calibrated
+    against, and why ``<title>`` rather than body size is the discriminator.
+
+    A false positive here costs one unnecessary escalation; a false negative
+    corrupts the result. Narrow, but biased in the safe direction.
+    """
+    if not html or len(html) > _SHELL_MAX_BYTES:
+        return False
+    lowered = html.lower()
+    if any(marker in lowered for marker in _STRUCTURED_DATA_MARKERS):
+        return False
+    title_match = _TITLE_RE.search(html)
+    if title_match is not None and title_match.group(1).strip():
+        return False
+    if "<script" not in lowered:
+        return False
+    stripped = _STYLE_RE.sub(" ", _SCRIPT_RE.sub(" ", html))
+    text = _TAG_RE.sub(" ", stripped)
+    return len(" ".join(text.split())) < _SHELL_MAX_TEXT_CHARS
 
 
 def looks_like_spa_shell(html: str) -> bool:
@@ -230,6 +318,7 @@ __all__ = [
     "is_cf_challenge_body",
     "is_interstitial",
     "looks_like_block_message",
+    "looks_like_content_free_shell",
     "looks_like_spa_shell",
     "looks_unhydrated",
 ]
