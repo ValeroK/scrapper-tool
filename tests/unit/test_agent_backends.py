@@ -1143,3 +1143,147 @@ class TestAutoCascadeCoverage:
             )
         )
         assert {"datadome", "aws-waf", "funcaptcha", "geetest"} <= paid.supported
+
+
+class TestCompleteVision:
+    """The direct image-inference path the local captcha solvers need.
+
+    Everything else on ``LLMBackend`` hands the model to another framework
+    (browser-use, Crawl4AI); nothing could simply ask a question about an image,
+    which is exactly what a grid or OCR solver does.
+    """
+
+    @staticmethod
+    def _capture(
+        monkeypatch: pytest.MonkeyPatch, payload: Any, status: int = 200
+    ) -> dict[str, Any]:
+        sent: dict[str, Any] = {}
+
+        class _Resp:
+            status_code = status
+            text = "err"
+
+            @staticmethod
+            def json() -> Any:
+                return payload
+
+        class _Client:
+            def __init__(self, **kw: Any) -> None:
+                sent["headers"] = kw.get("headers")
+
+            async def __aenter__(self) -> _Client:
+                return self
+
+            async def __aexit__(self, *_: object) -> None: ...
+
+            async def post(self, url: str, json: dict[str, Any]) -> _Resp:
+                sent["url"] = url
+                sent["json"] = json
+                return _Resp()
+
+        monkeypatch.setattr(llm_mod.httpx, "AsyncClient", _Client)
+        return sent
+
+    @pytest.mark.asyncio
+    async def test_openai_compat_sends_multimodal_content_parts(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        sent = self._capture(monkeypatch, {"choices": [{"message": {"content": "Red"}}]})
+        backend = OpenAICompatBackend(model="m", base_url="http://lm.test")
+        assert await backend.complete_vision("what colour?", ["AAA", "BBB"]) == "Red"
+
+        assert sent["url"] == "http://lm.test/v1/chat/completions"
+        content = sent["json"]["messages"][0]["content"]
+        assert content[0] == {"type": "text", "text": "what colour?"}
+        # Both images must survive: a grid solve sends the challenge plus tiles.
+        urls = [p["image_url"]["url"] for p in content[1:]]
+        assert urls == ["data:image/png;base64,AAA", "data:image/png;base64,BBB"]
+
+    @pytest.mark.asyncio
+    async def test_ollama_sends_native_images_list(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Ollama's /api/chat takes images as a sibling list, not content parts."""
+        sent = self._capture(monkeypatch, {"message": {"content": "Blue"}})
+        backend = OllamaBackend(model="m", base_url="http://olla.test")
+        assert await backend.complete_vision("q", ["AAA"]) == "Blue"
+        assert sent["url"] == "http://olla.test/api/chat"
+        assert sent["json"]["messages"][0]["images"] == ["AAA"]
+        assert sent["json"]["stream"] is False
+
+    @pytest.mark.asyncio
+    async def test_api_key_becomes_a_bearer_header(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        sent = self._capture(monkeypatch, {"choices": [{"message": {"content": "x"}}]})
+        backend = OpenAICompatBackend(model="m", base_url="http://lm.test", api_key="sk")
+        await backend.complete_vision("q", ["A"])
+        assert sent["headers"] == {"Authorization": "Bearer sk"}
+
+    @pytest.mark.asyncio
+    async def test_reasoning_only_reply_is_surfaced_not_dropped(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The measured starvation trap.
+
+        ``google/gemma-4-e4b`` spent an entire 20-token budget on
+        ``reasoning_content`` and returned ``content: ""``. Returning "" would
+        make a solver read starvation as a solve failure, so the partial
+        reasoning is surfaced (with a warning) instead.
+        """
+        self._capture(
+            monkeypatch,
+            {
+                "choices": [
+                    {
+                        "message": {"content": "", "reasoning_content": "The image looks red"},
+                        "finish_reason": "length",
+                    }
+                ]
+            },
+        )
+        backend = OpenAICompatBackend(model="m", base_url="http://lm.test")
+        assert "red" in (await backend.complete_vision("q", ["A"])).lower()
+
+    @pytest.mark.asyncio
+    async def test_content_returned_as_parts_is_joined(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        self._capture(
+            monkeypatch,
+            {"choices": [{"message": {"content": [{"text": "ti"}, {"text": "les"}]}}]},
+        )
+        backend = OpenAICompatBackend(model="m", base_url="http://lm.test")
+        assert await backend.complete_vision("q", ["A"]) == "tiles"
+
+    @pytest.mark.asyncio
+    async def test_empty_reply_raises_with_a_pointer_to_the_cause(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        self._capture(monkeypatch, {"choices": [{"message": {"content": ""}}]})
+        backend = OpenAICompatBackend(model="m", base_url="http://lm.test")
+        with pytest.raises(AgentLLMError, match="max_tokens"):
+            await backend.complete_vision("q", ["A"])
+
+    @pytest.mark.asyncio
+    async def test_http_error_raises_agent_llm_error(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        self._capture(monkeypatch, {}, status=500)
+        backend = OpenAICompatBackend(model="m", base_url="http://lm.test")
+        with pytest.raises(AgentLLMError, match="500"):
+            await backend.complete_vision("q", ["A"])
+
+    @pytest.mark.asyncio
+    async def test_transport_failure_raises_agent_llm_error(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        class _Client:
+            def __init__(self, **_: Any) -> None: ...
+
+            async def __aenter__(self) -> _Client:
+                return self
+
+            async def __aexit__(self, *_: object) -> None: ...
+
+            async def post(self, url: str, json: dict[str, Any]) -> Any:
+                raise llm_mod.httpx.ConnectError("refused")
+
+        monkeypatch.setattr(llm_mod.httpx, "AsyncClient", _Client)
+        backend = OpenAICompatBackend(model="m", base_url="http://down.test")
+        with pytest.raises(AgentLLMError, match="Vision call failed"):
+            await backend.complete_vision("q", ["A"])
