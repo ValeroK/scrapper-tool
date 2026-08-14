@@ -34,6 +34,7 @@ from scrapper_tool.errors import CaptchaSolveError
 
 if TYPE_CHECKING:
     from scrapper_tool.agent.backends.captcha import CaptchaKind, CaptchaSolver
+    from scrapper_tool.agent.backends.llm import LLMBackend
 
 _logger = get_logger(__name__)
 
@@ -233,6 +234,35 @@ async (url) => {
 }
 """
 
+# Read the challenge-response field for `kind`. Non-empty = the widget (or an
+# injected token) has produced a credential the form will submit.
+#
+# This is the success signal, NOT "is the widget still in the DOM". A solved
+# reCAPTCHA or hCaptcha leaves its widget in place — it just turns into a green
+# tick — so re-running detection after a solve reports the challenge as still
+# present and a real success reads as a failure. That mattered little while the
+# only thing we did was settle for Turnstile (which does disappear), and matters
+# a great deal now that tiers actually produce tokens.
+_RESPONSE_FIELD_JS = r"""
+(kind) => {
+  const names = {
+    turnstile: ['cf-turnstile-response', 'g-recaptcha-response'],
+    hcaptcha: ['h-captcha-response', 'g-recaptcha-response'],
+    'recaptcha-v2': ['g-recaptcha-response'],
+    'recaptcha-v3': ['g-recaptcha-response'],
+    funcaptcha: ['fc-token', 'verification-token', 'FunCaptcha-Token'],
+    arkose: ['fc-token', 'verification-token', 'FunCaptcha-Token'],
+    geetest: ['geetest_validate', 'geetest_seccode'],
+  }[kind] || ['g-recaptcha-response'];
+  for (const name of names) {
+    for (const el of document.querySelectorAll('[name="' + name + '"]')) {
+      if (el.value && el.value.length > 0) return el.value;
+    }
+  }
+  return '';
+}
+"""
+
 # Inject a solved token into the page's response field and best-effort
 # submit. Parameterised by (kind, token).
 _INJECT_JS = r"""
@@ -284,6 +314,24 @@ _PORTABLE_KINDS = frozenset(
 )
 # Kinds where the solver's result is a cookie to set, not a field to fill.
 _COOKIE_KINDS = frozenset({"datadome", "aws-waf"})
+
+# Kinds that begin as a clickable checkbox in an "anchor" iframe. Both of these
+# frequently pass on the click alone when the fingerprint is good, and only fall
+# back to an image grid when it isn't — so clicking is the cheapest tier there is
+# and nothing in this module used to do it.
+_CHECKBOX_KINDS = frozenset({"recaptcha-v2", "hcaptcha"})
+
+# The anchor iframe holds the checkbox; the bframe holds the image grid that
+# appears if the click is not accepted. Matching the anchor specifically matters:
+# clicking inside the bframe would hit a tile, not the checkbox.
+_ANCHOR_FRAME_PATTERNS: dict[str, tuple[str, ...]] = {
+    "recaptcha-v2": ("recaptcha/api2/anchor", "recaptcha/enterprise/anchor"),
+    "hcaptcha": ("hcaptcha.com/captcha", "newassets.hcaptcha.com"),
+}
+_CHECKBOX_SELECTORS: dict[str, tuple[str, ...]] = {
+    "recaptcha-v2": ("#recaptcha-anchor", ".recaptcha-checkbox-border"),
+    "hcaptcha": ("#checkbox", "#anchor .check", "div[role='checkbox']"),
+}
 
 
 class DetectedChallenge(NamedTuple):
@@ -349,10 +397,14 @@ async def inject_token(page: Any, kind: CaptchaKind, token: str) -> None:
         _logger.warning("agent.captcha_dom.inject_failed", kind=kind, error=str(exc))
 
 
-async def _settle_and_recheck(page: Any, settle_s: float, *, reload: bool) -> bool:
+async def _settle_and_recheck(
+    page: Any, settle_s: float, *, reload: bool, kind: CaptchaKind | None = None
+) -> bool:
     """Wait for a challenge to clear on its own; optionally reload first.
 
-    Returns ``True`` if no challenge is detected afterwards.
+    Returns whether the challenge is satisfied afterwards. With ``kind``, that
+    means "token present **or** widget gone"; without it, only "widget gone" —
+    the latter is right for a JS interstitial, which has no response field.
     """
     wait = getattr(page, "wait_for_timeout", None)
     if callable(wait):
@@ -367,7 +419,119 @@ async def _settle_and_recheck(page: Any, settle_s: float, *, reload: bool) -> bo
                 await reloader()
             except Exception as exc:  # pragma: no cover — defensive
                 _logger.debug("agent.captcha_dom.reload_failed", error=str(exc))
+    if kind is not None:
+        return await _is_solved(page, kind)
     return await detect_challenge(page) is None
+
+
+async def read_response_token(page: Any, kind: CaptchaKind) -> str:
+    """Return the challenge-response token currently on the page, or ``""``.
+
+    The authoritative "did it work" signal. See :data:`_RESPONSE_FIELD_JS` for why
+    widget-absence is the wrong question for every kind except Turnstile.
+    """
+    evaluate = getattr(page, "evaluate", None)
+    if not callable(evaluate):
+        return ""
+    try:
+        return str(await evaluate(_RESPONSE_FIELD_JS, kind) or "")
+    except Exception as exc:  # page closed / navigation in flight
+        _logger.debug("agent.captcha_dom.read_token_failed", kind=kind, error=str(exc))
+        return ""
+
+
+async def _is_solved(page: Any, kind: CaptchaKind) -> bool:
+    """Whether ``kind`` is satisfied — token present, or the widget itself gone.
+
+    Both are accepted because the two families behave differently: Turnstile and
+    JS interstitials clear themselves out of the DOM, while reCAPTCHA/hCaptcha
+    keep their widget and signal success only through the response field.
+    """
+    if await read_response_token(page, kind):
+        return True
+    return await detect_challenge(page) is None
+
+
+def find_anchor_frame(page: Any, kind: CaptchaKind) -> Any:
+    """Return the checkbox ("anchor") iframe for ``kind``, or ``None``.
+
+    Deliberately excludes the *bframe* — the sibling iframe holding the image
+    grid — because a click landing there would hit a tile rather than the
+    checkbox.
+    """
+    patterns = _ANCHOR_FRAME_PATTERNS.get(kind, ())
+    if not patterns:
+        return None
+    for frame in getattr(page, "frames", None) or ():
+        frame_url = str(getattr(frame, "url", "") or "")
+        if "bframe" in frame_url:
+            continue
+        if any(pattern in frame_url for pattern in patterns):
+            return frame
+    return None
+
+
+async def click_checkbox(page: Any, kind: CaptchaKind, *, settle_s: float = 8.0) -> bool:
+    """Click the reCAPTCHA/hCaptcha checkbox. Returns whether it solved the challenge.
+
+    The cheapest tier in the cascade and the one that was missing entirely: both
+    kinds present a checkbox first, and on a good stealth fingerprint the click
+    alone is often accepted, with the image grid appearing only when it isn't.
+    Nothing here ever clicked, and ``CamoufoxAutoSolver.supported`` is
+    ``{"turnstile"}``, so these kinds skipped tier 0 and went straight to a paid
+    solver — paying for challenges that a click would have cleared.
+
+    A ``False`` return is not a failure to escalate on: it usually means the grid
+    has now appeared, which is precisely what the vision solver wants.
+    """
+    frame = find_anchor_frame(page, kind)
+    if frame is None:
+        _logger.debug("agent.captcha_dom.no_anchor_frame", kind=kind)
+        return False
+    for selector in _CHECKBOX_SELECTORS.get(kind, ()):
+        try:
+            element = await frame.wait_for_selector(selector, timeout=3000)
+        except Exception as exc:  # selector absent in this variant
+            _logger.debug(
+                "agent.captcha_dom.checkbox_selector_miss",
+                kind=kind,
+                selector=selector,
+                error=str(exc),
+            )
+            continue
+        if element is None:
+            continue
+        try:
+            await element.click()
+        except Exception as exc:
+            _logger.debug("agent.captcha_dom.checkbox_click_failed", kind=kind, error=str(exc))
+            continue
+        _logger.info("agent.captcha_dom.checkbox_clicked", kind=kind, selector=selector)
+        # The token is minted asynchronously after the click is accepted, so poll
+        # rather than sleeping the whole settle window — a good fingerprint is
+        # usually through in well under a second.
+        return await _await_token(page, kind, settle_s)
+    return False
+
+
+async def _await_token(page: Any, kind: CaptchaKind, timeout_s: float) -> bool:
+    """Poll for the response token until ``timeout_s`` elapses."""
+    wait = getattr(page, "wait_for_timeout", None)
+    deadline = max(1, int(timeout_s / _TOKEN_POLL_S))
+    for _ in range(deadline):
+        if await read_response_token(page, kind):
+            return True
+        if callable(wait):
+            try:
+                await wait(_TOKEN_POLL_S * 1000.0)
+            except Exception:  # pragma: no cover — page closed mid-poll
+                break
+        else:
+            break
+    return bool(await read_response_token(page, kind))
+
+
+_TOKEN_POLL_S = 0.5
 
 
 async def _fetch_image_b64(page: Any, image_url: str) -> str:
@@ -425,18 +589,27 @@ async def _handle_widgetless_interstitial(page: Any, url: str, *, settle_s: floa
     return cleared
 
 
-async def solve_on_page(
+async def solve_on_page(  # noqa: PLR0911 — one return per tier; flattening hurts
     page: Any,
     solver: CaptchaSolver,
     url: str,
     *,
     settle_s: float = 8.0,
+    vision: LLMBackend | None = None,
 ) -> bool:
     """Detect and handle a captcha on ``page``. Returns whether one was handled.
 
-    Mechanism-aware: stealth-settle first, then solver token, injection
-    only where the token is portable. Never raises — solver failures are
-    logged and reported as "not handled" so the agent loop continues.
+    Mechanism-aware, cheapest-first:
+
+    1. **settle** — a stealth browser clears most Turnstile challenges by waiting.
+    2. **checkbox** — reCAPTCHA v2 / hCaptcha often pass on the click alone.
+    3. **local vision** (when ``vision`` is given) — solve the image grid with a
+       local VLM; free, and the page never leaves this machine.
+    4. **solver token** — the paid tiers, injected only where the token is
+       portable, or applied as a cookie for DataDome / AWS WAF.
+
+    Never raises: solver failures are logged and reported as "not handled" so the
+    agent loop continues and the cascade escalates.
     """
     detected = await detect_challenge_detail(page)
     if detected is None:
@@ -447,9 +620,30 @@ async def solve_on_page(
     )
 
     # 1) Stealth auto-pass — most reliable for Turnstile, costs nothing.
-    if await _settle_and_recheck(page, settle_s, reload=False):
+    if await _settle_and_recheck(page, settle_s, reload=False, kind=kind):
         _logger.info("agent.captcha_dom.cleared_by_settle", kind=kind, url=url)
         return True
+
+    # 2) Free interaction — click the checkbox. reCAPTCHA v2 and hCaptcha both
+    # start as a checkbox that frequently passes outright on a good stealth
+    # fingerprint, escalating to an image grid only if it does not. Costs one
+    # click and no API credit, so it belongs ahead of any solver.
+    if kind in _CHECKBOX_KINDS and await click_checkbox(page, kind, settle_s=settle_s):
+        _logger.info("agent.captcha_dom.cleared_by_checkbox", kind=kind, url=url)
+        return True
+
+    # 3) Local vision — the checkbox was refused, so an image grid is up now.
+    # Free, and the page never leaves this machine, so it goes ahead of the paid
+    # tier; a False here simply falls through to it.
+    if vision is not None:
+        from scrapper_tool.agent.backends.captcha_vision import (  # noqa: PLC0415
+            SUPPORTED_KINDS,
+            solve_grid,
+        )
+
+        if kind in SUPPORTED_KINDS and await solve_grid(page, kind, vision, settle_s=settle_s):
+            _logger.info("agent.captcha_dom.cleared_by_vision", kind=kind, url=url)
+            return True
 
     # An image captcha is identified by its pixels, not a key, so the bytes are
     # the payload. Fetched in page context — see _IMAGE_B64_JS.
@@ -468,7 +662,7 @@ async def solve_on_page(
     if not token:
         # Solver only settled (tier-0 empty token) and it didn't clear.
         # A reload gives the stealth browser one more chance.
-        cleared = await _settle_and_recheck(page, settle_s, reload=True)
+        cleared = await _settle_and_recheck(page, settle_s, reload=True, kind=kind)
         _logger.info("agent.captcha_dom.empty_token_recheck", kind=kind, cleared=cleared)
         return cleared
 
@@ -491,9 +685,13 @@ async def solve_on_page(
             detail="injecting an out-of-context token; may fail the environment check",
         )
     await inject_token(page, kind, token)
-    cleared = await _settle_and_recheck(page, 2.0, reload=False)
-    _logger.info("agent.captcha_dom.injected", kind=kind, cleared=cleared)
-    return True
+    # Report what actually happened. This used to return True unconditionally, so
+    # a token that never landed in the response field — the normal outcome for a
+    # foreign Turnstile token failing its environment check — was reported as a
+    # solve, and the cascade stopped escalating on a challenge that was still up.
+    solved = await _settle_and_recheck(page, 2.0, reload=False, kind=kind)
+    _logger.info("agent.captcha_dom.injected", kind=kind, solved=solved)
+    return solved
 
 
 _CLEARANCE_COOKIE_NAMES: dict[str, str] = {"datadome": "datadome", "aws-waf": "aws-waf-token"}
@@ -514,7 +712,7 @@ async def _set_clearance_cookie(page: Any, kind: str, token: str, url: str) -> b
     return True
 
 
-def make_captcha_consumer(solver: CaptchaSolver) -> Any:
+def make_captcha_consumer(solver: CaptchaSolver, *, vision: LLMBackend | None = None) -> Any:
     """Build a page-hook consumer that solves captchas via ``solver``.
 
     Shape matches :mod:`scrapper_tool.agent.backends.page_hooks` consumers:
@@ -523,16 +721,19 @@ def make_captcha_consumer(solver: CaptchaSolver) -> Any:
     """
 
     async def captcha_consumer(page: Any, *, url: str) -> None:
-        await solve_on_page(page, solver, url)
+        await solve_on_page(page, solver, url, vision=vision)
 
     return captcha_consumer
 
 
 __all__ = [
     "DetectedChallenge",
+    "click_checkbox",
     "detect_challenge",
     "detect_challenge_detail",
+    "find_anchor_frame",
     "inject_token",
     "make_captcha_consumer",
+    "read_response_token",
     "solve_on_page",
 ]

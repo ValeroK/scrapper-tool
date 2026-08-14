@@ -479,8 +479,15 @@ class _ChallengePage:
         self.reload = AsyncMock()
 
     async def _evaluate(self, js: str, arg: Any = None) -> Any:
-        if "querySelector" in js:
+        # Dispatch by identity, not substring: the response-field JS also
+        # contains "querySelector", so sniffing for it returned this challenge
+        # dict as if it were a solved token, and the solver was never reached.
+        from scrapper_tool.agent.backends import captcha_dom
+
+        if js is captcha_dom._DETECT_JS:
             return {"kind": "turnstile", "site_key": "0xSITEKEY"}
+        if js is captcha_dom._RESPONSE_FIELD_JS:
+            return ""  # unsolved, so the cascade proceeds to the solver
         return True
 
 
