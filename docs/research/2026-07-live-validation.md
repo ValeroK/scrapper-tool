@@ -532,12 +532,115 @@ built into payloads the providers accept; the interstitial case reaches the
 stealth tier instead of being skipped; and the remaining failures are IP
 reputation, which needs a residential/mobile egress, not code.
 
-## Still open
+---
 
-- The local-VLM grid-solver spike itself.
-- Arkose/FunCaptcha live verification (needs a real Arkose-protected target).
-- No live solve has been performed end-to-end: the new kinds are verified as
-  *detected and correctly routed*, not as *solved*, which needs a paid key.
+# Captcha solving — 2026-08-15
+
+The spike, plus the two free tiers that had to exist before it made sense. Every
+number below is a live run against `google.com/recaptcha/api2/demo` from this
+machine's datacenter-class IP.
+
+## The cascade now has four tiers
+
+| Tier | Mechanism | Cost | Covers |
+|---|---|---|---|
+| 0 | settle + reload | free | Turnstile, JS interstitials |
+| 0.5 | **click the checkbox** | free | reCAPTCHA v2, hCaptcha |
+| 1 | **local VLM grid solve** | free | reCAPTCHA v2, hCaptcha image grids |
+| 2 | paid solver token / cookie | per solve | the rest |
+
+Tiers 0.5 and 1 are new. So is the thing that makes any of them measurable:
+
+**Success was being read off the wrong signal.** `solve_on_page` returned `True`
+unconditionally after injecting a token, and `_settle_and_recheck` asked "is the
+widget gone". A solved reCAPTCHA or hCaptcha **keeps its widget** — it just turns
+green — so a real success read as a failure, while a foreign Turnstile token
+that failed its environment check (the normal outcome) read as a *success* and
+stopped the cascade. Both now key off the response field
+(`g-recaptcha-response` / `h-captcha-response` / `cf-turnstile-response`), with
+widget-absence kept only for interstitials, which have no response field.
+
+## The checkbox tier works, and its failure is the useful part
+
+Live, both anchor iframes are found and the click lands. Neither passed outright
+on this IP — and what happens instead is exactly the handoff tier 1 needs:
+
+```
+checkbox clicked -> aria-checked stays "false"
+                 -> bframe appears: "Select all images with crosswalks"
+```
+
+That is not a bug. On a residential IP the checkbox frequently *is* accepted, and
+this tier costs one click. Before it existed, reCAPTCHA and hCaptcha skipped
+tier 0 entirely (`CamoufoxAutoSolver.supported` is `{"turnstile"}`) and went
+straight to a paid solver — paying for challenges a click can clear.
+
+## The grid solver: pipeline works, the local model does not
+
+End-to-end the plumbing is sound — checkbox -> bframe -> screenshot -> VLM ->
+parse -> click tiles -> verify -> read token. Two real bugs were found by running
+it rather than by reading it:
+
+- **The prompt renders as two lines.** `.rc-imageselect-desc` innerText is
+  `"Select all squares with\nmotorcycles"`, so taking the first line reduced the
+  target to `"a"` and the model was asked to find nothing. The subject has its
+  own `<strong>` — read the element, don't regex the joined text.
+- **The panel screenshot was not the grid.** `#rc-imageselect` includes the
+  instruction banner and the reload/audio/SKIP footer, so the 16 tiles filled
+  ~70% of an image the model was told was a 4x4 grid numbered 1-16 — it had to
+  guess where the grid began before it could number anything. Screenshotting the
+  table element frames it exactly.
+- **512 tokens starved the model.** Against a 16-tile grid `gemma-4-e4b` spent an
+  entire 512-token budget on `reasoning_content` and returned no answer at all,
+  three rounds running. Grid solves now get 2048.
+
+With all three fixed, replies are clean and parseable. They are also wrong:
+
+| Grid | Target | Reply | Verdict |
+|---|---|---|---|
+| 3x3 | `bus` | `2,5,8` | 2 right, tile 8 is a **fire hydrant**, missed the obvious bus in 6 |
+| 4x4 | `buses` | `6,7,8,11` | 3 right, tile 8 is a **box truck**, missed the bus front in 10 |
+
+Measured against reCAPTCHA's own verify button, so no eyeballing is involved:
+
+| Model | Result |
+|---|---|
+| `google/gemma-4-e4b` | **0 / 5 solved** (~62 s per attempt) |
+| `qwen/qwen3.6-27b` | **untestable** — HTTP 400, "insufficient system resources" |
+
+The failure mode is consistent: it finds *some* of the right tiles and adds a
+confident false positive. reCAPTCHA is all-or-nothing, so near-misses score zero.
+
+**Conclusion: keep the tier, do not rely on it.** It costs nothing when it fails,
+it returns an honest `False` so the cascade escalates, and the same plumbing is
+what a stronger model (or a hosted VLM) would use unchanged. What it is not is a
+replacement for a paid solver on reCAPTCHA today. A rerun on hardware that can
+hold a 27B+ VLM is the obvious next measurement, and the benchmark harness makes
+it a one-command job.
+
+## What "all captcha types" can and cannot mean
+
+| Kind | Local/free path | Status |
+|---|---|---|
+| turnstile | settle | works when the IP is not already burned |
+| recaptcha-v2, hcaptcha | checkbox, then VLM grid | checkbox works; grid pipeline works, accuracy insufficient locally |
+| image | VLM OCR | routed, detection + base64 capture in place, unmeasured |
+| geetest, datadome | slider CV | **not built** — see below |
+| recaptcha-v3 | none possible | risk score; no puzzle exists |
+| aws-waf | none possible | proof-of-work |
+| funcaptcha, arkose | none practical | rotating 3D, beyond a small VLM |
+
+Still open:
+
+- **Slider solving for GeeTest and DataDome.** These are gap-alignment puzzles
+  that classic template-matching CV solves at high accuracy with no model at all
+  — the best remaining free-tier win, and not attempted here.
+- The local-VLM grid solver on adequate hardware.
+- Arkose/FunCaptcha live verification (needs a real Arkose-protected target;
+  `2captcha.com/demo/arkoselabs` serves no Arkose resources).
+- No paid-solver round trip has been exercised: the new kinds are verified as
+  detected and correctly routed, not as *solved by a provider*, which needs a key.
+- The interstitial wall remains an IP-reputation problem, unchanged.
 - `_browser_cookies.py` remains unvalidated on Windows: Chrome and Edge both
   carry `app_bound_encrypted_key` (Chrome 127+ App-Bound Encryption), which no
   external process can decrypt, and no Gecko browser is installed. This run used
