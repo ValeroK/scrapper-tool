@@ -22,6 +22,7 @@ import pytest
 
 from scrapper_tool._challenge import (
     _BODY_SCAN_BYTES,
+    _CHALLENGE_BODY_MAX_BYTES,
     has_real_content,
     is_cf_challenge_body,
     is_interstitial,
@@ -347,3 +348,22 @@ def test_cap_applies_to_every_tail_scanned_vendor(vendor_marker: str) -> None:
     small = f"<html><body>{'<span>x</span>' * 900}{vendor_marker}</body></html>"
     assert is_interstitial(big, 200) is None
     assert is_interstitial(small, 200) is not None
+
+
+def test_a_large_radware_wall_is_still_a_wall() -> None:
+    """The regression guard for an over-general "challenge pages are tiny" fix.
+
+    Radware pads its wall with an enormous obfuscated JS payload: the live yad2
+    ladder response is **118 KB**, titled "Radware Page", with 920 characters of
+    visible text and none of the site's own markup. Capping the head scan by body
+    size — which sounds reasonable and is what a first pass at the served-page bug
+    below reached for — accepts this as content.
+
+    Marker POSITION is the discriminator, not body size. Here it sits at offset
+    3,347, inside the head window; on the served page it is at 11,766, outside it.
+    """
+    html = _fixture("radware_wall_large_200.html")
+    assert len(html) > _CHALLENGE_BODY_MAX_BYTES, "fixture must exceed the tiny-body cap"
+    assert html.lower().find("validate.perfdrive.com") < _BODY_SCAN_BYTES
+    assert is_interstitial(html, 200) == "radware"
+    assert has_real_content(html, 200) is False
