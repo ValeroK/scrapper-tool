@@ -20,6 +20,7 @@ first.
 
 from __future__ import annotations
 
+import re
 from typing import Any
 
 import pytest
@@ -173,8 +174,26 @@ _CASES: list[tuple[str, str, str | None, str, dict[str, str]]] = [
 ]
 
 
+_EXTERNAL = re.compile(r"^https?://")
+"""Only real remote fetches. Deliberately NOT the ``**/*`` glob.
+
+``**/*`` also matches the ``about:blank`` navigation ``set_content`` performs
+internally, so aborting on it hung ``set_content`` itself — deterministically, on
+all three matrix rows, which is how it was found. Anchoring on the scheme leaves
+every internal navigation untouched while still catching every vendor URL in
+``_CASES``, all of which are https.
+"""
+
+
 async def _abort(route: Any) -> None:
-    """Fail every subresource request. See the call site for why."""
+    """Fail every external request. See the call site for why.
+
+    No ``resource_type == "document"`` exemption on purpose: an ``<iframe src>``
+    request *is* a document, so exempting documents would let the reCAPTCHA and
+    DataDome frames fetch for real — the single largest piece of the third-party
+    traffic this is here to stop. ``_EXTERNAL`` already keeps ``about:blank`` out
+    of scope, so nothing internal needs the exemption.
+    """
     await route.abort()
 
 
@@ -204,7 +223,7 @@ async def test_detection_js_against_real_markup() -> None:
             # attributes — src strings, sitekey params — and never needs the
             # resource behind them. With requests aborted, DOMContentLoaded fires
             # on the markup alone and the assertions are unchanged.
-            await page.route("**/*", _abort)
+            await page.route(_EXTERNAL, _abort)
             await page.set_content(
                 f"<!doctype html><html><body>{body}</body></html>",
                 wait_until="domcontentloaded",
