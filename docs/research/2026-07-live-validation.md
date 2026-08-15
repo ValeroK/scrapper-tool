@@ -736,3 +736,47 @@ Still open:
   carry `app_bound_encrypted_key` (Chrome 127+ App-Bound Encryption), which no
   external process can decrypt, and no Gecko browser is installed. This run used
   a synthetic jar, which starts downstream of extraction.
+
+
+---
+
+# Full cascade re-run — 2026-08-15
+
+Every target from both earlier runs, ladder first and render only where the
+ladder did not produce real content, judged by the shipped classifier. Same
+datacenter egress as before.
+
+**16 / 20 scraped.** 9 by the TLS ladder alone, 7 by render, 4 genuinely walled.
+
+| Verdict | Sites |
+|---|---|
+| **Ladder** (9) | example.com, books.toscrape, quotes.toscrape, webscraper.io, nowsecure.nl, one.co.il, homedepot.com, vinted.com, hermes.com |
+| **Render** (7) | seloger.com, g2.com, store.mopar.com, bunnings.com.au, dickssportinggoods, leboncoin.fr, shutterstock.com |
+| **Blocked** (4) | gamestop.com (cloudflare), kmart.com.au (akamai), ticketek.com.au (unknown), scrapingcourse CF (cloudflare) |
+
+Two sites that were **blocked in 2026-08 now clear**: `leboncoin.fr` renders 861 KB
+and `shutterstock.com` renders 1.02 MB under a 403 — the DataDome walls that
+previously returned 1.5 KB interstitials. `dickssportinggoods` is also now
+correctly handled at 378 KB rather than being accepted as a 2.4 KB wall.
+
+One drifted the other way: `seloger.com` was a ladder win in 2026-08 and now 403s
+all five profiles, so render carries it. Vendor configurations move; this is why
+the row-level history matters more than any single pass rate.
+
+`bunnings.com.au` first reported BLOCKED on a render **error**, not a wall —
+running twenty browsers back to back under a 60 s cap. Retried alone it returns
+403 with 664 KB of real DOM. Worth separating in any future harness: an
+infrastructure failure and an anti-bot wall are not the same result, and the
+first one silently understates the pass rate.
+
+## What the four blocked sites have in common
+
+Nothing that code reaches. They are the same IP-reputation cases this document
+has recorded three times now — headless and headful returned byte-identical
+responses on all of them, so the decision is made before any local lever applies.
+A residential or mobile egress is the only remaining dimension, and
+`config.proxy` is already wired through `browse.py` and `extract.py` waiting for
+one.
+
+**"Scrapes any website" is not the claim.** 80% of a deliberately hostile list,
+with the failures understood and attributable, is.
