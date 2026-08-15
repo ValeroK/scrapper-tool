@@ -21,12 +21,16 @@ own verify button. Five attempts per model on one RTX 3090 (24 GB).
 |---|---|---|---|
 | `google/gemma-4-e4b` | 6.33 GB | 0 / 5 | 62 s |
 | `qwen/qwen3-vl-8b` | 6.19 GB | 1 / 5 | 48 s |
-| **`qwen/qwen3.6-27b`** | 17.48 GB | **5 / 5** | 72 s |
+| `qwen/qwen3.6-27b` | 17.48 GB | **5 / 5** | 72 s |
+| **`qwen/qwen3.8-27b`** | 17.74 GB | **4 / 5** | 73 s |
 
-**Recommendation for the vision captcha tier: `qwen/qwen3.6-27b`.** Both ~6 GB
-models fail, including Qwen3-VL-8B, which is purpose-built for spatial reasoning
-— so this is not about finding a better *small* model. The capability the task
-needs appears around 27B.
+**Recommendation for the vision captcha tier: either 27B — `qwen/qwen3.8-27b`
+is the current pick** as the newer model. 5/5 and 4/5 at n=5 are *not* a
+meaningful difference, so treat them as equivalent rather than reading a ranking
+into one dropped attempt; both are a different class of result from the ~6 GB
+models, which fail even when purpose-built for spatial reasoning (Qwen3-VL-8B,
+1/5). The capability this task needs appears around 27B, and no amount of picking
+a better *small* model substitutes for it.
 
 Two operational notes that cost real time to discover:
 

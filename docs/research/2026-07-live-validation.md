@@ -637,6 +637,7 @@ With that one change, the same harness against the same live target:
 | `google/gemma-4-e4b` | 6.33 GB | **0 / 5** | 62 s |
 | `qwen/qwen3-vl-8b` | 6.19 GB | **1 / 5** | 48 s |
 | `qwen/qwen3.6-27b` | 17.48 GB | **5 / 5** | 72 s |
+| `qwen/qwen3.8-27b` | 17.74 GB | **4 / 5** | 73 s |
 
 Tokens on the wins were 2254-2382 chars — real reCAPTCHA tokens, read back off
 the response field, with reCAPTCHA's own verify button as the arbiter.
@@ -645,6 +646,10 @@ the response field, with reCAPTCHA's own verify button as the arbiter.
 rely on it") was right about `gemma-4-e4b` and wrong as a general statement. The
 correction that matters for anyone reading this: *check the context length before
 concluding a model does not fit.*
+
+`qwen3.8-27b` (multimodal, `mmproj` vision projector, MathVision 94.6) matches
+`qwen3.6-27b` within the noise of a five-run sample — 4/5 against 5/5 is one
+dropped attempt, not a ranking.
 
 On "lightweight": both ~6 GB models fail. Qwen3-VL-8B is purpose-built for
 spatial reasoning and still only managed 1/5, so this is not a matter of picking
