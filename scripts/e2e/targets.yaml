@@ -112,8 +112,65 @@ captcha_detect:
     note: |
       Verified directly, including after clicking through the form: this demo
       loads only a chat widget, no Arkose script or iframe. Detection for this
-      kind is fixture-verified only. NEEDS A REAL TARGET — do not record a pass
-      here without one.
+      kind is fixture-verified only. Use one of the real deployments below
+      instead — do not record a pass from this URL.
+
+  # --- Real Arkose deployments (2026 survey) ------------------------------
+  #
+  # Arkose is an enterprise product, so unlike Turnstile or hCaptcha there is no
+  # vendor sandbox that actually serves it. Every real deployment sits behind a
+  # SIGNUP or LOGIN flow on a consumer platform, which is why this kind stayed
+  # unverified: reaching the widget means driving an account-creation form.
+  #
+  # READ BEFORE USING ANY OF THESE. Only ever drive them far enough for the
+  # widget to render, and stop there. Do not create accounts, do not submit
+  # credentials, do not complete a signup. Detection is the thing under test and
+  # it happens the moment the Arkose script loads — everything past that point is
+  # someone else's account system, and this project has no business in it.
+  # Prefer a throwaway context and hit these rarely.
+  #
+  # Sources: capmonster.cloud, blog.captchaai.com, 2captcha.com/p/funcaptcha
+  # (2026 vendor surveys). Deployments change without notice — if the widget does
+  # not appear, record that rather than assuming the detector broke.
+  #
+  # MEASURED 2026-08-15: all three load WITHOUT any Arkose script or iframe.
+  # The widget is gated behind the first form step on every one of them, so a
+  # load-only probe cannot reach it — and driving a stranger's account-signup
+  # form to satisfy a detection test is not a trade this project should make.
+  #
+  # So `funcaptcha`/`arkose` detection remains **fixture-verified only**, and
+  # that is now a measured statement rather than an untested assumption. The
+  # honest options are a site where Arkose gates a non-signup flow, or a vendor
+  # sandbox if Arkose ever ships one. Until then, do not record a pass here.
+
+  - id: arkose-roblox-signup
+    url: https://www.roblox.com/CreateAccount
+    expect_kind: funcaptcha
+    exercises: Arkose public-key extraction from a live deployment
+    last_result: "no Arkose resources on page load — widget is gated behind the first form step"
+    last_checked: 2026-08-15
+    note: |
+      Most consistently reported Arkose deployment. Widget renders on the signup
+      form. Load the page and read the DOM; do not fill or submit it.
+
+  - id: arkose-outlook-signup
+    url: https://signup.live.com/signup
+    expect_kind: funcaptcha
+    exercises: Arkose on Microsoft account creation
+    last_result: "no Arkose resources on page load — widget is gated behind the first form step"
+    last_checked: 2026-08-15
+    note: |
+      Microsoft (Outlook/Xbox) uses Arkose on account creation. The widget
+      usually appears only after the first form step, so detection may need one
+      interaction — which is the boundary this target should not cross.
+
+  - id: arkose-ea-signup
+    url: https://signin.ea.com/p/juno/create
+    expect_kind: funcaptcha
+    exercises: Arkose on EA account creation
+    last_result: "no Arkose resources on page load — widget is gated behind the first form step"
+    last_checked: 2026-08-15
+    note: EA is Arkose's longest-running public deployment.
 
 # ---------------------------------------------------------------------------
 # 2. CAPTCHA SOLVING — end to end, arbitrated by the site itself
