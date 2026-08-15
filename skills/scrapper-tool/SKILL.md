@@ -123,6 +123,19 @@ Grid solving needs a vision model around **27B** — measured, not guessed. Two
 specifically for spatial reasoning. `qwen/qwen3.8-27b` or `qwen/qwen3.6-27b`
 score 4/5 and 5/5.
 
+If the model driving extraction is *not* the one you want reading grids, point
+the captcha tier somewhere else — they are different jobs and the best model for
+one is measurably bad at the other:
+
+```
+SCRAPPER_TOOL_AGENT_MODEL=<good at page-text -> JSON>
+SCRAPPER_TOOL_CAPTCHA_VISION_MODEL=<good at spatial vision>
+```
+
+Leave the second unset to reuse the first. Worth checking VRAM before splitting:
+two models only help if both fit at once, otherwise the server thrashes
+load/unload on every switch and one model that does both jobs wins.
+
 Load it with an **explicit context length**:
 
 ```
@@ -318,6 +331,14 @@ normal for hard/unstructured pages but slower; a CSS `schema` avoids it when the
 data is in the DOM.
 
 ---
+
+### `cookies` — what the run won
+
+`AgentResult.cookies` carries any clearance a solve or wall-crossing minted, in
+Playwright shape. Empty when nothing was won; populated even on a `blocked` run,
+because a run can win a clearance and still fail to extract — which is exactly
+when the next attempt wants it. Hand them back in on the next call, or persist a
+browser profile dir and let the browser keep its own jar.
 
 ## Decision guide
 
