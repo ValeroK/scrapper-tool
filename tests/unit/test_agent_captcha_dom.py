@@ -15,20 +15,34 @@ from scrapper_tool.errors import CaptchaSolveError
 
 
 class _FakePage:
-    """Playwright-shaped fake: ``evaluate`` returns queued values."""
+    """Playwright-shaped fake: ``evaluate`` returns queued values.
 
-    def __init__(self, detect_results: list[Any]) -> None:
-        # Each detect call pops the next result; scroll/inject evals are ignored.
+    Dispatch is by object identity against the module's JS constants, not by
+    substring. Sniffing for ``"querySelector"`` silently matched the token-read
+    JS as well as the detect JS, so a token read popped a detect result and the
+    two queues corrupted each other.
+    """
+
+    def __init__(self, detect_results: list[Any], tokens: list[str] | None = None) -> None:
         self._detect_results = list(detect_results)
+        # Default "" = no token, i.e. unsolved, which is what most of these
+        # tests are asserting about.
+        self._tokens = list(tokens or [])
         self.evaluate = AsyncMock(side_effect=self._evaluate)
         self.wait_for_timeout = AsyncMock()
         self.reload = AsyncMock()
 
     async def _evaluate(self, js: str, arg: Any = None) -> Any:
-        if "querySelector" in js:  # the detect JS
-            if self._detect_results:
+        if js is captcha_dom._DETECT_JS:
+            # The final queued state repeats once the queue drains. Returning
+            # None on exhaustion would mean "the widget vanished", so a test
+            # asserting a challenge *persists* had to guess exactly how many
+            # detect calls the implementation makes.
+            if len(self._detect_results) > 1:
                 return self._detect_results.pop(0)
-            return None
+            return self._detect_results[0] if self._detect_results else None
+        if js is captcha_dom._RESPONSE_FIELD_JS:
+            return self._tokens.pop(0) if self._tokens else ""
         return True  # inject JS / scroll JS
 
 
@@ -86,21 +100,55 @@ async def test_solve_on_page_cleared_by_settle() -> None:
 
 
 async def test_solve_on_page_invokes_solver_and_injects() -> None:
-    # detect: initial challenge, after-settle still present -> solver runs.
+    """A token that lands in the response field is a solve."""
     page = _FakePage(
         [
             {"kind": "turnstile", "site_key": "k"},  # initial
             {"kind": "turnstile", "site_key": "k"},  # after settle (persists)
-            {"kind": "turnstile", "site_key": "k"},  # after inject (ignored)
-        ]
+        ],
+        # No token during the settle re-check; present once the token is injected.
+        tokens=["", "solved-token"],
     )
     solver = _SpySolver(token="solved-token")
     handled = await captcha_dom.solve_on_page(page, solver, "https://x.example", settle_s=0)
     assert handled is True
-    solver.solve.assert_awaited_once_with("turnstile", "k", "https://x.example")
+    # ``extra`` is threaded through now — DataDome, AWS WAF, GeeTest and image
+    # captchas cannot be solved from (kind, site_key) alone. None here because the
+    # stubbed detection returns no extra parameters.
+    solver.solve.assert_awaited_once_with("turnstile", "k", "https://x.example", extra=None)
     # inject JS ran with the token
     inject_calls = [c for c in page.evaluate.await_args_list if c.args and c.args[1:]]
     assert any(call.args[1] == ["turnstile", "solved-token"] for call in inject_calls)
+
+
+async def test_injected_token_that_never_lands_is_reported_as_unsolved() -> None:
+    """The regression that matters most in this file.
+
+    ``solve_on_page`` used to ``return True`` unconditionally after injecting.
+    A foreign Turnstile token failing its environment check — the *normal*
+    outcome, since the token is bound to the context that requested it — was
+    therefore reported as a solve, and the cascade stopped escalating while the
+    challenge was still up.
+    """
+    page = _FakePage(
+        [{"kind": "turnstile", "site_key": "k"}, {"kind": "turnstile", "site_key": "k"}],
+        tokens=[],  # response field never populates
+    )
+    solver = _SpySolver(token="rejected-token")
+    assert await captcha_dom.solve_on_page(page, solver, "https://x.example", settle_s=0) is False
+
+
+async def test_solved_widget_that_stays_in_the_dom_counts_as_success() -> None:
+    """reCAPTCHA and hCaptcha keep their widget after a solve — it turns green.
+
+    So "is the widget gone" is the wrong success question for exactly the kinds
+    the new solver tiers target, and a real success would read as a failure.
+    """
+    page = _FakePage(
+        [{"kind": "recaptcha-v2", "site_key": "k"}],  # still detected afterwards
+        tokens=["03AGdBq26..."],  # but the response field is populated
+    )
+    assert await captcha_dom._is_solved(page, "recaptcha-v2") is True
 
 
 async def test_solve_on_page_solver_error_is_swallowed() -> None:
@@ -131,4 +179,175 @@ async def test_make_captcha_consumer_drives_solve_on_page() -> None:
     page = _FakePage([{"kind": "turnstile", "site_key": "k"}, None])
     solver = _SpySolver()
     consumer = captcha_dom.make_captcha_consumer(solver)
+    await consumer(page, url="https://x.example")  # must not raise
+
+
+# --- checkbox interaction tier --------------------------------------------
+
+
+class _FakeFrame:
+    def __init__(self, url: str, *, has: tuple[str, ...] = ()) -> None:
+        self.url = url
+        self._has = has
+        self.clicked: list[str] = []
+
+    async def wait_for_selector(self, selector: str, timeout: int = 0) -> Any:
+        if selector not in self._has:
+            raise RuntimeError(f"no such selector: {selector}")
+        frame = self
+
+        class _El:
+            @staticmethod
+            async def click() -> None:
+                frame.clicked.append(selector)
+
+        return _El()
+
+
+class _FramedPage(_FakePage):
+    def __init__(self, frames: list[_FakeFrame], **kw: Any) -> None:
+        super().__init__(kw.pop("detect_results", [None]), kw.pop("tokens", None))
+        self.frames = frames
+
+
+def test_anchor_frame_is_preferred_over_the_bframe() -> None:
+    """The bframe holds the image grid — clicking there hits a tile, not the box."""
+    bframe = _FakeFrame("https://www.google.com/recaptcha/api2/bframe?k=x")
+    anchor = _FakeFrame("https://www.google.com/recaptcha/api2/anchor?k=x")
+    page = _FramedPage([bframe, anchor])
+    assert captcha_dom.find_anchor_frame(page, "recaptcha-v2") is anchor
+
+
+def test_no_anchor_frame_when_none_matches() -> None:
+    page = _FramedPage([_FakeFrame("https://example.com/other")])
+    assert captcha_dom.find_anchor_frame(page, "recaptcha-v2") is None
+
+
+def test_turnstile_has_no_checkbox_frame() -> None:
+    """Only reCAPTCHA v2 and hCaptcha have an anchor checkbox to click."""
+    page = _FramedPage([_FakeFrame("https://challenges.cloudflare.com/x")])
+    assert captcha_dom.find_anchor_frame(page, "turnstile") is None
+
+
+async def test_checkbox_click_that_mints_a_token_is_a_solve() -> None:
+    """The free win: a good fingerprint passes on the click, with no solver call."""
+    anchor = _FakeFrame(
+        "https://www.google.com/recaptcha/api2/anchor?k=x", has=("#recaptcha-anchor",)
+    )
+    page = _FramedPage([anchor], tokens=["03AGdBq26..."])
+    assert await captcha_dom.click_checkbox(page, "recaptcha-v2", settle_s=1) is True
+    assert anchor.clicked == ["#recaptcha-anchor"]
+
+
+async def test_checkbox_click_without_a_token_is_not_a_solve() -> None:
+    """No token means the grid appeared — honest False so the cascade escalates."""
+    anchor = _FakeFrame(
+        "https://www.google.com/recaptcha/api2/anchor?k=x", has=("#recaptcha-anchor",)
+    )
+    page = _FramedPage([anchor], tokens=[])
+    assert await captcha_dom.click_checkbox(page, "recaptcha-v2", settle_s=1) is False
+
+
+async def test_checkbox_falls_through_selector_variants() -> None:
+    """hCaptcha markup varies; a missing selector must not abort the attempt."""
+    anchor = _FakeFrame("https://newassets.hcaptcha.com/captcha/v1/x", has=("#anchor .check",))
+    page = _FramedPage([anchor], tokens=["P1_eyJ..."])
+    assert await captcha_dom.click_checkbox(page, "hcaptcha", settle_s=1) is True
+    assert anchor.clicked == ["#anchor .check"]
+
+
+async def test_solve_on_page_tries_the_checkbox_before_the_solver() -> None:
+    """Ordering is the point: a click is free, a paid solve is not.
+
+    Before this tier existed, reCAPTCHA and hCaptcha skipped tier 0 entirely
+    (``CamoufoxAutoSolver.supported`` is ``{"turnstile"}``) and went straight to
+    a paid solver — paying for challenges a click would have cleared.
+    """
+    anchor = _FakeFrame(
+        "https://www.google.com/recaptcha/api2/anchor?k=x", has=("#recaptcha-anchor",)
+    )
+    page = _FramedPage(
+        [anchor],
+        detect_results=[{"kind": "recaptcha-v2", "site_key": "k"}],
+        tokens=["", "03AGdBq26..."],  # unsolved at settle, solved after the click
+    )
+    solver = _SpySolver()
+    assert await captcha_dom.solve_on_page(page, solver, "https://x.example", settle_s=0) is True
+    solver.solve.assert_not_awaited()
+
+
+# --- harvesting the clearance a solve wins ---------------------------------
+
+
+class _CookieContext:
+    def __init__(self, cookies: list[dict[str, Any]] | None = None, *, boom: bool = False) -> None:
+        self._cookies = cookies or []
+        self._boom = boom
+
+    async def cookies(self) -> list[dict[str, Any]]:
+        if self._boom:
+            raise RuntimeError("context closed")
+        return self._cookies
+
+
+class _PageWithContext(_FakePage):
+    def __init__(self, *args: Any, context: Any = None, **kw: Any) -> None:
+        super().__init__(*args, **kw)
+        self.context = context
+
+
+async def test_read_context_cookies_returns_the_whole_jar() -> None:
+    """Not just the named clearance.
+
+    Cloudflare pairs `cf_clearance` with `__cf_bm` and DataDome sets a session
+    marker beside its own cookie; a clearance replayed without its siblings is
+    frequently rejected, so the whole jar travels.
+    """
+    jar = [{"name": "cf_clearance", "value": "abc"}, {"name": "__cf_bm", "value": "def"}]
+    page = _PageWithContext([None], context=_CookieContext(jar))
+    assert await captcha_dom.read_context_cookies(page) == jar
+
+
+async def test_read_context_cookies_survives_a_closed_context() -> None:
+    page = _PageWithContext([None], context=_CookieContext(boom=True))
+    assert await captcha_dom.read_context_cookies(page) == []
+
+
+async def test_read_context_cookies_without_a_context_api() -> None:
+    assert await captcha_dom.read_context_cookies(_FakePage([None])) == []
+
+
+async def test_consumer_hands_over_cookies_after_a_solve() -> None:
+    """The whole point: the hook is the only place that knows a solve happened.
+
+    By the time either agent tier returns, the browser context is gone and the
+    credential with it — which is why a 70-second solve used to be thrown away
+    and the next tier re-fought the same wall.
+    """
+    jar = [{"name": "cf_clearance", "value": "won"}]
+    page = _PageWithContext(
+        [{"kind": "turnstile", "site_key": "k"}, None],  # cleared by settle
+        context=_CookieContext(jar),
+    )
+    collected: list[dict[str, Any]] = []
+    consumer = captcha_dom.make_captcha_consumer(_SpySolver(), on_solved=collected.extend)
+    await consumer(page, url="https://x.example")
+    assert collected == jar
+
+
+async def test_consumer_hands_over_nothing_when_no_solve_happened() -> None:
+    """An unsolved page must not report a clearance it did not win."""
+    page = _PageWithContext([None], context=_CookieContext([{"name": "x", "value": "y"}]))
+    collected: list[dict[str, Any]] = []
+    consumer = captcha_dom.make_captcha_consumer(_SpySolver(), on_solved=collected.extend)
+    await consumer(page, url="https://x.example")
+    assert collected == []
+
+
+async def test_consumer_without_a_callback_still_solves() -> None:
+    """`on_solved` is optional — omitting it must not change solving."""
+    page = _PageWithContext(
+        [{"kind": "turnstile", "site_key": "k"}, None], context=_CookieContext()
+    )
+    consumer = captcha_dom.make_captcha_consumer(_SpySolver())
     await consumer(page, url="https://x.example")  # must not raise

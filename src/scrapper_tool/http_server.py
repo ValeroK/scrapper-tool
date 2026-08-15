@@ -2093,7 +2093,7 @@ def _run_d_extractors(
     return css_data, product, json_ld, microdata_price
 
 
-async def _do_scrape_e_tier(
+async def _do_scrape_e_tier(  # noqa: PLR0915 — linear cascade; splitting hides the order
     req: Any,
     attempts: list[str],
     start: float,
@@ -2135,6 +2135,10 @@ async def _do_scrape_e_tier(
         try:
             result = await agent_extract(req.url, schema, instruction=req.instruction, config=cfg)
             e1_duration = time.perf_counter() - e1_start
+            # Before the accept/reject branch, for the same reason the render
+            # tier harvests early: E1 can win a captcha clearance and still
+            # extract nothing, and that is exactly when E2 most wants it.
+            _harvest_cookies(req, result.cookies, tier="e1")
             if not result.blocked:
                 log.append(
                     _build_log_entry("e1", outcome="won", reason="ok", duration_s=e1_duration)
@@ -2222,6 +2226,7 @@ async def _do_scrape_e_tier(
     schema = req.schema_json if isinstance(req.schema_json, dict) else None
     try:
         result = await agent_browse(req.url, instruction, schema=schema, config=cfg)
+        _harvest_cookies(req, result.cookies, tier="e2")
         log.append(
             _build_log_entry(
                 "e2",

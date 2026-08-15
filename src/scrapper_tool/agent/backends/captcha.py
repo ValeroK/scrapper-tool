@@ -239,16 +239,7 @@ class CapSolverSolver(_PaidSolverBase):
         action: str | None = None,
         extra: dict[str, str] | None = None,
     ) -> str:
-        task_type = _capsolver_task_type(kind)
-        task_payload: dict[str, object] = {
-            "type": task_type,
-            "websiteURL": url,
-            "websiteKey": site_key,
-        }
-        if action is not None and kind == "recaptcha-v3":
-            task_payload["pageAction"] = action
-        if extra:
-            task_payload.update(extra)
+        task_payload = _capsolver_task_payload(kind, site_key, url, action=action, extra=extra)
 
         async with httpx.AsyncClient() as client:
             create = await self._post_json(
@@ -297,6 +288,76 @@ class CapSolverSolver(_PaidSolverBase):
             err = body.get("errorDescription") or body.get("errorCode") or "(no detail)"
             msg = f"CapSolver task failed: {err}"
             raise CaptchaSolveError(msg)
+
+
+def _capsolver_task_payload(
+    kind: CaptchaKind,
+    site_key: str,
+    url: str,
+    *,
+    action: str | None = None,
+    extra: dict[str, str] | None = None,
+) -> dict[str, object]:
+    """Build CapSolver's ``task`` object for ``kind``.
+
+    The sitekey does **not** live under the same field name for every task type,
+    and three types do not take one at all. This used to send ``websiteKey`` for
+    everything, so FunCaptcha/Arkose (wants ``websitePublicKey``), DataDome
+    (wants ``captchaUrl``), AWS WAF (wants the ``gokuProps`` triple) and image
+    (wants base64 ``body``) would have been rejected by the API even when the
+    kind was detected correctly. It was never noticed because detection could not
+    produce those kinds in the first place.
+
+    ``extra`` is applied last so a caller can always override.
+    """
+    payload: dict[str, object] = {"type": _capsolver_task_type(kind), "websiteURL": url}
+    extra = extra or {}
+
+    if kind in {"funcaptcha", "arkose"}:
+        payload["websitePublicKey"] = site_key
+        if extra.get("surl"):
+            payload["funcaptchaApiJSSubdomain"] = extra["surl"]
+    elif kind == "datadome":
+        # Identified by the challenge URL; there is no sitekey.
+        payload["captchaUrl"] = extra.get("captchaUrl", url)
+    elif kind == "aws-waf":
+        for src, dest in (
+            ("awsKey", "awsKey"),
+            ("awsIv", "awsIv"),
+            ("awsContext", "awsContext"),
+            ("awsChallengeJS", "awsChallengeJS"),
+        ):
+            if extra.get(src):
+                payload[dest] = extra[src]
+    elif kind == "image":
+        payload["body"] = extra.get("body", "")
+        payload.pop("websiteURL", None)  # ImageToTextTask takes bytes, not a URL
+    elif kind == "geetest":
+        payload["gt"] = site_key
+        if extra.get("challenge"):
+            payload["challenge"] = extra["challenge"]
+    else:
+        payload["websiteKey"] = site_key
+
+    if action is not None and kind == "recaptcha-v3":
+        payload["pageAction"] = action
+
+    # Keys already consumed above would be nonsense as top-level task fields.
+    consumed = {
+        "surl",
+        "captchaUrl",
+        "awsKey",
+        "awsIv",
+        "awsContext",
+        "awsChallengeJS",
+        "body",
+        "challenge",
+        "image_url",
+        "version",
+        "action",
+    }
+    payload.update({k: v for k, v in extra.items() if k not in consumed})
+    return payload
 
 
 def _capsolver_task_type(kind: CaptchaKind) -> str:
@@ -431,14 +492,33 @@ class TwoCaptchaSolver(_PaidSolverBase):
             "method": method,
             "json": "1",
             "pageurl": url,
-            "sitekey": site_key,
         }
+        extra = extra or {}
+        # Same trap as CapSolver: 2Captcha does not call the key ``sitekey`` for
+        # every method. FunCaptcha wants ``publickey``, GeeTest wants ``gt`` plus a
+        # ``challenge`` nonce, and ``base64`` wants the image body and no key at
+        # all — so sending ``sitekey`` unconditionally fails those three.
+        if kind in {"funcaptcha", "arkose"}:
+            params["publickey"] = site_key
+            if extra.get("surl"):
+                params["surl"] = extra["surl"]
+        elif kind == "geetest":
+            params["gt"] = site_key
+            if extra.get("challenge"):
+                params["challenge"] = extra["challenge"]
+        elif kind == "image":
+            params["body"] = extra.get("body", "")
+            params.pop("pageurl", None)
+        else:
+            params["sitekey"] = site_key
+
         if kind == "recaptcha-v3":
             params["version"] = "v3"
             if action:
                 params["action"] = action
-        if extra:
-            for k, v in extra.items():
+        consumed = {"surl", "challenge", "body", "image_url", "version", "action", "captchaUrl"}
+        for k, v in extra.items():
+            if k not in consumed:
                 params[k] = str(v)
 
         async with httpx.AsyncClient() as client:
@@ -517,9 +597,15 @@ class AutoCascadeSolver:
 
     @property
     def supported(self) -> frozenset[CaptchaKind]:
-        # Conservative: claim the union of free tiers' kinds; paid tiers
-        # add coverage when an api key is present.
-        return frozenset({"turnstile", "hcaptcha", "recaptcha-v2", "recaptcha-v3"})
+        """The union of the configured tiers' coverage.
+
+        Previously hard-coded to the four free-tier kinds, which under-reported
+        the cascade whenever a paid tier was configured: a caller checking
+        ``supported`` before dispatching would decide the cascade could not handle
+        DataDome or FunCaptcha when the CapSolver tier in it plainly could.
+        ``solve`` already routes per-tier, so this is the honest summary of it.
+        """
+        return frozenset().union(*(tier.supported for tier in self._tiers))
 
     def __init__(self, *, tiers: list[CaptchaSolver]) -> None:
         if not tiers:

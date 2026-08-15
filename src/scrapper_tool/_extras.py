@@ -30,6 +30,7 @@ diagnostic that can take down the thing it is diagnosing is worse than useless.
 from __future__ import annotations
 
 import os
+import sys
 from pathlib import Path
 from typing import Any
 
@@ -174,11 +175,62 @@ def playwright_browsers_root() -> Path:
     ``playwright install firefox`` and ``patchright install chromium`` write
     into this directory. ``$PLAYWRIGHT_BROWSERS_PATH`` overrides the default;
     we honour it.
+
+    Platform-aware, because Playwright's default differs per OS and hard-coding
+    the Linux one made every binary probe on Windows and macOS a false negative
+    regardless of the glob patterns below — the root simply did not exist. Verified
+    against a real install: ``%LOCALAPPDATA%\\ms-playwright`` on Windows holds
+    ``chromium-1208/`` and ``firefox-1509/`` while ``~/.cache/ms-playwright`` is
+    absent.
     """
     override = os.environ.get("PLAYWRIGHT_BROWSERS_PATH")
     if override:
         return Path(override)
+    # Read into a local first: mypy statically narrows a direct ``sys.platform ==``
+    # comparison to the checker's own platform and then calls the other branches
+    # unreachable, which is exactly backwards for a runtime dispatch like this one
+    # (and for the tests, which monkeypatch it).
+    platform = sys.platform
+    if platform == "win32":
+        local_appdata = os.environ.get("LOCALAPPDATA")
+        base = Path(local_appdata) if local_appdata else Path.home() / "AppData" / "Local"
+        return base / "ms-playwright"
+    if platform == "darwin":
+        return Path.home() / "Library" / "Caches" / "ms-playwright"
     return Path.home() / ".cache" / "ms-playwright"
+
+
+# Playwright's per-revision layout is platform-specific. These cover Linux,
+# Windows and macOS, plus the older directory names still found in long-lived
+# images — the probe should answer "is there a launchable binary", not "is this
+# the exact Playwright version I expected". Verified against a real Windows
+# install: ``chromium-1208/chrome-win64/chrome.exe``,
+# ``chromium_headless_shell-1208/chrome-headless-shell-win64/...`` and
+# ``firefox-1509/firefox/firefox.exe`` — none of which the previous Linux-only
+# patterns matched.
+_CHROMIUM_GLOBS: tuple[str, ...] = (
+    # Linux
+    "chromium-*/chrome-linux64/chrome",
+    "chromium-*/chrome-linux/chrome",
+    "chromium_headless_shell-*/chrome-linux64/headless_shell",
+    "chromium_headless_shell-*/chrome-linux/headless_shell",
+    "chromium_headless_shell-*/chrome-headless-shell-linux64/chrome-headless-shell",
+    # Windows
+    "chromium-*/chrome-win64/chrome.exe",
+    "chromium-*/chrome-win/chrome.exe",
+    "chromium_headless_shell-*/chrome-headless-shell-win64/chrome-headless-shell.exe",
+    "chromium_headless_shell-*/chrome-win/headless_shell.exe",
+    # macOS
+    "chromium-*/chrome-mac/Chromium.app/Contents/MacOS/Chromium",
+    "chromium_headless_shell-*/chrome-mac/headless_shell",
+    "chromium_headless_shell-*/chrome-headless-shell-mac*/chrome-headless-shell",
+)
+
+_FIREFOX_GLOBS: tuple[str, ...] = (
+    "firefox-*/firefox/firefox",  # Linux
+    "firefox-*/firefox/firefox.exe",  # Windows
+    "firefox-*/firefox/Nightly.app/Contents/MacOS/firefox",  # macOS
+)
 
 
 def browser_binary_present(browser: str, *, root: Path | None = None) -> bool:
@@ -204,27 +256,30 @@ def browser_binary_present(browser: str, *, root: Path | None = None) -> bool:
         # layout); older images used ``chrome-linux/``. Try both so the probe
         # works against any reasonable Playwright version, and against
         # Patchright's headless-shell variant.
-        candidates = (
-            "chromium-*/chrome-linux64/chrome",
-            "chromium-*/chrome-linux/chrome",
-            "chromium_headless_shell-*/chrome-linux64/headless_shell",
-            "chromium_headless_shell-*/chrome-linux/headless_shell",
-        )
-        return any(p.is_file() for pat in candidates for p in search_root.glob(pat))
+        return any(p.is_file() for pat in _CHROMIUM_GLOBS for p in search_root.glob(pat))
 
     if browser == "camoufox":
-        # Camoufox stores its Firefox fork under its own path; the python
-        # wrapper exposes ``camoufox.path``. browser-use (E2) also pulls
-        # Playwright Firefox, so we treat either as runnable.
+        # Camoufox does NOT install into the Playwright root — it keeps its own
+        # tree (``%LOCALAPPDATA%/camoufox/...`` on Windows). The old probe read
+        # ``camoufox.path``, an attribute that does not exist on any release, then
+        # fell back to globbing the Playwright root where Camoufox never lands, so
+        # it returned False on every install. That made ``doctor`` report
+        # ``render: degraded`` and told operators to run ``camoufox fetch`` when
+        # they already had, and silently SKIPped the P2 e2e regression check.
+        #
+        # ``pkgman.launch_path()`` is the real API and returns the executable
+        # directly. It raises when nothing is installed, which is the answer we
+        # want, not a crash.
         try:
-            import camoufox  # noqa: PLC0415
+            from camoufox import pkgman  # noqa: PLC0415
 
-            cf_path = getattr(camoufox, "path", None)
-            if cf_path and Path(cf_path).is_file():
+            if Path(pkgman.launch_path()).is_file():
                 return True
-        except ImportError:
+        except (ImportError, AttributeError, OSError, RuntimeError, ValueError):
             pass
-        return any(p.is_file() for p in search_root.glob("firefox-*/firefox/firefox"))
+        # browser-use (E2) also drives plain Playwright Firefox, so treat that as
+        # runnable too.
+        return any(p.is_file() for pat in _FIREFOX_GLOBS for p in search_root.glob(pat))
 
     if browser == "scrapling":
         # Scrapling drives its own Camoufox, which lands in the Playwright root
@@ -232,7 +287,7 @@ def browser_binary_present(browser: str, *, root: Path | None = None) -> bool:
         # whether the Python package imports is `check_browser_module`'s job,
         # and this used to ask it too, in a try/except whose branches both
         # returned False.
-        return any(p.is_file() for p in search_root.glob("firefox-*/firefox/firefox"))
+        return any(p.is_file() for pat in _FIREFOX_GLOBS for p in search_root.glob(pat))
 
     if browser == "obscura":
         # Obscura is an external CDP server (sidecar), not a local binary.

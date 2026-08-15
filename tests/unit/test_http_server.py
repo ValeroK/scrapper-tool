@@ -11,6 +11,7 @@ exercise. Real network calls (``request_with_ladder``, ``agent_extract``,
 
 from __future__ import annotations
 
+import sys
 from datetime import UTC, datetime
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock
@@ -937,6 +938,11 @@ class TestAgentRunnable:
         self, monkeypatch: pytest.MonkeyPatch, tmp_path: Any
     ) -> None:
         # Empty cache dir → no firefox/chromium binary on disk → False.
+        # Camoufox installs OUTSIDE the Playwright root and is probed via
+        # ``pkgman.launch_path()``, so on a machine that really has it the answer
+        # is True regardless of ``tmp_path``. Hide the module to keep this test
+        # about the on-disk root it monkeypatches.
+        monkeypatch.setitem(sys.modules, "camoufox", None)
         monkeypatch.setattr(http_server, "_playwright_browsers_root", lambda: tmp_path)
         assert http_server._browser_binary_present("patchright") is False
         assert http_server._browser_binary_present("camoufox") is False
@@ -987,7 +993,9 @@ class TestAgentRunnable:
         self, app_no_auth: Any, monkeypatch: pytest.MonkeyPatch, tmp_path: Any
     ) -> None:
         # Empty cache → agent_runnable=false → /ready status=degraded
-        # (when LLM is unreachable, which it will be in CI).
+        # (when LLM is unreachable, which it will be in CI). Camoufox is hidden
+        # because it installs outside the Playwright root this points at tmp_path.
+        monkeypatch.setitem(sys.modules, "camoufox", None)
         monkeypatch.setattr(http_server, "_playwright_browsers_root", lambda: tmp_path)
         async with _client(app_no_auth) as client:
             resp = await client.get("/ready")
@@ -1006,7 +1014,9 @@ class TestAgentRunnable:
         self, app_no_auth: Any, monkeypatch: pytest.MonkeyPatch, tmp_path: Any
     ) -> None:
         # The whole point of the v1.1.2 change: empty browser cache must
-        # NOT yield status=ready, no matter how healthy the rest looks.
+        # NOT yield status=ready, no matter how healthy the rest looks. Camoufox
+        # is hidden because it installs outside the Playwright root.
+        monkeypatch.setitem(sys.modules, "camoufox", None)
         monkeypatch.setattr(http_server, "_playwright_browsers_root", lambda: tmp_path)
         async with _client(app_no_auth) as client:
             resp = await client.get("/ready")

@@ -7,9 +7,10 @@ description: >-
   (Cloudflare, DataDome, Akamai, PerimeterX) or renders its content with
   JavaScript. scrapper-tool is a Python toolkit with an auto-escalating cascade
   that tries the cheapest method first and climbs to a stealth browser or a
-  local LLM only when the site forces it. Reach for this instead of a bare
-  `requests`/`fetch` when a plain GET would be blocked or would return an empty
-  JS shell.
+  local LLM only when the site forces it. Also solves captchas encountered along
+  the way (Turnstile, reCAPTCHA v2, hCaptcha, GeeTest/DataDome sliders) and keeps
+  the clearance it wins. Reach for this instead of a bare `requests`/`fetch` when
+  a plain GET would be blocked or would return an empty JS shell.
 ---
 
 # scrapper-tool
@@ -81,6 +82,85 @@ anything. A tier that could not carry the session says so there with a reason
 (`camoufox_exposes_no_cdp_endpoint`, `no_cookie_matched_this_url`, …). If the
 tier that won appears in `cookies_skipped`, the logged-out page is explained and
 a fresh export will not help — report the reason instead.
+
+## Captchas — what happens without you asking
+
+If a captcha appears mid-scrape, the browser tiers try to clear it themselves.
+You do not call anything; it happens inside `render` / `e1` / `e2`. Five tiers,
+cheapest first:
+
+```
+settle      wait it out                    Turnstile, JS interstitials
+checkbox    click the box                  reCAPTCHA v2, hCaptcha
+slider      align the gap (pure geometry)  GeeTest, DataDome    ← no model needed
+vision      local VLM reads the grid       reCAPTCHA v2, hCaptcha
+paid        solver API                     everything else      ← needs a key
+```
+
+**Measured success rates, so you can calibrate rather than hope:**
+
+| Challenge | Rate | Notes |
+|---|---|---|
+| reCAPTCHA v2 image grid | **3/4 – 4/5** | needs a ~27B local VLM; see below |
+| GeeTest v3 slider | **~20%** | no model; failures are free, just retry |
+| Turnstile / JS interstitial | varies | settles when the IP is trusted; nothing local moves it otherwise |
+| reCAPTCHA v3, AWS WAF | **no** | risk score and proof-of-work — no puzzle exists to solve |
+| FunCaptcha / Arkose | **no** | rotating 3D; paid tier only |
+
+Two things follow from those numbers:
+
+- **A captcha failure is usually not worth retrying more than once.** The tiers
+  already retry internally, and the common cause is IP reputation, which a retry
+  does not change.
+- **Never report a captcha as "solved" because the widget disappeared.** A solved
+  reCAPTCHA keeps its widget — it just turns green. The library judges by the
+  response token; you should judge by whether you got the data.
+
+### The local VLM, and the trap that wastes an afternoon
+
+Grid solving needs a vision model around **27B** — measured, not guessed. Two
+~6 GB models score 0/5 and 1/5 on the identical pipeline, including one built
+specifically for spatial reasoning. `qwen/qwen3.8-27b` or `qwen/qwen3.6-27b`
+score 4/5 and 5/5.
+
+If the model driving extraction is *not* the one you want reading grids, point
+the captcha tier somewhere else — they are different jobs and the best model for
+one is measurably bad at the other:
+
+```
+SCRAPPER_TOOL_AGENT_MODEL=<good at page-text -> JSON>
+SCRAPPER_TOOL_CAPTCHA_VISION_MODEL=<good at spatial vision>
+```
+
+Leave the second unset to reuse the first. Worth checking VRAM before splitting:
+two models only help if both fit at once, otherwise the server thrashes
+load/unload on every switch and one model that does both jobs wins.
+
+Load it with an **explicit context length**:
+
+```
+lms load qwen/qwen3.8-27b --context-length 8192 --gpu max
+```
+
+Its default is 262,144 tokens, and that KV cache — not the 16 GiB of weights — is
+what overflows a 24 GB card. Without the flag you get `insufficient system
+resources`, which reads as "this model does not fit" and is exactly wrong.
+
+## Clearance cookies — the tool keeps what it wins
+
+Distinct from the session cookies above, which only a human can supply. When a
+tier clears a wall or solves a captcha, the credential that bought (a
+`cf_clearance`, a `datadome`) is harvested and reused, because a solve costs ~70 s
+of local inference or a paid API call and throwing it away means paying twice.
+
+- **Within a request** it is automatic: later tiers inherit it.
+- **Across runs** set `persist_browser_profile_dir`. The browser keeps its own
+  cookie jar there, so the next run starts already cleared.
+
+Two properties worth trusting: the whole jar travels together (a `cf_clearance`
+replayed without its `__cf_bm` sibling is often rejected), and it is scoped on
+apply — domain, path, `secure` and expiry — so nothing leaks to another host and
+a stale clearance is dropped rather than replayed.
 
 ## Three ways to call it — pick one
 
@@ -252,6 +332,14 @@ data is in the DOM.
 
 ---
 
+### `cookies` — what the run won
+
+`AgentResult.cookies` carries any clearance a solve or wall-crossing minted, in
+Playwright shape. Empty when nothing was won; populated even on a `blocked` run,
+because a run can win a clearance and still fail to extract — which is exactly
+when the next attempt wants it. Hand them back in on the next call, or persist a
+browser profile dir and let the browser keep its own jar.
+
 ## Decision guide
 
 - **"Get the data from this URL"** → `auto_scrape(url)` / `scrape(url)`. Add a
@@ -287,8 +375,17 @@ data is in the DOM.
   is expected, not a fault — Firefox has no CDP, so E2 needs
   `SCRAPPER_TOOL_AGENT_BROWSER=patchright`.
 
+- **`docker run … scrapper-tool doctor` does not work.** The image entrypoint is
+  `scrapper-tool-serve`, so those tokens are parsed as server flags and it exits
+  2. Use `docker run --rm --entrypoint scrapper-tool <image> doctor --json`.
+- Captcha solving is best-effort and its rates are above. If a run needs a
+  guaranteed solve, configure a paid solver key (`SCRAPPER_TOOL_CAPTCHA_KEY`);
+  the free tiers try first regardless, so the key only costs money when they fail.
+
 ## Reference
 
 - Full settings: `docs/SETTINGS.md`
 - Per-tool MCP wiring for each framework: `docs/agent-integration.md`
 - The cascade tiers in depth: `docs/patterns/`
+- What is tested and how to reproduce it: `docs/TESTING.md`
+- Measured captcha/model results: `docs/MODEL_RESEARCH.md`

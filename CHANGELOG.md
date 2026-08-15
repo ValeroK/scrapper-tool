@@ -2,6 +2,201 @@
 
 All notable changes to `scrapper-tool` are recorded here. Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning follows [SemVer](https://semver.org/).
 
+## [2.2.0] - 2026-08-15
+
+Findings from the first live validation of 2.1.0 against real sites. PRs #25 and
+#28 were built in a container with no general egress, so none of that code had
+ever touched a live host — five bugs surfaced on first contact, one of them
+silent data corruption. Full measurements in
+`docs/research/2026-07-live-validation.md`.
+
+### Fixed
+
+- **A bot-walled HTTP 200 was scored as real content.** `dickssportinggoods.com`
+  serves a 2.4 KB Akamai tile-challenge as **200**; the cascade accepted it as
+  content and stopped escalating, handing the caller a wall. Rendering the same
+  URL gives 330 KB.
+
+  The reported root cause ("the `unknown` fallback is gated on `{403,503}`") was
+  not the real one: the vendor-signature loop already ran regardless of status,
+  so the wall was invisible because **no signature matched**. The gate is what
+  rescued the 403 variants. Akamai's challenge-container ids are now signatures.
+
+  The obvious signature is a trap and is deliberately *not* used: the Akamai
+  sensor `<script src>` and the `sec-overlay` / `sec-container` pair appear on
+  the wall **and on a perfectly good page from the same host** — three bodies
+  captured live, with the TLS profile alone deciding which you get, are committed
+  as `tests/fixtures/challenge/`. Matching those would flag every
+  Akamai-protected page on the internet.
+
+  `looks_like_content_free_shell` is the new net under an unsignatured 200 wall.
+  "Small body, almost no visible text" does **not** work — it flags a legitimate
+  SPA shell whose only text is a `<noscript>` line — so the discriminator is the
+  `<title>`, with structured data (JSON-LD / microdata / Open Graph) as an
+  explicit escape hatch, because a bot wall does not publish a schema.org
+  Product.
+
+- **Every browser binary probe was false on Windows and macOS.**
+  `playwright_browsers_root()` returned the Linux default unconditionally, so the
+  path did not exist and no glob was ever consulted — fixing the glob patterns
+  alone would have changed nothing. The root is now platform-aware and the
+  patterns cover Windows and macOS layouts.
+
+  Camoufox additionally installs **outside** the Playwright root entirely, and
+  the probe read `camoufox.path`, an attribute no release defines. It now uses
+  `pkgman.launch_path()`. Consequence of the old behaviour: `doctor` reported
+  `render: degraded` and told operators to run `camoufox fetch` when they
+  already had, and the P2 e2e regression check silently SKIPped.
+
+- **`is_vision_model()` returned False for every locally installed VLM**, so
+  browse mode disabled vision on models that demonstrably see and E2 ran blind.
+  Names do not encode modality reliably; the new `supports_vision()` asks the
+  server (`/api/v0/models`) and falls back to the name heuristic only when the
+  endpoint is absent, unreachable, or silent about the model.
+
+### Added
+
+- **All ten declared `CaptchaKind` values are now reachable and routable.**
+  `_DETECT_JS` had three return paths, so `arkose`, `aws-waf`, `datadome`,
+  `funcaptcha`, `geetest`, `image` and `recaptcha-v3` could not be produced by
+  any automatic path — the paid tiers' advertised DataDome / AWS-WAF / FunCaptcha
+  coverage was unreachable in practice.
+
+  Detection alone was not enough. Two layers underneath were also broken, and
+  neither had ever been exercised because nothing could reach them:
+  `solve_on_page` never populated `extra` (DataDome needs a challenge URL, AWS
+  WAF the `gokuProps` triple, GeeTest a nonce, an image captcha its pixels), and
+  every kind was sent to the provider as `websiteKey` when CapSolver wants
+  `websitePublicKey` / `captchaUrl` / `body` and 2Captcha wants
+  `publickey` / `gt` / `body` — so those tasks would have been rejected by the
+  API even with a correct kind and a valid key.
+
+  `AutoCascadeSolver.supported` was hard-coded to the four free-tier kinds and
+  now reports the union of its configured tiers, so a caller checking it no
+  longer concludes a paid cascade cannot handle DataDome.
+
+- **A widget-less JS interstitial now reaches the stealth tier.** A Cloudflare
+  "Just a moment..." page is not a captcha, so detection correctly returns
+  `None` — but the old code then returned immediately, meaning tier 0 was
+  **never invoked** for the commonest wall on the web. It now settles and
+  reloads (the mechanism that actually clears these) and re-reads the document
+  rather than treating "no widget found" as proof the wall is gone.
+
+- `tests/unit/test_captcha_detection_dom.py` runs the **real** detection JS in a
+  real browser against 16 markup cases. The existing suite fed canned dicts to a
+  fake page, so the detector itself was untested — which is how it shipped with
+  three branches. Writing it caught two further bugs: `window.gokuProps`
+  outlives its document (so keying AWS-WAF on its presence made every later page
+  in that tab report `aws-waf`), and `new URL(relative, 'about:blank')` throws,
+  which aborted the *entire* detection.
+
+- **A free checkbox tier, ahead of the paid solvers.** reCAPTCHA v2 and hCaptcha
+  both begin as a checkbox that frequently passes outright on a good stealth
+  fingerprint. Nothing ever clicked it, and because
+  `CamoufoxAutoSolver.supported` is `{"turnstile"}` those kinds skipped tier 0
+  entirely and went straight to a paid solver — paying for challenges a click can
+  clear.
+
+- **A local-VLM image-grid solver** (`agent.backends.captcha_vision`) between the
+  checkbox and the paid tier, plus the `complete_vision()` call path it needs —
+  until now every `LLMBackend` method handed the model to another framework and
+  nothing could simply ask a question about an image.
+
+  It screenshots the grid rather than parsing it, because reCAPTCHA slices one
+  image across the tiles by CSS and swaps individual tiles in for dynamic
+  challenges while hCaptcha uses per-tile images; a screenshot is identical for
+  all of them.
+
+  **Measured, with reCAPTCHA's own verify button as ground truth:
+  `google/gemma-4-e4b` solves 0/5, and `qwen/qwen3.6-27b` will not load on the
+  test machine.** Replies parse cleanly but are wrong in a consistent way — some
+  correct tiles plus a confident false positive — and reCAPTCHA is
+  all-or-nothing. The tier is kept because it costs nothing when it fails and
+  returns an honest `False` so the cascade escalates, and the plumbing serves a
+  stronger model unchanged. **It is not a replacement for a paid solver on
+  reCAPTCHA today.**
+
+- **A slider solver for GeeTest and DataDome** (`agent.backends.captcha_slider`)
+  that needs **no model at all**. A slider captcha is gap alignment, which has an
+  exact answer, so it is geometry rather than perception. Where the un-notched
+  background is available (GeeTest ships one) the gap is found by diffing —
+  no threshold, no photo-dependent tuning; otherwise a border-pair heuristic
+  falls back.
+
+  Live: **3/14 (~20%) accepted** on GeeTest v3. Gap detection and dragging
+  succeed **6/6** — what varies is whether the site believes the trajectory, so
+  the drag is deliberately non-linear with overshoot, correction and jitter.
+
+- **A solve's clearance is now kept.** `_harvest_cookies` was called from exactly
+  one place — the render tier — so E1 and E2 discarded the credential the moment
+  the browser closed, and the next tier re-fought the same wall. Solving is the
+  most expensive thing either tier does (~70 s of local inference, or a paid API
+  call). `AgentResult.cookies` carries it out, harvested at the consumer hook,
+  which is the only point that knows a solve succeeded *and* still has a live
+  page.
+
+  Cross-run persistence needed no new mechanism and deliberately did not get one:
+  `persist_browser_profile_dir` was already the sanctioned path. Verified end to
+  end — run 1 starts with 0 cookies and solves; a second, fully separate browser
+  from the same profile dir starts with the clearance already present.
+
+- **A tracked live-target list** (`scripts/e2e/targets.yaml`, 39 targets) and a
+  one-command runner (`scripts/e2e/run_targets.py --category …`), organised by
+  what each target *exercises* rather than by vendor. Local-only by design —
+  `tests/canary_targets.yaml` remains the CI-safe list and still contains no real
+  vendor sites.
+
+- **`docs/TESTING.md`** — every variant, the measured results, and per-finding
+  reproduction commands.
+
+### Fixed (captcha, cont.)
+
+- **A solve was judged by the wrong signal.** `solve_on_page` returned `True`
+  unconditionally after injecting a token, and the re-check asked "is the widget
+  gone". A solved reCAPTCHA or hCaptcha *keeps* its widget — it turns green — so
+  a real success read as a failure, while a foreign Turnstile token failing its
+  environment check (the normal outcome, as that token is bound to the context
+  that requested it) read as a success and stopped the cascade on a challenge
+  still standing. Both now key off the response field, with widget-absence kept
+  only for interstitials, which have none.
+
+- **A served page was scored as a wall — the mirror of the headline bug, and
+  costlier.** Measured on yad2.co.il: a rendered 3.3 MB page with 27 prices and
+  730 listing elements carries `validate.perfdrive.com` at offset 11,766, because
+  that is Radware's own script on a page that was *served*. The tail signature
+  scan had no size guard, so **every successful scrape of a Radware / DataDome /
+  PerimeterX site was reported blocked** — the cascade escalated past a tier that
+  had already won, and `has_real_content` feeds proxy health, so each success told
+  the pool to `mark_blocked` a proxy that had just done its job.
+
+  Marker **position** is the discriminator, not body size. The head scan stays
+  unbounded — a first attempt at this capped it by size and thereby accepted
+  yad2's **118 KB** Radware wall as content, because Radware pads its wall with an
+  enormous obfuscated JS payload. Both fixtures are committed; either alone admits
+  a wrong rule.
+
+- **The slider declined puzzles that were about to exist.** The canvas *elements*
+  appear before they are painted, and reading them in that window is
+  indistinguishable from "there is no puzzle". This looked exactly like flakiness
+  and was what made the measured success rate swing between runs.
+
+### Known limits
+
+Unchanged and not fixable in code: a Cloudflare or DataDome **interstitial** is
+an IP-reputation problem. Headless and headful returned byte-for-byte identical
+responses on all four blocked sites, so the decision is made before any local
+lever applies. Arkose/FunCaptcha detection is fixture-verified only —
+`2captcha.com/demo/arkoselabs` serves no Arkose resources at all. No end-to-end
+*solve* has been performed; the new kinds are verified as detected and correctly
+routed, which is as far as it goes without a paid key.
+
+Per-kind, what a free tier can reach: reCAPTCHA v3 and AWS WAF have **no puzzle
+to look at** — they are a risk score and a proof-of-work, so no amount of vision
+helps. FunCaptcha/Arkose's rotating 3D objects are beyond a small local model.
+GeeTest and DataDome sliders are gap-alignment puzzles that classic
+template-matching CV solves accurately with no model at all; that is the best
+remaining free-tier win and it is **not built**.
+
 ## [2.1.0] - 2026-08-09
 
 ### Added

@@ -33,8 +33,9 @@ from scrapper_tool.agent.backends import (
     get_captcha_solver,
     get_fingerprint_generator,
     get_llm_backend,
-    is_vision_model,
+    get_vision_backend,
     make_on_step_end,
+    supports_vision,
 )
 from scrapper_tool.agent.backends.behavior import make_behavior_consumer
 from scrapper_tool.agent.backends.captcha_dom import make_captcha_consumer
@@ -126,6 +127,7 @@ async def run_browse(
             schema=schema,
             config=config,
             llm_chat=llm.to_browser_use_llm(),
+            llm_backend=llm,
             solver=solver,
             behavior=behavior,
             started=started,
@@ -143,6 +145,7 @@ async def _run_with_handle(
     schema: type[BaseModel] | dict[str, object] | None,
     config: AgentConfig,
     llm_chat: Any,
+    llm_backend: Any,
     solver: Any,
     behavior: Any,
     started: float,
@@ -177,7 +180,11 @@ async def _run_with_handle(
             "(no surrounding prose):\n" + _schema_for_prompt(schema)
         )
 
-    use_vision = is_vision_model(config.model)
+    # Ask the server what the model is rather than pattern-matching its name.
+    # The name heuristic reported False for every locally installed VLM, so vision
+    # was silently disabled on models that could see and E2 ran blind. Falls back
+    # to the heuristic when the server has no such endpoint.
+    use_vision = await supports_vision(config.model, config.ollama_url)
 
     # Inject the caller's session into the LIVE context, before browser-use
     # attaches and before the agent navigates.
@@ -214,8 +221,22 @@ async def _run_with_handle(
     # the live page is checked for a challenge (mechanism-aware solve) and
     # behavior shaping is applied. Consumer errors are swallowed inside the
     # hook so they never abort the loop.
+    # The same `use_vision` verdict gates the grid solver: handing it a text-only
+    # model would burn a round on a reply that cannot be about the image.
+    # A solve is the most expensive thing this tier does; collect the clearance
+    # it wins while the browser is still open. `handle.close()` in run_browse
+    # tears the context down, taking the credential with it.
+    won_cookies: list[dict[str, Any]] = []
+    # The captcha tier may want a DIFFERENT model from the one driving the
+    # agent: grids need spatial vision, the agent loop needs instruction
+    # following, and the best model for one is measurably bad at the other.
+    vision_backend = await get_vision_backend(config)
     on_step_end = make_on_step_end(
-        make_captcha_consumer(solver),
+        make_captcha_consumer(
+            solver,
+            vision=vision_backend,
+            on_solved=won_cookies.extend,
+        ),
         make_behavior_consumer(behavior, full=True),
     )
 
@@ -244,6 +265,7 @@ async def _run_with_handle(
         url=url,
         duration_s=duration,
         schema=schema,
+        cookies=won_cookies,
     )
 
 
@@ -301,6 +323,7 @@ def _history_to_agent_result(
     url: str,
     duration_s: float,
     schema: type[BaseModel] | dict[str, object] | None,
+    cookies: list[dict[str, Any]] | None = None,
 ) -> AgentResult:
     """Convert browser-use's AgentHistoryList → AgentResult.
 
@@ -353,6 +376,7 @@ def _history_to_agent_result(
         error=error,
         duration_s=duration_s,
         steps_used=len(actions),
+        cookies=list(cookies or []),
     )
 
 

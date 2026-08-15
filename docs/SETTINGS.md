@@ -91,6 +91,7 @@ Camoufox-native; the other backends ignore them.
 |-------|---------|---------|---------|
 | `llm` | `SCRAPPER_TOOL_AGENT_LLM` | `ollama` | `ollama` / `openai_compat` / `llama_cpp` / `vllm` |
 | `model` | `SCRAPPER_TOOL_AGENT_MODEL` | `qwen3-vl:8b` | any tag pulled by your LLM server |
+| `captcha_vision_model` | `SCRAPPER_TOOL_CAPTCHA_VISION_MODEL` | unset | model for the captcha image-grid tier when it should differ from `model`; unset reuses `model` |
 | `ollama_url` | `SCRAPPER_TOOL_AGENT_OLLAMA_URL` | `http://localhost:11434` | also serves as base URL for `openai_compat` / `llama_cpp` / `vllm` |
 
 #### Recommended models (local, May 2026)

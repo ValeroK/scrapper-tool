@@ -1,0 +1,323 @@
+# Live target list — the sites this toolkit is tested against.
+#
+# ---------------------------------------------------------------------------
+# THIS FILE IS NOT FOR CI. Read `tests/canary_targets.yaml` first.
+# ---------------------------------------------------------------------------
+#
+# `tests/canary_targets.yaml` deliberately contains **no real vendor sites**,
+# because it runs on every build and the library must not generate detectable
+# load on third parties. That rule stands and this file does not weaken it.
+#
+# This list is the opposite thing: real, hostile, commercially-protected sites,
+# run **manually from a developer machine** when validating a release or a
+# change to the anti-bot path. Never wire it into a workflow. Rate-limit
+# yourself — several of these targets degrade under repeated hits from one
+# address, which will make your own results look worse than the code is (a
+# GeeTest demo hit ~20 times in an afternoon measurably stopped accepting
+# solves that it had accepted earlier).
+#
+# Organised by what each target EXERCISES, not by vendor, because the question
+# being asked is "does the cookie path work" or "can we solve this kind", not
+# "is site X up".
+#
+# `last_result` / `last_checked` are measurements, not aspirations. Update them
+# when you re-run; a stale number is worse than none. Where a result is absent,
+# say so rather than guessing.
+
+meta:
+  updated: 2026-08-15
+  host: Windows 11, RTX 3090 24 GB, datacenter egress (Tel Aviv)
+  vision_model: qwen/qwen3.8-27b @ context 8192
+  note: |
+    Every number below was measured from ONE datacenter IP. That is the least
+    favourable case and it is the dominant variable in every failure recorded
+    here — headless and headful returned byte-identical responses on all the
+    blocked rows, so the decision is made before any local lever applies.
+    Re-running from a residential egress is expected to move several rows.
+
+# ---------------------------------------------------------------------------
+# 1. CAPTCHA DETECTION — can we identify the challenge and pull its parameters?
+# ---------------------------------------------------------------------------
+# The floor for everything else: an undetected kind can never be routed to a
+# solver, which is exactly the bug this list was built after (7 of 10 declared
+# CaptchaKinds were unreachable by any automatic path).
+
+captcha_detect:
+  - id: turnstile-2captcha
+    url: https://2captcha.com/demo/cloudflare-turnstile
+    expect_kind: turnstile
+    exercises: Turnstile widget + sitekey extraction
+    last_result: "detected, key 3x00000000000000000000FF"
+    last_checked: 2026-08-15
+    note: |
+      Sitekey `3x…FF` is Cloudflare's "always force an interactive challenge"
+      test key. A pass here proves the widget can be driven; it does NOT prove
+      anything about real Cloudflare bot detection. Record the sitekey with any
+      future result or the result is uninterpretable.
+
+  - id: recaptcha-v2-google
+    url: https://www.google.com/recaptcha/api2/demo
+    expect_kind: recaptcha-v2
+    exercises: explicit .g-recaptcha widget + sitekey
+    last_result: "detected, key 6Le-wvkS…"
+    last_checked: 2026-08-15
+
+  - id: recaptcha-v3-2captcha
+    url: https://2captcha.com/demo/recaptcha-v3
+    expect_kind: recaptcha-v3
+    exercises: v3 detection ordering
+    last_result: "detected, key 6Lcyqq8o…"
+    last_checked: 2026-08-15
+    note: |
+      The regression guard for the subtlest detection bug found so far: v3's
+      invisible badge ALSO renders an `api2/anchor` iframe, so testing that
+      iframe before the `render=` script parameter reports this page as
+      recaptcha-v2 with an EMPTY sitekey — a kind that then routes to the wrong
+      solver task with nothing to solve it with.
+
+  - id: hcaptcha-demo
+    url: https://accounts.hcaptcha.com/demo
+    expect_kind: hcaptcha
+    exercises: hCaptcha widget + sitekey
+    last_result: "detected, key a5f74b19-9e45…"
+    last_checked: 2026-08-15
+
+  - id: geetest-v4-2captcha
+    url: https://2captcha.com/demo/geetest-v4
+    expect_kind: geetest
+    exercises: GeeTest v4 captcha_id extraction
+    last_result: "detected, key e392e1d7fd421dc63325744d5a2b9c73"
+    last_checked: 2026-08-15
+    note: |
+      The id is in NO documented global. The only place it appears is the
+      loader script's query string (`gcaptcha4.geetest.com/load?…&captcha_id=`).
+
+  - id: cf-interstitial-nopecha
+    url: https://nopecha.com/demo/cloudflare
+    expect_kind: null
+    exercises: a JS interstitial is NOT a captcha
+    last_result: "None — correct"
+    last_checked: 2026-08-15
+    note: |
+      Expecting `None` is the point. There is no widget, so detection must
+      decline and the interstitial path (settle + reload) handles it instead.
+      A "fix" that makes this return a kind is a regression.
+
+  - id: arkose-2captcha
+    url: https://2captcha.com/demo/arkoselabs
+    expect_kind: funcaptcha
+    exercises: Arkose/FunCaptcha public-key extraction
+    last_result: "UNVERIFIED — page serves no Arkose resources at all"
+    last_checked: 2026-08-15
+    note: |
+      Verified directly, including after clicking through the form: this demo
+      loads only a chat widget, no Arkose script or iframe. Detection for this
+      kind is fixture-verified only. Use one of the real deployments below
+      instead — do not record a pass from this URL.
+
+  # --- Real Arkose deployments (2026 survey) ------------------------------
+  #
+  # Arkose is an enterprise product, so unlike Turnstile or hCaptcha there is no
+  # vendor sandbox that actually serves it. Every real deployment sits behind a
+  # SIGNUP or LOGIN flow on a consumer platform, which is why this kind stayed
+  # unverified: reaching the widget means driving an account-creation form.
+  #
+  # READ BEFORE USING ANY OF THESE. Only ever drive them far enough for the
+  # widget to render, and stop there. Do not create accounts, do not submit
+  # credentials, do not complete a signup. Detection is the thing under test and
+  # it happens the moment the Arkose script loads — everything past that point is
+  # someone else's account system, and this project has no business in it.
+  # Prefer a throwaway context and hit these rarely.
+  #
+  # Sources: capmonster.cloud, blog.captchaai.com, 2captcha.com/p/funcaptcha
+  # (2026 vendor surveys). Deployments change without notice — if the widget does
+  # not appear, record that rather than assuming the detector broke.
+  #
+  # MEASURED 2026-08-15: all three load WITHOUT any Arkose script or iframe.
+  # The widget is gated behind the first form step on every one of them, so a
+  # load-only probe cannot reach it — and driving a stranger's account-signup
+  # form to satisfy a detection test is not a trade this project should make.
+  #
+  # So `funcaptcha`/`arkose` detection remains **fixture-verified only**, and
+  # that is now a measured statement rather than an untested assumption. The
+  # honest options are a site where Arkose gates a non-signup flow, or a vendor
+  # sandbox if Arkose ever ships one. Until then, do not record a pass here.
+
+  - id: arkose-roblox-signup
+    url: https://www.roblox.com/CreateAccount
+    expect_kind: funcaptcha
+    exercises: Arkose public-key extraction from a live deployment
+    last_result: "no Arkose resources on page load — widget is gated behind the first form step"
+    last_checked: 2026-08-15
+    note: |
+      Most consistently reported Arkose deployment. Widget renders on the signup
+      form. Load the page and read the DOM; do not fill or submit it.
+
+  - id: arkose-outlook-signup
+    url: https://signup.live.com/signup
+    expect_kind: funcaptcha
+    exercises: Arkose on Microsoft account creation
+    last_result: "no Arkose resources on page load — widget is gated behind the first form step"
+    last_checked: 2026-08-15
+    note: |
+      Microsoft (Outlook/Xbox) uses Arkose on account creation. The widget
+      usually appears only after the first form step, so detection may need one
+      interaction — which is the boundary this target should not cross.
+
+  - id: arkose-ea-signup
+    url: https://signin.ea.com/p/juno/create
+    expect_kind: funcaptcha
+    exercises: Arkose on EA account creation
+    last_result: "no Arkose resources on page load — widget is gated behind the first form step"
+    last_checked: 2026-08-15
+    note: EA is Arkose's longest-running public deployment.
+
+# ---------------------------------------------------------------------------
+# 2. CAPTCHA SOLVING — end to end, arbitrated by the site itself
+# ---------------------------------------------------------------------------
+# Success is the site's own verdict (a response token, or its success element
+# turning visible), never "the widget disappeared" and never our own opinion.
+
+captcha_solve:
+  - id: recaptcha-grid
+    url: https://www.google.com/recaptcha/api2/demo
+    kind: recaptcha-v2
+    method: checkbox, then local-VLM image grid
+    arbiter: g-recaptcha-response token (~2200-2400 chars)
+    last_result: "3/4 and 4/5 (qwen3.8-27b); 5/5 (qwen3.6-27b); 1/5 (qwen3-vl-8b); 0/5 (gemma-4-e4b)"
+    last_checked: 2026-08-15
+    note: |
+      The model is the whole variable — the pipeline is identical across those
+      rows. ~6 GB models fail even when purpose-built for spatial reasoning.
+      Load the 27B with an explicit `--context-length 8192`: its 262k default
+      KV cache, not its weights, is what overflows 24 GB.
+
+  - id: geetest-slider
+    url: https://2captcha.com/demo/geetest
+    kind: geetest
+    method: CV gap detection + humanlike drag (no model)
+    arbiter: .geetest_success_radar_tip_content visible and non-empty
+    last_result: "3/14 accepted (~20%); gap detection and drag succeed 6/6"
+    last_checked: 2026-08-15
+    note: |
+      Two separate things, do not conflate them. Finding the gap is solved —
+      the fullbg diff is exact (measured x=178, error 0). Whether GeeTest
+      BELIEVES the drag is the open question, and looks like trajectory scoring
+      plus IP reputation.
+
+      Check the success element is VISIBLE and non-empty. It exists hidden on
+      every page, and testing for existence alone once produced a bogus "3/3".
+
+  - id: hcaptcha-grid
+    url: https://accounts.hcaptcha.com/demo
+    kind: hcaptcha
+    method: checkbox, then local-VLM image grid
+    arbiter: h-captcha-response token
+    last_result: "UNMEASURED — shares the reCAPTCHA grid path, never run to a solve"
+    last_checked: null
+
+  - id: image-ocr
+    url: null
+    kind: image
+    method: none — routed to the paid tier only
+    last_result: "NO TARGET. Detection and in-page base64 capture are in place."
+    last_checked: null
+    note: |
+      The local VLM handles grids, not OCR, so an image captcha skips the free
+      vision tier even though reading characters is what it would be best at.
+      Needs a real target before building it — an unmeasured solver that
+      silently returns wrong text is worse than one that declines.
+
+# ---------------------------------------------------------------------------
+# 3. COOKIE TRANSFER — the highest-leverage path, because a solve is expensive
+# ---------------------------------------------------------------------------
+# A ~70 s solve (or a paid API call) buys a credential. Losing it means paying
+# again on the next tier and the next run. These prove it survives.
+
+cookies:
+  - id: solve-then-harvest
+    url: https://www.google.com/recaptcha/api2/demo
+    exercises: the consumer hook returns the jar after a successful solve
+    arbiter: AgentResult.cookies non-empty
+    last_result: "PASS — 1 cookie harvested, token 2212 chars"
+    last_checked: 2026-08-15
+    note: |
+      The hook is the only point that knows a solve succeeded AND still has a
+      live page. By the time either agent tier returns, Crawl4AI or
+      handle.close() has torn the context down and taken the credential with it.
+
+  - id: clearance-survives-relaunch
+    url: https://www.google.com/recaptcha/api2/demo
+    exercises: cross-RUN persistence via persist_browser_profile_dir
+    arbiter: a second, fully separate browser starts with the cookie present
+    last_result: "PASS — run 1 starts with 0 cookies, run 2 starts with _GRECAPTCHA; cookies.sqlite on disk"
+    last_checked: 2026-08-15
+    note: |
+      Needed no new mechanism and deliberately did not get one.
+      `_harvest_cookies` stays request-scoped; its five reasons for never
+      touching the recipe store all still hold (world-readable temp path,
+      domain-keyed vs identity-keyed, 14-day TTL vs ~30-minute clearance,
+      silent-read-failure contract, impersonation risk).
+
+  - id: whole-jar-not-just-clearance
+    url: null
+    exercises: siblings travel with the clearance
+    last_result: "PASS (unit) — read_context_cookies returns the full jar"
+    last_checked: 2026-08-15
+    note: |
+      Cloudflare pairs `cf_clearance` with `__cf_bm`; DataDome sets a session
+      marker beside its own cookie. A clearance replayed without its siblings
+      is frequently rejected, so the whole jar travels.
+
+  - id: caller-cookies-reach-every-tier
+    url: https://app.example.com/account
+    exercises: caller-supplied cookies reach D, render, E1 and E2
+    last_result: "PASS — see scripts/e2e/test_cookies_live.py --domain <yours>"
+    last_checked: 2026-08-07
+    note: Needs your own logged-in domain; there is no public equivalent.
+
+# ---------------------------------------------------------------------------
+# 4. CASCADE — which tier wins, on real hostile sites
+# ---------------------------------------------------------------------------
+# Verdict is the shipped classifier's, so this measures what a caller is
+# actually handed. `real` is content-first: a 403 carrying a genuine DOM is a
+# success, a bot-walled 200 is not.
+
+cascade:
+  # --- controls: must always pass, and cheaply ---
+  - {id: example,        url: "https://example.com/",                                   expect: ladder, last_result: "200, 559 B",     last_checked: 2026-08-15}
+  - {id: books-toscrape, url: "https://books.toscrape.com/",                            expect: ladder, last_result: "200, 51 KB",     last_checked: 2026-08-15}
+  - {id: quotes-toscrape, url: "https://quotes.toscrape.com/",                          expect: ladder, last_result: "200, 11 KB",     last_checked: 2026-08-15}
+  - {id: webscraper-io,  url: "https://webscraper.io/test-sites/e-commerce/allinone",   expect: ladder, last_result: "200, 24 KB",     last_checked: 2026-08-15}
+  - {id: nowsecure,      url: "https://nowsecure.nl/",                                  expect: ladder, last_result: "200, 180 KB",    last_checked: 2026-08-15}
+  - {id: one-co-il,      url: "https://www.one.co.il/",                                 expect: ladder, last_result: "200, 420 KB",    last_checked: 2026-08-15}
+
+  # --- the TLS ladder earning its place: these 403 a plain curl ---
+  - {id: homedepot,      url: "https://www.homedepot.com/",                             expect: ladder, last_result: "200, 1.48 MB (chrome146)", last_checked: 2026-08-15}
+  - {id: vinted,         url: "https://www.vinted.com/",                                expect: ladder, last_result: "200, 1.92 MB (chrome146)", last_checked: 2026-08-15}
+  - {id: hermes,         url: "https://www.hermes.com/us/en/",                          expect: ladder, last_result: "200, 545 KB (chrome146)",  last_checked: 2026-08-15}
+
+  # --- render tier: the ladder 403s and a browser clears it ---
+  - {id: seloger,        url: "https://www.seloger.com/",                               expect: render, last_result: "render 200, 595 KB", last_checked: 2026-08-15,
+     note: "Drifted: was a ladder win in 2026-08, now 403s all five profiles."}
+  - {id: g2,             url: "https://www.g2.com/",                                    expect: render, last_result: "render 403, 486 KB, real", last_checked: 2026-08-15,
+     note: "Status is not the success signal — 403 with a full DOM is a served page."}
+  - {id: store-mopar,    url: "https://store.mopar.com/",                               expect: render, last_result: "render 403, 111 KB, real", last_checked: 2026-08-15}
+  - {id: bunnings,       url: "https://www.bunnings.com.au/",                           expect: render, last_result: "render 403, 664 KB, real", last_checked: 2026-08-15,
+     note: "Reports BLOCKED under back-to-back browser launches — a render ERROR, not a wall. Retry alone before recording a failure."}
+  - {id: dicks,          url: "https://www.dickssportinggoods.com/",                    expect: render, last_result: "render 200, 378 KB", last_checked: 2026-08-15,
+     note: "The bug this whole effort opened on: serves a 2.4 KB Akamai wall as HTTP 200 that was scored as real content."}
+  - {id: leboncoin,      url: "https://www.leboncoin.fr/",                              expect: render, last_result: "render 200, 862 KB", last_checked: 2026-08-15,
+     note: "Improved: blocked by DataDome in 2026-08, clears now."}
+  - {id: shutterstock,   url: "https://www.shutterstock.com/",                          expect: render, last_result: "render 403, 1.02 MB, real", last_checked: 2026-08-15,
+     note: "Improved: blocked by DataDome in 2026-08, clears now."}
+
+  - {id: yad2-realestate, url: "https://www.yad2.co.il/realestate/forsale/center-and-sharon?property=5%2C39%2C32%2C55&area=4&bBox=32.080588%2C34.889264%2C32.091236%2C34.904408&zoom=15",
+     expect: render, last_result: "render 200, 3.3 MB, 730 listing elements, 61 cookies", last_checked: 2026-08-15,
+     note: "Radware. Exercises BOTH classifier directions: the ladder returns a 118 KB Radware wall that must be caught, and the render returns 3.3 MB carrying the same vendor marker that must NOT be. Fixtures for both are in tests/fixtures/challenge/."}
+
+  # --- still walled: IP reputation, not code ---
+  - {id: gamestop,       url: "https://www.gamestop.com/",                              expect: blocked, last_result: "render 403, 5.3 KB, cloudflare", last_checked: 2026-08-15}
+  - {id: kmart-au,       url: "https://www.kmart.com.au/",                              expect: blocked, last_result: "render 403, 292 B, akamai",     last_checked: 2026-08-15}
+  - {id: ticketek-au,    url: "https://premier.ticketek.com.au/",                       expect: blocked, last_result: "render 403, 6.1 KB, unknown",   last_checked: 2026-08-15}
+  - {id: scrapingcourse-cf, url: "https://www.scrapingcourse.com/cloudflare-challenge", expect: blocked, last_result: "render 403, 4.3 KB, cloudflare", last_checked: 2026-08-15}
