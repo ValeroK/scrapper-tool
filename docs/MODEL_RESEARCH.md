@@ -11,6 +11,37 @@ research. Treat the recommendations as time-bounded — open-weight VLMs
 move fast and the right answer in May 2026 will not be the right answer
 in November 2026.
 
+## Measured: captcha image-grid solving (2026-08-15)
+
+Unlike the rest of this doc these are **not** benchmark scores — they are live
+solve rates against `google.com/recaptcha/api2/demo`, arbitrated by reCAPTCHA's
+own verify button. Five attempts per model on one RTX 3090 (24 GB).
+
+| Model | On disk | Solved | Avg |
+|---|---|---|---|
+| `google/gemma-4-e4b` | 6.33 GB | 0 / 5 | 62 s |
+| `qwen/qwen3-vl-8b` | 6.19 GB | 1 / 5 | 48 s |
+| **`qwen/qwen3.6-27b`** | 17.48 GB | **5 / 5** | 72 s |
+
+**Recommendation for the vision captcha tier: `qwen/qwen3.6-27b`.** Both ~6 GB
+models fail, including Qwen3-VL-8B, which is purpose-built for spatial reasoning
+— so this is not about finding a better *small* model. The capability the task
+needs appears around 27B.
+
+Two operational notes that cost real time to discover:
+
+- **Load it with an explicit context length.** Its default is 262,144 tokens, and
+  that KV cache — not the 16.28 GiB of weights — is what overflows 24 GB of VRAM.
+  `lms load qwen/qwen3.6-27b --context-length 8192 --gpu max` loads in ~11 s. The
+  model was written off as "insufficient system resources" purely because of this.
+- **Give reasoning models a real token budget.** At 512 tokens `gemma-4-e4b`
+  spent the whole allowance on `reasoning_content` and returned empty content
+  with `finish_reason: length`. The grid solver uses 2048 for that reason;
+  starvation is easy to mistake for a solver failure.
+
+Slider captchas (GeeTest, DataDome) need **no model at all** — they are gap
+alignment, solved geometrically in `agent.backends.captcha_slider`.
+
 ## Use-case requirements
 
 Pattern E uses the LLM in two ways:
