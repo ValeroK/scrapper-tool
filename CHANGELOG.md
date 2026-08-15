@@ -2,7 +2,7 @@
 
 All notable changes to `scrapper-tool` are recorded here. Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning follows [SemVer](https://semver.org/).
 
-## [Unreleased]
+## [2.2.0] - 2026-08-15
 
 Findings from the first live validation of 2.1.0 against real sites. PRs #25 and
 #28 were built in a container with no general egress, so none of that code had
@@ -116,6 +116,39 @@ silent data corruption. Full measurements in
   stronger model unchanged. **It is not a replacement for a paid solver on
   reCAPTCHA today.**
 
+- **A slider solver for GeeTest and DataDome** (`agent.backends.captcha_slider`)
+  that needs **no model at all**. A slider captcha is gap alignment, which has an
+  exact answer, so it is geometry rather than perception. Where the un-notched
+  background is available (GeeTest ships one) the gap is found by diffing —
+  no threshold, no photo-dependent tuning; otherwise a border-pair heuristic
+  falls back.
+
+  Live: **3/14 (~20%) accepted** on GeeTest v3. Gap detection and dragging
+  succeed **6/6** — what varies is whether the site believes the trajectory, so
+  the drag is deliberately non-linear with overshoot, correction and jitter.
+
+- **A solve's clearance is now kept.** `_harvest_cookies` was called from exactly
+  one place — the render tier — so E1 and E2 discarded the credential the moment
+  the browser closed, and the next tier re-fought the same wall. Solving is the
+  most expensive thing either tier does (~70 s of local inference, or a paid API
+  call). `AgentResult.cookies` carries it out, harvested at the consumer hook,
+  which is the only point that knows a solve succeeded *and* still has a live
+  page.
+
+  Cross-run persistence needed no new mechanism and deliberately did not get one:
+  `persist_browser_profile_dir` was already the sanctioned path. Verified end to
+  end — run 1 starts with 0 cookies and solves; a second, fully separate browser
+  from the same profile dir starts with the clearance already present.
+
+- **A tracked live-target list** (`scripts/e2e/targets.yaml`, 39 targets) and a
+  one-command runner (`scripts/e2e/run_targets.py --category …`), organised by
+  what each target *exercises* rather than by vendor. Local-only by design —
+  `tests/canary_targets.yaml` remains the CI-safe list and still contains no real
+  vendor sites.
+
+- **`docs/TESTING.md`** — every variant, the measured results, and per-finding
+  reproduction commands.
+
 ### Fixed (captcha, cont.)
 
 - **A solve was judged by the wrong signal.** `solve_on_page` returned `True`
@@ -126,6 +159,26 @@ silent data corruption. Full measurements in
   that requested it) read as a success and stopped the cascade on a challenge
   still standing. Both now key off the response field, with widget-absence kept
   only for interstitials, which have none.
+
+- **A served page was scored as a wall — the mirror of the headline bug, and
+  costlier.** Measured on yad2.co.il: a rendered 3.3 MB page with 27 prices and
+  730 listing elements carries `validate.perfdrive.com` at offset 11,766, because
+  that is Radware's own script on a page that was *served*. The tail signature
+  scan had no size guard, so **every successful scrape of a Radware / DataDome /
+  PerimeterX site was reported blocked** — the cascade escalated past a tier that
+  had already won, and `has_real_content` feeds proxy health, so each success told
+  the pool to `mark_blocked` a proxy that had just done its job.
+
+  Marker **position** is the discriminator, not body size. The head scan stays
+  unbounded — a first attempt at this capped it by size and thereby accepted
+  yad2's **118 KB** Radware wall as content, because Radware pads its wall with an
+  enormous obfuscated JS payload. Both fixtures are committed; either alone admits
+  a wrong rule.
+
+- **The slider declined puzzles that were about to exist.** The canvas *elements*
+  appear before they are painted, and reading them in that window is
+  indistinguishable from "there is no puzzle". This looked exactly like flakiness
+  and was what made the measured success rate swing between runs.
 
 ### Known limits
 

@@ -432,6 +432,23 @@ async def supports_vision(model: str, base_url: str | None = None) -> bool:
     return is_vision_model(model)
 
 
+async def get_vision_backend(config: AgentConfig) -> LLMBackend | None:
+    """The backend for the captcha image-grid tier, or ``None`` if it cannot see.
+
+    Honours ``captcha_vision_model`` when set, because extraction and captcha
+    solving want opposite things from a model — see the field's docstring. Falls
+    back to the main ``model``, and returns ``None`` when whichever model applies
+    has no vision, so the grid tier is skipped rather than handed an image it
+    cannot read.
+    """
+    wanted = config.captcha_vision_model or config.model
+    if not await supports_vision(wanted, config.ollama_url):
+        return None
+    if wanted == config.model:
+        return get_llm_backend(config)
+    return get_llm_backend(config.model_copy(update={"model": wanted}))
+
+
 __all__ = [
     "LLMBackend",
     "LlamaCppBackend",
@@ -439,6 +456,7 @@ __all__ = [
     "OpenAICompatBackend",
     "VLLMBackend",
     "get_llm_backend",
+    "get_vision_backend",
     "is_vision_model",
     "supports_vision",
 ]

@@ -32,8 +32,8 @@ from scrapper_tool.agent.backends import (
     get_captcha_solver,
     get_fingerprint_generator,
     get_llm_backend,
+    get_vision_backend,
     make_after_goto,
-    supports_vision,
 )
 from scrapper_tool.agent.backends.behavior import make_behavior_consumer
 from scrapper_tool.agent.backends.captcha_dom import make_captcha_consumer
@@ -148,11 +148,12 @@ async def run_extract(
     won_cookies: list[dict[str, Any]] = []
 
     try:
-        can_see = await supports_vision(config.model, config.ollama_url)
+        # See browse.py: the captcha grid tier resolves its own model.
+        vision_backend = await get_vision_backend(config)
         after_goto = make_after_goto(
             make_captcha_consumer(
                 solver,
-                vision=llm if can_see else None,
+                vision=vision_backend,
                 on_solved=won_cookies.extend,
             ),
             make_behavior_consumer(behavior, full=False),

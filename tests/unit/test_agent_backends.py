@@ -1287,3 +1287,81 @@ class TestCompleteVision:
         backend = OpenAICompatBackend(model="m", base_url="http://down.test")
         with pytest.raises(AgentLLMError, match="Vision call failed"):
             await backend.complete_vision("q", ["A"])
+
+
+class TestVisionBackendResolution:
+    """Extraction and captcha-solving want opposite things from a model.
+
+    A downstream integration benchmarked `google/gemma-4-e4b` as the BEST model
+    for E1 extraction — 1.1 s, 3-of-3 fields, beating every larger candidate,
+    because extraction is instruction-following. That same model scores **0/5**
+    on live reCAPTCHA grids, which are spatial vision. Pinning one model for both
+    silently breaks whichever job it was not chosen for, so the captcha tier can
+    resolve its own.
+    """
+
+    @staticmethod
+    def _serve(monkeypatch: pytest.MonkeyPatch, vlm_models: set[str]) -> None:
+        class _Resp:
+            status_code = 200
+
+            @staticmethod
+            def json() -> Any:
+                return {
+                    "data": [
+                        {"id": m, "type": "vlm" if m in vlm_models else "llm"}
+                        for m in ("google/gemma-4-e4b", "qwen/qwen3.8-27b")
+                    ]
+                }
+
+        class _Client:
+            def __init__(self, **_: Any) -> None: ...
+
+            async def __aenter__(self) -> _Client:
+                return self
+
+            async def __aexit__(self, *_: object) -> None: ...
+
+            async def get(self, url: str) -> _Resp:
+                return _Resp()
+
+        monkeypatch.setattr(llm_mod.httpx, "AsyncClient", _Client)
+
+    @pytest.mark.asyncio
+    async def test_captcha_model_overrides_the_extraction_model(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The integration case: a small model for extraction, a 27B for grids."""
+        self._serve(monkeypatch, {"qwen/qwen3.8-27b"})
+        cfg = AgentConfig(
+            llm="openai_compat",
+            model="google/gemma-4-e4b",
+            captcha_vision_model="qwen/qwen3.8-27b",
+            ollama_url="http://lm.test",
+        )
+        backend = await llm_mod.get_vision_backend(cfg)
+        assert backend is not None
+        assert backend.model == "qwen/qwen3.8-27b"
+
+    @pytest.mark.asyncio
+    async def test_falls_back_to_the_main_model_when_unset(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        self._serve(monkeypatch, {"google/gemma-4-e4b"})
+        cfg = AgentConfig(
+            llm="openai_compat", model="google/gemma-4-e4b", ollama_url="http://lm.test"
+        )
+        backend = await llm_mod.get_vision_backend(cfg)
+        assert backend is not None
+        assert backend.model == "google/gemma-4-e4b"
+
+    @pytest.mark.asyncio
+    async def test_none_when_the_resolved_model_cannot_see(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Skip the grid tier rather than hand a text-only model an image."""
+        self._serve(monkeypatch, set())
+        cfg = AgentConfig(
+            llm="openai_compat", model="google/gemma-4-e4b", ollama_url="http://lm.test"
+        )
+        assert await llm_mod.get_vision_backend(cfg) is None

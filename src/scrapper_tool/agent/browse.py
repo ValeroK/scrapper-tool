@@ -33,6 +33,7 @@ from scrapper_tool.agent.backends import (
     get_captcha_solver,
     get_fingerprint_generator,
     get_llm_backend,
+    get_vision_backend,
     make_on_step_end,
     supports_vision,
 )
@@ -226,10 +227,14 @@ async def _run_with_handle(
     # it wins while the browser is still open. `handle.close()` in run_browse
     # tears the context down, taking the credential with it.
     won_cookies: list[dict[str, Any]] = []
+    # The captcha tier may want a DIFFERENT model from the one driving the
+    # agent: grids need spatial vision, the agent loop needs instruction
+    # following, and the best model for one is measurably bad at the other.
+    vision_backend = await get_vision_backend(config)
     on_step_end = make_on_step_end(
         make_captcha_consumer(
             solver,
-            vision=llm_backend if use_vision else None,
+            vision=vision_backend,
             on_solved=won_cookies.extend,
         ),
         make_behavior_consumer(behavior, full=True),

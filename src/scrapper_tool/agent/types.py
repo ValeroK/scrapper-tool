@@ -160,6 +160,28 @@ class AgentConfig(BaseModel):
     model: str = "qwen3-vl:8b"
     ollama_url: str = "http://localhost:11434"
     llm_api_key: SecretStr | None = None
+    captcha_vision_model: str | None = None
+    """Model for the captcha image-grid tier, when it should differ from ``model``.
+
+    Extraction and captcha-solving are different jobs with opposite requirements,
+    and the best model for one is measurably bad at the other:
+
+    * **E1 extraction** is page-text -> strict JSON. It wants instruction
+      following, and a small model wins — a downstream integration benchmarked
+      ``google/gemma-4-e4b`` at 1.1 s and 3-of-3 fields, beating every larger
+      candidate; a reasoning-distilled model burned 8x the latency to be *less*
+      accurate.
+    * **Captcha grids** are spatial vision. That same ``gemma-4-e4b`` scores
+      **0/5** on live reCAPTCHA, and ``qwen3-vl-8b`` 1/5, while a ~27B scores
+      4-5/5 on the identical pipeline.
+
+    Pinning one model for both therefore breaks whichever job it was not chosen
+    for, silently. Leave ``None`` to reuse ``model`` (correct when the same model
+    is genuinely good at both, or when captcha solving is not wanted); set it to
+    a ~27B VLM to make the grid tier work without disturbing extraction.
+
+    Remember the context length — a 27B's 262k default KV cache, not its weights,
+    is what overflows a 24 GB card."""
 
     # --- Run budget
     max_steps: int = 50
@@ -211,6 +233,7 @@ class AgentConfig(BaseModel):
                 "camoufox_locale": env.get("SCRAPPER_TOOL_AGENT_CAMOUFOX_LOCALE") or None,
                 "llm": env.get("SCRAPPER_TOOL_AGENT_LLM", "ollama"),
                 "model": env.get("SCRAPPER_TOOL_AGENT_MODEL", "qwen3-vl:8b"),
+                "captcha_vision_model": env.get("SCRAPPER_TOOL_CAPTCHA_VISION_MODEL") or None,
                 "ollama_url": env.get("SCRAPPER_TOOL_AGENT_OLLAMA_URL", "http://localhost:11434"),
                 "llm_api_key": SecretStr(llm_api_key) if llm_api_key else None,
                 "max_steps": int(env.get("SCRAPPER_TOOL_AGENT_MAX_STEPS", "50")),

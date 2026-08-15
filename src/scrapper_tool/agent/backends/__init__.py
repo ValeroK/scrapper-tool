@@ -57,6 +57,7 @@ from scrapper_tool.agent.backends.llm import (
     OpenAICompatBackend,
     VLLMBackend,
     get_llm_backend,
+    get_vision_backend,
     is_vision_model,
     supports_vision,
 )
@@ -102,6 +103,7 @@ __all__ = [
     "get_e2_page",
     "get_fingerprint_generator",
     "get_llm_backend",
+    "get_vision_backend",
     "is_vision_model",
     "make_after_goto",
     "make_on_step_end",

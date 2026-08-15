@@ -25,7 +25,9 @@ Built from the scraping core behind [PartsPilot](https://github.com/ValeroK/affi
 
 ---
 
-> **Status (2026-05-02):** stable (`v1.0.0`). The public Python API and MCP tool surface are SemVer-stable. `v0.1.0` covered the core pattern ladder, anti-bot helpers, and deterministic fixture-replay testing. `v0.2.0` added an MCP server for LLM agents. **`v1.0.0`** adds **Pattern E** — local-LLM-driven scraping for any protected site, via Camoufox + browser-use + Crawl4AI + Ollama (zero API cost), and graduates the project out of alpha. See [`docs/patterns/e-llm-agent.md`](docs/patterns/e-llm-agent.md).
+> **Status (2026-08-15):** stable (`v2.2.0`). The public Python API and MCP tool surface are SemVer-stable.
+>
+> **`v2.2.0`** is the first release validated against real, hostile sites rather than fixtures — 2.1.0 was built in a container with no egress, so none of its anti-bot code had ever met a live host. That run found and fixed bugs in both directions of the wall/content classifier, and added a five-tier captcha cascade (three of them free) plus clearance-cookie reuse. Every number in the docs is measured, including the ones that did not work. See [`docs/TESTING.md`](docs/TESTING.md) and the [changelog](CHANGELOG.md).
 
 ## Table of contents
 
@@ -53,11 +55,13 @@ Most scrapers are written from scratch every time, even though 90% of the work i
 `scrapper-tool` packages the parts that don't change per vendor, so you only write the parts that do.
 
 - **Pattern-first design.** Five named, documented extraction patterns (A–E) — pick the one DevTools points at, skip the rest.
-- **Anti-bot ladder built in.** Auto-walks `chrome146 → chrome142 → safari260 → firefox147` when a profile gets fingerprinted.
+- **Anti-bot ladder built in.** Auto-walks `chrome146 → chrome142 → safari260 → firefox147 → chrome133a` when a profile gets fingerprinted.
 - **Deterministic tests.** Fixture-replay (`FakeCurlSession`, `replay_fixture`, golden snapshots) — no live HTTP in CI.
 - **Optional hostile mode.** Cloudflare Turnstile / Akamai EVA defeat path via [Scrapling](https://github.com/D4Vinci/Scrapling) — opt-in extra, no Playwright bloat by default.
 - **LLM-agent ready.** `v0.2.0+` ships an MCP server so Claude, AutoGen, LangChain, etc. can drive the scraper directly.
-- **Local-LLM scraping for any protected site (`v1.0.0+`).** Pattern E adds Camoufox + browser-use + Crawl4AI + Ollama — zero API cost, two modes (`agent_extract` for fast 1-call extraction, `agent_browse` for interactive multi-step tasks). Auto-cascade captcha solver (Camoufox auto-pass → Theyka → optional paid). Humanlike-behavior layer defeats DataDome.
+- **Local-LLM scraping for any protected site (`v1.0.0+`).** Pattern E adds Camoufox + browser-use + Crawl4AI + Ollama — zero API cost, two modes (`agent_extract` for fast 1-call extraction, `agent_browse` for interactive multi-step tasks). Humanlike-behavior layer defeats DataDome.
+- **Captchas solved on the way past (`v2.2.0+`).** Five tiers, cheapest first: settle → click the checkbox → align the slider (pure geometry, **no model**) → read the image grid with a local VLM → paid solver. Measured live: reCAPTCHA v2 grids **3/4–4/5** with a ~27B VLM, GeeTest sliders **~20%** with no model at all. reCAPTCHA v3 and AWS WAF are *not* solvable — they are risk scores, not puzzles, and the docs say so.
+- **Clearance cookies are kept, not thrown away (`v2.2.0+`).** A solve costs ~70 s of local inference or a paid API call; the `cf_clearance` it buys now survives to the next tier, and to the next run via a persisted browser profile.
 - **Boring stack.** `httpx`, `curl_cffi`, `selectolax`, `extruct`. No managed SaaS bundled — your code, your egress.
 
 ## The five scraping patterns
@@ -72,7 +76,7 @@ Web scraping in 2026 is dominated by five recurring patterns. This lib gives eac
 | **D — Hostile** | Cloudflare Turnstile, Akamai EVA, etc. defeat both default `httpx` and `curl_cffi`. | `patterns.d.hostile_client()` (via [Scrapling](https://github.com/D4Vinci/Scrapling)) — `pip install scrapper-tool[hostile]` | High — Playwright runtime, ≈400 MB image bloat. |
 | **E — LLM agent** *(v1.0.0+)* | Pattern D still gets blocked, OR the page needs interaction (login, multi-step nav, dynamic forms), OR there's no stable selector. | `agent_extract()` (Crawl4AI + Ollama) and `agent_browse()` (browser-use + Camoufox + Ollama) — `pip install scrapper-tool[llm-agent]` | Highest — local-LLM latency. Free at run-time (no API). See [Pattern E docs](docs/patterns/e-llm-agent.md). |
 
-Plus a five-profile **anti-bot ladder** (`chrome146 → chrome142 → safari260 → firefox147`) that auto-walks when a profile gets fingerprinted, and a `scrapper-tool canary` CLI for nightly fingerprint-health probes.
+Plus a five-profile **anti-bot ladder** (`chrome146 → chrome142 → safari260 → firefox147 → chrome133a`) that auto-walks when a profile gets fingerprinted, and a `scrapper-tool canary` CLI for nightly fingerprint-health probes.
 
 ### Checking your install
 
