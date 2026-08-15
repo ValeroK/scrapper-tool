@@ -569,6 +569,10 @@ async def _handle_widgetless_interstitial(page: Any, url: str, *, settle_s: floa
             html = str(await content() or "")
         except Exception as exc:  # pragma: no cover — defensive
             _logger.debug("agent.captcha_dom.content_failed", error=str(exc))
+    # A Playwright Page exposes no status, so this is 200 in practice; the
+    # getattr is for page-likes that do carry one. That is fine either way —
+    # every interstitial this path cares about is identified by a body
+    # signature, and the status only feeds the small-body fallback.
     status = getattr(page, "status", None)
     vendor = is_interstitial(html, status if isinstance(status, int) else 200)
     if vendor is None:
@@ -634,7 +638,7 @@ async def solve_on_page(  # noqa: PLR0911, PLR0912 — one branch per tier; flat
         _logger.info("agent.captcha_dom.cleared_by_checkbox", kind=kind, url=url)
         return True
 
-    # 2.5) Slider captchas are geometry, not perception — a gap has an exact
+    # 3) Slider captchas are geometry, not perception — a gap has an exact
     # answer, so this needs no model at all and runs whether or not one is
     # configured. Free, so it goes ahead of the paid tier for the same reason
     # the checkbox does.
@@ -651,7 +655,7 @@ async def solve_on_page(  # noqa: PLR0911, PLR0912 — one branch per tier; flat
             return True
         _logger.info("agent.captcha_dom.slider_dragged_not_accepted", kind=kind, url=url)
 
-    # 3) Local vision — the checkbox was refused, so an image grid is up now.
+    # 4) Local vision — the checkbox was refused, so an image grid is up now.
     # Free, and the page never leaves this machine, so it goes ahead of the paid
     # tier; a False here simply falls through to it.
     if vision is not None:
@@ -666,12 +670,18 @@ async def solve_on_page(  # noqa: PLR0911, PLR0912 — one branch per tier; flat
 
     # An image captcha is identified by its pixels, not a key, so the bytes are
     # the payload. Fetched in page context — see _IMAGE_B64_JS.
+    #
+    # Note this feeds the PAID tier only: the local vision solver handles grids,
+    # not OCR, so an image captcha skips tier 4 even when a VLM is configured and
+    # reading characters is exactly what it would be good at. Deliberate for now
+    # — there is no target to measure it against, and an unmeasured solver that
+    # silently returns wrong text is worse than one that declines.
     if kind == "image" and "image_url" in extra:
         body = await _fetch_image_b64(page, extra["image_url"])
         if body:
             extra = {**extra, "body": body}
 
-    # 2) Ask the solver cascade for a token.
+    # 5) Ask the paid solver cascade for a token — the first tier that costs.
     try:
         token = await solver.solve(kind, site_key, url, extra=extra or None)
     except CaptchaSolveError as exc:
@@ -685,7 +695,7 @@ async def solve_on_page(  # noqa: PLR0911, PLR0912 — one branch per tier; flat
         _logger.info("agent.captcha_dom.empty_token_recheck", kind=kind, cleared=cleared)
         return cleared
 
-    # 3) Apply the result. What "apply" means is per-kind.
+    # 6) Apply the result. What "apply" means is per-kind.
     if kind in _COOKIE_KINDS:
         # DataDome and AWS WAF clear via a cookie, not a form field. Setting it on
         # the context is the whole mechanism — injecting into the DOM would look

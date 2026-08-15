@@ -58,6 +58,10 @@ _DIFF_COLUMN_FRACTION = 0.35
 # Anything below this is a broken measurement, not a real zoom level; ignore it
 # rather than shrink the drag to nothing.
 _MIN_PLAUSIBLE_SCALE = 0.5
+# Poll for the canvases to actually paint. ~4 s total, which is well inside the
+# window these widgets stay open and cheap when the puzzle is already there.
+_READY_POLLS = 9
+_READY_POLL_S = 0.5
 
 
 class GapMatch(NamedTuple):
@@ -397,6 +401,48 @@ async def _element_png(frame: Any, selector: str) -> bytes | None:
         return None
 
 
+async def _await_puzzle(
+    page: Any, target: Any, selectors: dict[str, str]
+) -> tuple[dict[str, bytes], bytes, GapMatch] | None:
+    """Poll until the slider canvases are painted, then locate the gap.
+
+    The canvas ELEMENTS appear before they are drawn into, and reading them in
+    that window is indistinguishable from "there is no puzzle": the piece canvas
+    is still fully transparent and the background still equals fullbg, so both
+    detectors correctly return None and the solver declines a puzzle that was
+    about to exist.
+
+    Measured directly — three consecutive attempts on the same target gave
+    ``piece=None, gap=None`` twice and a clean ``GapMatch(x=149, confidence=1.0)``
+    once. That race, not the detection maths, is what made the live success rate
+    swing between runs.
+    """
+    for attempt in range(_READY_POLLS):
+        if attempt:
+            waiter = getattr(page, "wait_for_timeout", None)
+            if callable(waiter):
+                await waiter(_READY_POLL_S * 1000.0)
+
+        canvases = await _canvas_images(target)
+        background = canvases.get("background") or await _element_png(
+            target, selectors["background"]
+        )
+        piece = canvases.get("piece") or await _element_png(target, selectors["piece"])
+        if background is None or piece is None:
+            continue
+
+        match = None
+        full_background = canvases.get("fullbg")
+        if full_background is not None:
+            # Exact, and independent of how busy the photo is.
+            match = gap_from_full_background(background, full_background)
+        if match is None:
+            match = detect_gap_offset(background, piece)
+        if match is not None:
+            return canvases, piece, match
+    return None
+
+
 async def solve_slider(
     page: Any,
     kind: CaptchaKind,
@@ -417,28 +463,11 @@ async def solve_slider(
     selectors = _SLIDER_SELECTORS[kind]
     target = frame if frame is not None else page
 
-    # Canvases first (GeeTest), element screenshots second (DataDome's <img>).
-    canvases = await _canvas_images(target)
-    background = canvases.get("background") or await _element_png(target, selectors["background"])
-    piece = canvases.get("piece") or await _element_png(target, selectors["piece"])
-    if background is None or piece is None:
-        _logger.debug(
-            "agent.captcha_slider.images_missing",
-            kind=kind,
-            has_background=background is not None,
-            has_piece=piece is not None,
-        )
+    ready = await _await_puzzle(page, target, selectors)
+    if ready is None:
+        _logger.debug("agent.captcha_slider.puzzle_never_ready", kind=kind)
         return False
-
-    match = None
-    full_background = canvases.get("fullbg")
-    if full_background is not None:
-        # Exact, and independent of how busy the photo is.
-        match = gap_from_full_background(background, full_background)
-    if match is None:
-        match = detect_gap_offset(background, piece)
-    if match is None:
-        return False
+    canvases, piece, match = ready
 
     # The piece does not necessarily start at x=0, and the drag distance is the
     # difference, not the gap's absolute position.
@@ -460,7 +489,7 @@ async def solve_slider(
         x=match.x,
         distance=distance,
         confidence=round(match.confidence, 3),
-        exact=full_background is not None,
+        exact="fullbg" in canvases,
     )
 
     handle = None
