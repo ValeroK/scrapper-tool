@@ -12,6 +12,13 @@ silent data corruption. Full measurements in
 
 ### Fixed
 
+- **`numpy` is now declared.** The slider solver imports it for the gap
+  correlation, and it appeared in no dependency list — it was only ever present
+  transitively via `crawl4ai`. Installs looked correctly specified while a
+  `crawl4ai` release that dropped numpy would have broken slider solving with an
+  `ImportError`. Declared in `[llm-agent]`, where it is a genuine runtime
+  dependency, and in `[dev]`, which the lint job type-checks against.
+
 - **A bot-walled HTTP 200 was scored as real content.** `dickssportinggoods.com`
   serves a 2.4 KB Akamai tile-challenge as **200**; the cascade accepted it as
   content and stopped escalating, handing the caller a wall. Rendering the same
