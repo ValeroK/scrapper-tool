@@ -660,8 +660,29 @@ but it is not a precise success rate.
 ## Slider captchas: solved, and no model needed at all
 
 `geetest` and `datadome` are gap-alignment puzzles with an exact answer, so they
-are geometry rather than perception. **Live GeeTest v3: 2/4 accepted**, the
-widget showing "Verification Success".
+are geometry rather than perception. It works, and the first sample overstated
+how well: **3 accepted out of 14 live attempts (~20%)**, each showing
+"Verification Success". The initial 2/4 was too small a sample to publish, and
+saying so is the point — the honest aggregate is the useful number.
+
+Gap *detection* is not the limiting factor. After a race fix (below) the puzzle
+opens and drags **6/6**; what varies is whether GeeTest believes the drag. The
+remaining failures look like trajectory scoring and IP reputation — the same
+dimension every other unsolved case in this investigation runs into, and this
+demo had been hit ~20 times from one address by then.
+
+### A race that looked exactly like flakiness
+
+The canvas *elements* appear before anything is painted into them, and reading
+them in that window is indistinguishable from "there is no puzzle": the piece
+canvas is still fully transparent, so `piece_bounds` returns None, and the
+background still equals `fullbg`, so the diff finds no notch. Both detectors
+correctly returned None and the solver declined a puzzle that was about to exist.
+
+Three consecutive attempts on one target gave `piece=None, gap=None` twice and a
+clean `GapMatch(x=149, confidence=1.0)` once. Re-running the matrix is what
+caught it; reading the code would not have. `solve_slider` now polls ~4 s for the
+canvases to paint.
 
 The primary method is a diff, not a match: GeeTest ships `geetest_canvas_bg`
 (notched) *and* `geetest_canvas_fullbg` (intact). Where they differ is the notch.
@@ -694,7 +715,7 @@ every page. Checking that it is **visible and non-empty** turned that 3/3 into
 | turnstile | settle | works when the IP is not already burned |
 | recaptcha-v2, hcaptcha | checkbox, then VLM grid | checkbox works; **grid solves 5/5 with `qwen3.6-27b`**, 0-1/5 with ~6 GB models |
 | image | VLM OCR | routed, detection + base64 capture in place, unmeasured |
-| geetest, datadome | slider CV | **built; 2/4 live on GeeTest v3**, no model required |
+| geetest, datadome | slider CV | **built; 3/14 (~20%) live on GeeTest v3**, no model required |
 | recaptcha-v3 | none possible | risk score; no puzzle exists |
 | aws-waf | none possible | proof-of-work |
 | funcaptcha, arkose | none practical | rotating 3D, beyond a small VLM |
