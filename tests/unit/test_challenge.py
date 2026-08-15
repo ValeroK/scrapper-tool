@@ -21,6 +21,7 @@ from pathlib import Path
 import pytest
 
 from scrapper_tool._challenge import (
+    _BODY_SCAN_BYTES,
     has_real_content,
     is_cf_challenge_body,
     is_interstitial,
@@ -301,3 +302,48 @@ def test_structured_data_is_never_a_content_free_shell(name: str, html: str) -> 
     assert looks_like_content_free_shell(html) is False, name
     assert is_interstitial(html, 200) is None, name
     assert has_real_content(html, 200) is True, name
+
+
+# --- vendor marker on a SERVED page (yad2 / Radware) -----------------------
+#
+# The mirror image of the Akamai bug above, and just as costly. Captured from a
+# live yad2.co.il real-estate search: the rendered page is 3.3 MB with 27 prices
+# and 729 listing elements — unambiguously served — and carries
+# `validate.perfdrive.com` at offset ~11,766, well outside the 8 KB head window.
+#
+# The unbounded tail scan called that a Radware wall, so every successful scrape
+# of a Radware / DataDome / PerimeterX site was reported as blocked. Two
+# consequences, both silent: the cascade escalates past a tier that already won,
+# and `has_real_content` tells the proxy pool to mark_blocked a proxy that just
+# did its job.
+
+
+def test_vendor_marker_in_a_large_served_page_is_not_a_wall() -> None:
+    """A challenge page is tiny; a marker in a big document is the site's own script."""
+    html = _fixture("radware_protected_real_page.html")
+    assert len(html) > 50_000
+    assert "validate.perfdrive.com" in html.lower()
+    assert is_interstitial(html, 200) is None
+    assert has_real_content(html, 200) is True
+
+
+def test_small_radware_redirect_is_still_a_wall() -> None:
+    """The cap must not blind the tail scan to what it was added for.
+
+    Radware/PerfDrive redirect walls put their marker outside the first 8 KB,
+    which is why the tail scan exists — but those pages are tiny.
+    """
+    html = "<html><body>" + ("<span>x</span>" * 900) + "validate.perfdrive.com</body></html>"
+    assert _BODY_SCAN_BYTES < len(html) < 50_000
+    assert is_interstitial(html, 200) == "radware"
+    assert has_real_content(html, 200) is False
+
+
+@pytest.mark.parametrize("vendor_marker", ["geo.captcha-delivery.com", "px-captcha"])
+def test_cap_applies_to_every_tail_scanned_vendor(vendor_marker: str) -> None:
+    """DataDome and PerimeterX share the tail scan, so they share the fix."""
+    padding = "<div>content</div>" * 5000
+    big = f"<html><body>{padding}{vendor_marker}</body></html>"
+    small = f"<html><body>{'<span>x</span>' * 900}{vendor_marker}</body></html>"
+    assert is_interstitial(big, 200) is None
+    assert is_interstitial(small, 200) is not None

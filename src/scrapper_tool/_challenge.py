@@ -173,19 +173,36 @@ def is_interstitial(html: str, status_code: int = 200) -> str | None:
     Content-first by design. A block status only counts when the body is *small*
     — a 403 carrying 1.35 MB of real DOM is a served page, not a wall.
     """
-    if not html:
+    # Vendor signatures only mean "wall" while the body is small enough to BE a
+    # wall. Above that, the marker describes the page's *protection*, not its
+    # nature — the vendor's own script, sitting on a page that was served.
+    #
+    # Measured on yad2.co.il: a fully rendered 3.3 MB page with 27 prices and 729
+    # listing elements carries `validate.perfdrive.com` at offset 11,766. Without
+    # this cap every successful scrape of a Radware / DataDome / PerimeterX site
+    # was reported as blocked, which makes the cascade escalate past a tier that
+    # already won and — worse, because it is silent and cumulative — makes
+    # `has_real_content` tell the proxy pool to `mark_blocked` a proxy that just
+    # did its job.
+    #
+    # This is the module's existing content-first rule ("a 403 carrying 1.35 MB
+    # of real DOM is a served page") applied to the signature scans, which were
+    # the one place still missing it. Real challenge pages are ~2-6 KB; the 50 KB
+    # ceiling is already generous.
+    if not html or len(html) >= _CHALLENGE_BODY_MAX_BYTES:
         return None
+
     head = html[:_BODY_SCAN_BYTES].lower()
     for vendor, signatures in _VENDOR_SIGNATURES.items():
         if any(sig in head for sig in signatures):
             return vendor
-    # Also scan the tail-agnostic full body for redirect-style walls that put their
-    # marker outside the first 8 KB (Radware/PerfDrive redirects do this).
+    # Scan past the head for redirect-style walls that put their marker outside
+    # the first 8 KB — Radware/PerfDrive redirects do this.
     lowered = html.lower()
     for vendor in ("radware", "datadome", "perimeterx"):
         if any(sig in lowered for sig in _VENDOR_SIGNATURES[vendor]):
             return vendor
-    if status_code in _BLOCK_STATUS_CODES and len(html) < _CHALLENGE_BODY_MAX_BYTES:
+    if status_code in _BLOCK_STATUS_CODES:
         return "unknown"
     if looks_like_content_free_shell(html):
         return "unknown"
