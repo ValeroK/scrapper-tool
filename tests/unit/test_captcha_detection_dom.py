@@ -173,6 +173,11 @@ _CASES: list[tuple[str, str, str | None, str, dict[str, str]]] = [
 ]
 
 
+async def _abort(route: Any) -> None:
+    """Fail every subresource request. See the call site for why."""
+    await route.abort()
+
+
 async def test_detection_js_against_real_markup() -> None:
     from camoufox.async_api import AsyncCamoufox
 
@@ -185,17 +190,24 @@ async def test_detection_js_against_real_markup() -> None:
             # but keeps the same `window`, so globals a case sets (AWS WAF's
             # `gokuProps`) would leak into every later case and mask its result.
             page = await browser.new_page()
-            # Explicit headroom over the 30s default: this markup is static and
-            # fetches nothing, so the only thing that can consume the budget is
-            # browser cold-start under load. Three matrix rows launch Firefox at
-            # once on shared runners, and py3.12 timed out here while 3.13 and
-            # 3.14 passed — a contention flake, not a page that was slow to load.
-            # `domcontentloaded` rather than the default `load` for the same
-            # reason: there are no subresources to wait on.
+            # Block the network before setting content. These cases carry the
+            # real vendor URLs (google.com/recaptcha, client-api.arkoselabs.com,
+            # gcaptcha4.geetest.com, …), and a `<script src>` without async/defer
+            # blocks DOMContentLoaded while an `<iframe src>` blocks load — so
+            # without this the test actually fetched third-party captcha CDNs on
+            # every run. That made it network-flaky (it exhausted a 30s budget on
+            # one matrix row and a 90s budget on two others) and put real load on
+            # third parties from a build, which is exactly what the header of
+            # scripts/e2e/targets.yaml forbids.
+            #
+            # Aborting costs nothing under test: the detection JS reads DOM
+            # attributes — src strings, sitekey params — and never needs the
+            # resource behind them. With requests aborted, DOMContentLoaded fires
+            # on the markup alone and the assertions are unchanged.
+            await page.route("**/*", _abort)
             await page.set_content(
                 f"<!doctype html><html><body>{body}</body></html>",
                 wait_until="domcontentloaded",
-                timeout=90_000,
             )
             got: Any = await detect_challenge_detail(page)
             await page.close()
