@@ -36,6 +36,27 @@ pytestmark = pytest.mark.skipif(
 # (label, body_html, expected_kind, expected_site_key, expected_extra_subset)
 #
 # ``expected_kind`` of None means "must detect nothing".
+#
+# Every ``<script>`` carrying a ``src`` is marked ``type="text/plain"`` on
+# purpose. The browser does not fetch or execute a script of unknown type, while
+# ``script[src*="…"]`` — which is how the detector finds all of these, see
+# ``_DETECT_JS`` — matches on the attribute and is completely unaffected. The
+# inline ``gokuProps`` script deliberately keeps no type, because that one must
+# still run.
+#
+# Without it, a second remote script load in the same browser hangs
+# `set_content` until it times out. Reproduced in the Linux container and
+# isolated there: the hang follows *order*, not host or content — reversing
+# `_CASES` moves it onto whichever remote-script cases now come later, each of
+# which passes when run alone. Neither `route.abort()`, `route.fulfill()` nor
+# `context.set_offline(True)` prevents it, so it is in Camoufox's script-loading
+# path rather than anything the test can intercept. It never fired on Windows
+# and took four CI cycles to pin down.
+#
+# Not fetching them is the honest fix regardless: it makes this module's "No
+# network is involved" claim true, which it was not — these are the live vendor
+# URLs, and a `<script src>` blocks DOMContentLoaded, so every run was really
+# calling Google, Arkose, GeeTest and AWS from the test suite.
 _CASES: list[tuple[str, str, str | None, str, dict[str, str]]] = [
     # --- kinds that already worked; regression guard ---
     (
@@ -75,7 +96,7 @@ _CASES: list[tuple[str, str, str | None, str, dict[str, str]]] = [
         # empty sitekey — which then routes to the wrong solver task with nothing
         # to solve it with.
         "recaptcha-v3 not misread as v2",
-        '<script src="https://www.google.com/recaptcha/api.js?render=6Lcyqq8oKEY"></script>'
+        '<script type="text/plain" src="https://www.google.com/recaptcha/api.js?render=6Lcyqq8oKEY"></script>'
         '<iframe src="https://www.google.com/recaptcha/api2/anchor?ar=1&k=6Lcyqq8oKEY"></iframe>',
         "recaptcha-v3",
         "6Lcyqq8oKEY",
@@ -84,7 +105,7 @@ _CASES: list[tuple[str, str, str | None, str, dict[str, str]]] = [
     (
         # `render=explicit` means "v2, rendered by JS" — not a v3 key.
         "recaptcha render=explicit is still v2",
-        '<script src="https://www.google.com/recaptcha/api.js?render=explicit"></script>'
+        '<script type="text/plain" src="https://www.google.com/recaptcha/api.js?render=explicit"></script>'
         '<div class="g-recaptcha" data-sitekey="6LeV2KEY"></div>',
         "recaptcha-v2",
         "6LeV2KEY",
@@ -101,7 +122,7 @@ _CASES: list[tuple[str, str, str | None, str, dict[str, str]]] = [
         # Arkose bootstraps from a script whose path carries the key, before any
         # iframe exists — looking only at iframes misses it during setup.
         "arkose public key from script path",
-        '<script src="https://client-api.arkoselabs.com/v2/476068BF-9607-4799-B53D-966BE98E2B81/api.js"></script>',
+        '<script type="text/plain" src="https://client-api.arkoselabs.com/v2/476068BF-9607-4799-B53D-966BE98E2B81/api.js"></script>',
         "arkose",
         "476068BF-9607-4799-B53D-966BE98E2B81",
         {"surl": "https://client-api.arkoselabs.com"},
@@ -110,7 +131,7 @@ _CASES: list[tuple[str, str, str | None, str, dict[str, str]]] = [
         # Markup shape and the id itself are taken from a live v4 page: the id is
         # in no global, only the loader's query string.
         "geetest v4 captcha_id from loader url",
-        '<script src="https://gcaptcha4.geetest.com/load?callback=geetest_1'
+        '<script type="text/plain" src="https://gcaptcha4.geetest.com/load?callback=geetest_1'
         '&captcha_id=e392e1d7fd421dc63325744d5a2b9c73&"></script>'
         '<div class="geetest_captcha_f0a7e2ce geetest_captcha"></div>',
         "geetest",
@@ -119,7 +140,7 @@ _CASES: list[tuple[str, str, str | None, str, dict[str, str]]] = [
     ),
     (
         "geetest v3 gt parameter",
-        '<script src="https://api.geetest.com/get.php?gt=GT3KEY&challenge=CHAL1"></script>'
+        '<script type="text/plain" src="https://api.geetest.com/get.php?gt=GT3KEY&challenge=CHAL1"></script>'
         '<div class="geetest_holder"></div>',
         "geetest",
         "GT3KEY",
@@ -130,7 +151,7 @@ _CASES: list[tuple[str, str, str | None, str, dict[str, str]]] = [
         # solver given only the page URL cannot reconstruct.
         "aws-waf collects gokuProps",
         "<script>window.gokuProps={key:'KEY1',iv:'IV1',context:'CTX1'};</script>"
-        '<script src="https://abc.us-east-1.captcha.awswaf.com/challenge.js"></script>',
+        '<script type="text/plain" src="https://abc.us-east-1.captcha.awswaf.com/challenge.js"></script>',
         "aws-waf",
         "",
         {"awsKey": "KEY1", "awsIv": "IV1", "awsContext": "CTX1"},
