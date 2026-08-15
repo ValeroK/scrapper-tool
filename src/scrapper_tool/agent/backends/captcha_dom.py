@@ -589,7 +589,7 @@ async def _handle_widgetless_interstitial(page: Any, url: str, *, settle_s: floa
     return cleared
 
 
-async def solve_on_page(  # noqa: PLR0911 — one return per tier; flattening hurts
+async def solve_on_page(  # noqa: PLR0911, PLR0912 — one branch per tier; flattening hurts
     page: Any,
     solver: CaptchaSolver,
     url: str,
@@ -631,6 +631,23 @@ async def solve_on_page(  # noqa: PLR0911 — one return per tier; flattening hu
     if kind in _CHECKBOX_KINDS and await click_checkbox(page, kind, settle_s=settle_s):
         _logger.info("agent.captcha_dom.cleared_by_checkbox", kind=kind, url=url)
         return True
+
+    # 2.5) Slider captchas are geometry, not perception — a gap has an exact
+    # answer, so this needs no model at all and runs whether or not one is
+    # configured. Free, so it goes ahead of the paid tier for the same reason
+    # the checkbox does.
+    from scrapper_tool.agent.backends.captcha_slider import (  # noqa: PLC0415
+        SUPPORTED_KINDS as _SLIDER_KINDS,
+    )
+    from scrapper_tool.agent.backends.captcha_slider import solve_slider  # noqa: PLC0415
+
+    if kind in _SLIDER_KINDS and await solve_slider(page, kind):
+        # Dragging is not the same as being believed: these products score the
+        # trajectory too, so confirm rather than assume.
+        if await _settle_and_recheck(page, settle_s, reload=False, kind=kind):
+            _logger.info("agent.captcha_dom.cleared_by_slider", kind=kind, url=url)
+            return True
+        _logger.info("agent.captcha_dom.slider_dragged_not_accepted", kind=kind, url=url)
 
     # 3) Local vision — the checkbox was refused, so an image grid is up now.
     # Free, and the page never leaves this machine, so it goes ahead of the paid
