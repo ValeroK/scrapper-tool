@@ -185,7 +185,18 @@ async def test_detection_js_against_real_markup() -> None:
             # but keeps the same `window`, so globals a case sets (AWS WAF's
             # `gokuProps`) would leak into every later case and mask its result.
             page = await browser.new_page()
-            await page.set_content(f"<!doctype html><html><body>{body}</body></html>")
+            # Explicit headroom over the 30s default: this markup is static and
+            # fetches nothing, so the only thing that can consume the budget is
+            # browser cold-start under load. Three matrix rows launch Firefox at
+            # once on shared runners, and py3.12 timed out here while 3.13 and
+            # 3.14 passed — a contention flake, not a page that was slow to load.
+            # `domcontentloaded` rather than the default `load` for the same
+            # reason: there are no subresources to wait on.
+            await page.set_content(
+                f"<!doctype html><html><body>{body}</body></html>",
+                wait_until="domcontentloaded",
+                timeout=90_000,
+            )
             got: Any = await detect_challenge_detail(page)
             await page.close()
 

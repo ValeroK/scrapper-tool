@@ -153,10 +153,19 @@ class TestPlaywrightBrowsersRoot:
     def test_every_platform_default_is_covered(
         self, monkeypatch: pytest.MonkeyPatch, platform: str, expected_tail: tuple[str, str]
     ) -> None:
-        """Pin all three branches, since CI only ever exercises one of them."""
+        """Pin all three branches, since CI only ever exercises one of them.
+
+        ``LOCALAPPDATA`` is injected with forward slashes deliberately. Faking
+        ``sys.platform`` does not change which ``pathlib`` flavour is in use, so a
+        backslash value stays one indivisible component under ``PosixPath`` and
+        ``.parts[-2:]`` returns the whole ``C:\\Users\\...\\Local`` string. That
+        passed on a Windows dev machine and failed on Linux CI — the test was
+        measuring the host's path-separator handling rather than the branch it
+        claims to pin. Forward slashes split identically under both flavours.
+        """
         monkeypatch.delenv("PLAYWRIGHT_BROWSERS_PATH", raising=False)
         monkeypatch.setattr(sys, "platform", platform)
-        monkeypatch.setenv("LOCALAPPDATA", "C:\\Users\\someone\\AppData\\Local")
+        monkeypatch.setenv("LOCALAPPDATA", "C:/Users/someone/AppData/Local")
         assert _extras.playwright_browsers_root().parts[-2:] == expected_tail
 
 
