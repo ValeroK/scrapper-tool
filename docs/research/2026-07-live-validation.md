@@ -618,24 +618,89 @@ replacement for a paid solver on reCAPTCHA today. A rerun on hardware that can
 hold a 27B+ VLM is the obvious next measurement, and the benchmark harness makes
 it a one-command job.
 
+---
+
+# Model selection and the slider tier — 2026-08-15
+
+## The 0/5 was the model, not the pipeline
+
+`qwen/qwen3.6-27b` was recorded above as "untestable — insufficient system
+resources". That was **wrong, and worth correcting precisely**: the machine has
+an RTX 3090 (24 GB) and 32 GB RAM, and the weights are 16.28 GiB. What blew past
+VRAM was the model's **262,144-token default context**, not the model. Loading it
+with `--context-length 8192` succeeds in 11 seconds.
+
+With that one change, the same harness against the same live target:
+
+| Model | On disk | Solved | Avg |
+|---|---|---|---|
+| `google/gemma-4-e4b` | 6.33 GB | **0 / 5** | 62 s |
+| `qwen/qwen3-vl-8b` | 6.19 GB | **1 / 5** | 48 s |
+| `qwen/qwen3.6-27b` | 17.48 GB | **5 / 5** | 72 s |
+
+Tokens on the wins were 2254-2382 chars — real reCAPTCHA tokens, read back off
+the response field, with reCAPTCHA's own verify button as the arbiter.
+
+**So the grid solver does work.** The earlier conclusion ("keep the tier, do not
+rely on it") was right about `gemma-4-e4b` and wrong as a general statement. The
+correction that matters for anyone reading this: *check the context length before
+concluding a model does not fit.*
+
+On "lightweight": both ~6 GB models fail. Qwen3-VL-8B is purpose-built for
+spatial reasoning and still only managed 1/5, so this is not a matter of picking
+a better small model — the task needs the capability that arrives around 27B.
+Sample sizes are five runs each; the 0 / 1 / 5 spread is wide enough to act on,
+but it is not a precise success rate.
+
+## Slider captchas: solved, and no model needed at all
+
+`geetest` and `datadome` are gap-alignment puzzles with an exact answer, so they
+are geometry rather than perception. **Live GeeTest v3: 2/4 accepted**, the
+widget showing "Verification Success".
+
+The primary method is a diff, not a match: GeeTest ships `geetest_canvas_bg`
+(notched) *and* `geetest_canvas_fullbg` (intact). Where they differ is the notch.
+`fullbg` renders at 0x0 so it cannot be screenshotted, but the canvas still holds
+its pixels and `toDataURL` reads them — verified untainted.
+
+Four bugs, none of which a synthetic test would have caught:
+
+- **Correlating the piece's texture does not work.** The piece is a crop of the
+  photo it sits in, so it correlates about equally everywhere; a random-noise
+  "piece" scored 0.57 and the search always returned the last valid offset.
+- **The piece canvas is the same size as the background** (260x160), almost
+  entirely transparent. A canvas-width check therefore rejected every real input.
+  The alpha bounding box is the piece: measured (0, 40) = 41 px.
+- **`.geetest_btn` is the radar button, not the drag handle** — 300 px wide
+  against the real handle's 66 px, so every drag started from the middle of the
+  wrong element.
+- **The gap is in canvas pixels, the drag is in CSS pixels**, and they differ
+  (260 intrinsic vs 258 displayed). Applying the scale is what turned 0/4 into 2/4.
+
+One measurement error is worth recording too: an earlier run reported "3/3
+accepted" by checking whether the success element *existed*. It exists hidden on
+every page. Checking that it is **visible and non-empty** turned that 3/3 into
+0/3, which was the honest number at the time.
+
 ## What "all captcha types" can and cannot mean
 
 | Kind | Local/free path | Status |
 |---|---|---|
 | turnstile | settle | works when the IP is not already burned |
-| recaptcha-v2, hcaptcha | checkbox, then VLM grid | checkbox works; grid pipeline works, accuracy insufficient locally |
+| recaptcha-v2, hcaptcha | checkbox, then VLM grid | checkbox works; **grid solves 5/5 with `qwen3.6-27b`**, 0-1/5 with ~6 GB models |
 | image | VLM OCR | routed, detection + base64 capture in place, unmeasured |
-| geetest, datadome | slider CV | **not built** — see below |
+| geetest, datadome | slider CV | **built; 2/4 live on GeeTest v3**, no model required |
 | recaptcha-v3 | none possible | risk score; no puzzle exists |
 | aws-waf | none possible | proof-of-work |
 | funcaptcha, arkose | none practical | rotating 3D, beyond a small VLM |
 
 Still open:
 
-- **Slider solving for GeeTest and DataDome.** These are gap-alignment puzzles
-  that classic template-matching CV solves at high accuracy with no model at all
-  — the best remaining free-tier win, and not attempted here.
-- The local-VLM grid solver on adequate hardware.
+- **DataDome's slider is unverified live.** The solver handles it by the same
+  path as GeeTest, but DataDome gates on IP before showing a puzzle, so no live
+  attempt was possible from this egress. GeeTest v3 is the measured one.
+- **The `image` (OCR) kind is routed but unmeasured** — detection and in-page
+  base64 capture are in place, and nothing has been solved through it.
 - Arkose/FunCaptcha live verification (needs a real Arkose-protected target;
   `2captcha.com/demo/arkoselabs` serves no Arkose resources).
 - No paid-solver round trip has been exercised: the new kinds are verified as
