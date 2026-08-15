@@ -312,6 +312,10 @@ cascade:
   - {id: shutterstock,   url: "https://www.shutterstock.com/",                          expect: render, last_result: "render 403, 1.02 MB, real", last_checked: 2026-08-15,
      note: "Improved: blocked by DataDome in 2026-08, clears now."}
 
+  - {id: yad2-realestate, url: "https://www.yad2.co.il/realestate/forsale/center-and-sharon?property=5%2C39%2C32%2C55&area=4&bBox=32.080588%2C34.889264%2C32.091236%2C34.904408&zoom=15",
+     expect: render, last_result: "render 200, 3.3 MB, 730 listing elements, 61 cookies", last_checked: 2026-08-15,
+     note: "Radware. Exercises BOTH classifier directions: the ladder returns a 118 KB Radware wall that must be caught, and the render returns 3.3 MB carrying the same vendor marker that must NOT be. Fixtures for both are in tests/fixtures/challenge/."}
+
   # --- still walled: IP reputation, not code ---
   - {id: gamestop,       url: "https://www.gamestop.com/",                              expect: blocked, last_result: "render 403, 5.3 KB, cloudflare", last_checked: 2026-08-15}
   - {id: kmart-au,       url: "https://www.kmart.com.au/",                              expect: blocked, last_result: "render 403, 292 B, akamai",     last_checked: 2026-08-15}
