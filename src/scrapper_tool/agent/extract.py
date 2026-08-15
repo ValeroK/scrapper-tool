@@ -141,10 +141,20 @@ async def run_extract(
         page_timeout=int(config.timeout_s * 1000),
     )
 
+    # A solve is the most expensive thing this tier does. Collect the clearance
+    # it wins while the browser is still open — Crawl4AI owns the lifecycle, so
+    # by the time `arun` returns the context is gone. Bound outside the `try`
+    # because it is read after it.
+    won_cookies: list[dict[str, Any]] = []
+
     try:
         can_see = await supports_vision(config.model, config.ollama_url)
         after_goto = make_after_goto(
-            make_captcha_consumer(solver, vision=llm if can_see else None),
+            make_captcha_consumer(
+                solver,
+                vision=llm if can_see else None,
+                on_solved=won_cookies.extend,
+            ),
             make_behavior_consumer(behavior, full=False),
         )
 
@@ -177,6 +187,7 @@ async def run_extract(
         duration_s=duration,
         fallback_schema=schema_payload is not None,
         schema_payload=schema_payload,
+        cookies=won_cookies,
     )
 
 
@@ -294,6 +305,7 @@ def _crawl4ai_result_to_agent(
     duration_s: float,
     fallback_schema: bool,
     schema_payload: dict[str, object] | None = None,
+    cookies: list[dict[str, Any]] | None = None,
 ) -> AgentResult:
     """Convert Crawl4AI's CrawlResult → AgentResult."""
     success = bool(getattr(result, "success", True))
@@ -362,6 +374,7 @@ def _crawl4ai_result_to_agent(
         error=error,
         duration_s=duration_s,
         steps_used=1,
+        cookies=list(cookies or []),
     )
 
 

@@ -33,6 +33,8 @@ from scrapper_tool._logging import get_logger
 from scrapper_tool.errors import CaptchaSolveError
 
 if TYPE_CHECKING:
+    from collections.abc import Callable
+
     from scrapper_tool.agent.backends.captcha import CaptchaKind, CaptchaSolver
     from scrapper_tool.agent.backends.llm import LLMBackend
 
@@ -729,7 +731,33 @@ async def _set_clearance_cookie(page: Any, kind: str, token: str, url: str) -> b
     return True
 
 
-def make_captcha_consumer(solver: CaptchaSolver, *, vision: LLMBackend | None = None) -> Any:
+async def read_context_cookies(page: Any) -> list[dict[str, Any]]:
+    """Every cookie on the page's context, in Playwright shape. ``[]`` on failure.
+
+    Called right after a solve, because that is the moment the clearance exists
+    and the browser is still open. Reading the whole jar rather than just the
+    named clearance is deliberate: the products that matter set several
+    correlated cookies (Cloudflare pairs `cf_clearance` with `__cf_bm`; DataDome
+    sets `datadome` alongside its own session marker), and a clearance replayed
+    without its siblings is frequently rejected.
+    """
+    context = getattr(page, "context", None)
+    getter = getattr(context, "cookies", None)
+    if not callable(getter):
+        return []
+    try:
+        return [dict(entry) for entry in await getter()]
+    except Exception as exc:
+        _logger.debug("agent.captcha_dom.cookie_read_failed", error=str(exc))
+        return []
+
+
+def make_captcha_consumer(
+    solver: CaptchaSolver,
+    *,
+    vision: LLMBackend | None = None,
+    on_solved: Callable[[list[dict[str, Any]]], None] | None = None,
+) -> Any:
     """Build a page-hook consumer that solves captchas via ``solver``.
 
     Shape matches :mod:`scrapper_tool.agent.backends.page_hooks` consumers:
@@ -738,7 +766,15 @@ def make_captcha_consumer(solver: CaptchaSolver, *, vision: LLMBackend | None = 
     """
 
     async def captcha_consumer(page: Any, *, url: str) -> None:
-        await solve_on_page(page, solver, url, vision=vision)
+        solved = await solve_on_page(page, solver, url, vision=vision)
+        if solved and on_solved is not None:
+            # Hand the caller the clearance while the browser is still open.
+            # This hook is the only point that knows a solve just succeeded;
+            # by the time either tier returns, the context is gone and the
+            # credential with it.
+            cookies = await read_context_cookies(page)
+            if cookies:
+                on_solved(cookies)
 
     return captcha_consumer
 
@@ -751,6 +787,7 @@ __all__ = [
     "find_anchor_frame",
     "inject_token",
     "make_captcha_consumer",
+    "read_context_cookies",
     "read_response_token",
     "solve_on_page",
 ]

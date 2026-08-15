@@ -274,3 +274,80 @@ async def test_solve_on_page_tries_the_checkbox_before_the_solver() -> None:
     solver = _SpySolver()
     assert await captcha_dom.solve_on_page(page, solver, "https://x.example", settle_s=0) is True
     solver.solve.assert_not_awaited()
+
+
+# --- harvesting the clearance a solve wins ---------------------------------
+
+
+class _CookieContext:
+    def __init__(self, cookies: list[dict[str, Any]] | None = None, *, boom: bool = False) -> None:
+        self._cookies = cookies or []
+        self._boom = boom
+
+    async def cookies(self) -> list[dict[str, Any]]:
+        if self._boom:
+            raise RuntimeError("context closed")
+        return self._cookies
+
+
+class _PageWithContext(_FakePage):
+    def __init__(self, *args: Any, context: Any = None, **kw: Any) -> None:
+        super().__init__(*args, **kw)
+        self.context = context
+
+
+async def test_read_context_cookies_returns_the_whole_jar() -> None:
+    """Not just the named clearance.
+
+    Cloudflare pairs `cf_clearance` with `__cf_bm` and DataDome sets a session
+    marker beside its own cookie; a clearance replayed without its siblings is
+    frequently rejected, so the whole jar travels.
+    """
+    jar = [{"name": "cf_clearance", "value": "abc"}, {"name": "__cf_bm", "value": "def"}]
+    page = _PageWithContext([None], context=_CookieContext(jar))
+    assert await captcha_dom.read_context_cookies(page) == jar
+
+
+async def test_read_context_cookies_survives_a_closed_context() -> None:
+    page = _PageWithContext([None], context=_CookieContext(boom=True))
+    assert await captcha_dom.read_context_cookies(page) == []
+
+
+async def test_read_context_cookies_without_a_context_api() -> None:
+    assert await captcha_dom.read_context_cookies(_FakePage([None])) == []
+
+
+async def test_consumer_hands_over_cookies_after_a_solve() -> None:
+    """The whole point: the hook is the only place that knows a solve happened.
+
+    By the time either agent tier returns, the browser context is gone and the
+    credential with it — which is why a 70-second solve used to be thrown away
+    and the next tier re-fought the same wall.
+    """
+    jar = [{"name": "cf_clearance", "value": "won"}]
+    page = _PageWithContext(
+        [{"kind": "turnstile", "site_key": "k"}, None],  # cleared by settle
+        context=_CookieContext(jar),
+    )
+    collected: list[dict[str, Any]] = []
+    consumer = captcha_dom.make_captcha_consumer(_SpySolver(), on_solved=collected.extend)
+    await consumer(page, url="https://x.example")
+    assert collected == jar
+
+
+async def test_consumer_hands_over_nothing_when_no_solve_happened() -> None:
+    """An unsolved page must not report a clearance it did not win."""
+    page = _PageWithContext([None], context=_CookieContext([{"name": "x", "value": "y"}]))
+    collected: list[dict[str, Any]] = []
+    consumer = captcha_dom.make_captcha_consumer(_SpySolver(), on_solved=collected.extend)
+    await consumer(page, url="https://x.example")
+    assert collected == []
+
+
+async def test_consumer_without_a_callback_still_solves() -> None:
+    """`on_solved` is optional — omitting it must not change solving."""
+    page = _PageWithContext(
+        [{"kind": "turnstile", "site_key": "k"}, None], context=_CookieContext()
+    )
+    consumer = captcha_dom.make_captcha_consumer(_SpySolver())
+    await consumer(page, url="https://x.example")  # must not raise

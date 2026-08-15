@@ -72,6 +72,19 @@ class AgentResult(BaseModel):
     failures raise an exception instead."""
     duration_s: float = 0.0
     steps_used: int = 0
+    cookies: list[dict[str, object]] = Field(default_factory=list)
+    """Cookies the run **won**, in Playwright shape — chiefly the clearance a
+    captcha solve mints.
+
+    Solving is by far the most expensive thing either tier does (measured at ~70 s
+    of local VLM inference, or a paid API call), and the credential it buys was
+    discarded the moment the browser closed, so the next tier and the next run
+    re-fought the same wall from scratch. The render tier has returned its
+    cookies since 2.1.0; this is the same thing for E1/E2.
+
+    Empty when nothing was won. Populated even when the run is ``blocked`` or
+    returns no data: a run can win a clearance and still fail to extract, which
+    is exactly when the next attempt most wants it."""
 
 
 # --- Configuration --------------------------------------------------------
