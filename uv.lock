@@ -6810,7 +6810,7 @@ fetchers = [
 
 [[package]]
 name = "scrapper-tool"
-version = "2.1.0"
+version = "2.2.0"
 source = { editable = "." }
 dependencies = [
     { name = "curl-cffi" },
@@ -6829,6 +6829,8 @@ cookies = [
 ]
 dev = [
     { name = "mypy" },
+    { name = "numpy" },
+    { name = "pillow" },
     { name = "pip-audit" },
     { name = "pytest" },
     { name = "pytest-asyncio" },
@@ -6841,6 +6843,7 @@ full = [
     { name = "browserforge" },
     { name = "camoufox", extra = ["geoip"] },
     { name = "crawl4ai" },
+    { name = "numpy" },
     { name = "patchright" },
     { name = "pillow" },
     { name = "scrapling", extra = ["fetchers"] },
@@ -6860,6 +6863,7 @@ llm-agent = [
     { name = "browserforge" },
     { name = "camoufox", extra = ["geoip"], marker = "extra == 'extra-13-scrapper-tool-llm-agent'" },
     { name = "crawl4ai" },
+    { name = "numpy" },
     { name = "patchright" },
     { name = "pillow" },
 ]
@@ -6879,7 +6883,10 @@ requires-dist = [
     { name = "httpx", specifier = ">=0.27" },
     { name = "mcp", marker = "extra == 'agent'", specifier = ">=1.2" },
     { name = "mypy", marker = "extra == 'dev'", specifier = ">=1.13" },
+    { name = "numpy", marker = "extra == 'dev'", specifier = ">=1.26" },
+    { name = "numpy", marker = "extra == 'llm-agent'", specifier = ">=1.26" },
     { name = "patchright", marker = "extra == 'llm-agent'", specifier = ">=1.49" },
+    { name = "pillow", marker = "extra == 'dev'", specifier = ">=10" },
     { name = "pillow", marker = "extra == 'llm-agent'", specifier = ">=10" },
     { name = "pip-audit", marker = "extra == 'dev'", specifier = ">=2.7" },
     { name = "prometheus-client", marker = "extra == 'http'", specifier = ">=0.20" },

@@ -68,6 +68,13 @@ llm-agent = [
     "patchright>=1.49",
     "browserforge>=1.2",
     "pillow>=10",
+    # v2.2.0: the slider solver (``agent.backends.captcha_slider``) decodes the
+    # GeeTest canvases with pillow and does the gap correlation in numpy. numpy
+    # was reaching us only transitively via crawl4ai, so it worked but was never
+    # declared — a crawl4ai release that dropped it would have broken slider
+    # solving at runtime with an ImportError, and mypy could not resolve it in
+    # the lint job (which installs only [dev]). Declared in both places now.
+    "numpy>=1.26",
     # NB: browser-use 0.5+ ships its own LLM wrappers
     # (``browser_use.llm.ollama.ChatOllama`` / ``.openai.ChatOpenAI`` /
     # etc.) so we don't pin langchain-ollama or langchain-openai
@@ -147,6 +154,13 @@ dev = [
     "ruff>=0.9",
     "mypy>=1.13",
     "pip-audit>=2.7",
+    # Not test tooling — needed so `mypy --strict src/` can resolve the slider
+    # solver's numpy usage (the lint job installs only [dev]) and so
+    # tests/unit/test_captcha_slider.py runs on a bare `--extra dev` sync
+    # instead of dying on an import. Also declared in [llm-agent], which is
+    # where it is a genuine runtime dependency.
+    "numpy>=1.26",
+    "pillow>=10",
 ]
 
 [project.scripts]
