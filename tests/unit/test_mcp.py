@@ -1465,3 +1465,62 @@ class TestAutoScrapeSharedProfileDir:
         assert captured_kwargs.get("user_data_dir") == caller_dir, (
             "caller-provided dir must be honored verbatim, not replaced with ephemeral"
         )
+
+
+class TestUrlGuard:
+    """MCP never raises to the client, so a refusal has to arrive as a payload.
+
+    The shape matters as much as the refusal: the envelope must stay a superset
+    of the tool's normal one so an existing client keeps parsing it, and it must
+    not claim ``blocked`` — that means "anti-bot walled us" and would send an
+    agent escalating to the browser tier against a target that is never allowed.
+    """
+
+    @pytest.mark.parametrize(
+        "tool_name",
+        ["fetch_with_ladder", "auto_scrape", "map_site", "crawl_site", "canary"],
+    )
+    @pytest.mark.asyncio
+    async def test_metadata_target_is_refused(self, server: object, tool_name: str) -> None:
+        tool = _get_tool(server, tool_name)
+        result = await tool.fn(url="http://169.254.169.254/latest/meta-data/")  # type: ignore[attr-defined]
+        assert result["error_code"] == "url_not_allowed"
+        assert "metadata" in result["error"]
+        assert result["remedy"], "a refusal must say what to do instead"
+
+    @pytest.mark.asyncio
+    async def test_refusal_does_not_claim_a_bot_block(self, server: object) -> None:
+        tool = _get_tool(server, "fetch_with_ladder")
+        result = await tool.fn(url="http://10.0.0.1/admin")  # type: ignore[attr-defined]
+        assert result["blocked"] is False, (
+            "a guard refusal is not an anti-bot block; saying so would make an "
+            "agent escalate to Pattern D against a permanently refused target"
+        )
+
+    @pytest.mark.asyncio
+    async def test_envelope_keeps_the_tools_own_keys(self, server: object) -> None:
+        """Existing clients parse these keys; a refusal must not drop them."""
+        tool = _get_tool(server, "fetch_with_ladder")
+        result = await tool.fn(url="http://127.0.0.1/")  # type: ignore[attr-defined]
+        for key in ("url", "blocked", "winning_profile", "status", "body", "truncated", "error"):
+            assert key in result, f"refusal envelope lost {key!r}"
+
+    @pytest.mark.asyncio
+    async def test_map_refusal_reports_empty_inventory_not_a_crash(self, server: object) -> None:
+        tool = _get_tool(server, "map_site")
+        result = await tool.fn(url="http://db.internal/")  # type: ignore[attr-defined]
+        assert result["urls"] == []
+        assert result["count"] == 0
+        assert result["error_code"] == "url_not_allowed"
+
+    @pytest.mark.asyncio
+    async def test_allowed_target_is_unaffected(
+        self, server: object, fake_curl: type[FakeCurlSession]
+    ) -> None:
+        """The guard must be invisible on a normal fetch."""
+        fake_curl.STATUS_FOR_PROFILE = {"chrome146": 200}
+        fake_curl.RESPONSE_TEXT_FOR_PROFILE = {"chrome146": "<html>ok</html>"}
+        tool = _get_tool(server, "fetch_with_ladder")
+        result = await tool.fn(url="https://example.test/x")  # type: ignore[attr-defined]
+        assert "error_code" not in result
+        assert result["status"] == 200

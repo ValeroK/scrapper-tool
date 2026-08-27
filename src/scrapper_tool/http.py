@@ -54,6 +54,7 @@ from curl_cffi.requests.exceptions import (
 )
 
 from scrapper_tool._logging import get_logger
+from scrapper_tool._urlguard import assert_url_allowed_nodns
 from scrapper_tool.errors import VendorHTTPError
 
 if TYPE_CHECKING:
@@ -100,6 +101,66 @@ _TRANSPORT_ERRORS: tuple[type[Exception], ...] = (
 # non-ladder request advertised a Chrome build no real user runs — a fingerprint
 # in itself. See IMPERSONATE_LADDER in ladder.py for the full chain.
 _CURL_CFFI_IMPERSONATE: Literal["chrome146"] = "chrome146"
+
+
+class _GuardedTransport(httpx.AsyncBaseTransport):
+    """httpx transport that vets every hop's URL before it goes on the wire.
+
+    A pre-flight check at the call site sees only the URL the caller passed.
+    It cannot see where a ``302`` sends us, and every client this module builds
+    follows redirects — so ``https://harmless.example/r?to=169.254.169.254``
+    defeats a call-site check entirely.
+
+    httpx resolves redirects in the *client*, re-entering the transport once
+    per hop, which makes this the one place on the httpx path where every hop
+    is visible.
+
+    The check here is the synchronous, no-DNS one, deliberately. Redirects into
+    private space name their target in the ``Location`` header, so the URL
+    itself carries the evidence; and a resolver query per hop would both slow
+    every redirect chain and — because the test suite mocks at the transport
+    layer, underneath this class — turn hermetic unit tests into ones that
+    quietly hit the network. Full DNS vetting happens once, up front, at the
+    public surfaces.
+    """
+
+    def __init__(self, inner: httpx.AsyncBaseTransport) -> None:
+        self._inner = inner
+
+    async def handle_async_request(self, request: httpx.Request) -> httpx.Response:
+        assert_url_allowed_nodns(str(request.url))
+        return await self._inner.handle_async_request(request)
+
+    async def aclose(self) -> None:
+        await self._inner.aclose()
+
+
+def guard_client(client: httpx.AsyncClient) -> httpx.AsyncClient:
+    """Wrap an already-built client's transports so every hop is vetted.
+
+    Deliberately *not* a ``transport=`` factory. Supplying ``transport=`` at
+    construction makes httpx skip building its proxy ``mounts`` altogether,
+    which silently disables the standard ``HTTP_PROXY`` / ``HTTPS_PROXY`` /
+    ``ALL_PROXY`` / ``NO_PROXY`` environment variables that ``trust_env``
+    honours by default — traffic that used to go through a proxy would quietly
+    start going direct.
+
+    So the client is built normally, httpx resolves its own routing, and then
+    every transport it resolved gets wrapped: the default one plus each mount,
+    since a proxied mount is exactly the path we most want vetted. A ``None``
+    mount means "use the default transport for this pattern" (how ``NO_PROXY``
+    is expressed), and is left alone because the default is already wrapped.
+
+    Touches ``_transport`` and ``_mounts``, which are private. They are stable
+    across the httpx 0.27+ line this project pins, and the alternative —
+    reimplementing httpx's env-proxy parsing — is the more fragile of the two.
+    """
+    client._transport = _GuardedTransport(client._transport)
+    client._mounts = {
+        pattern: (None if transport is None else _GuardedTransport(transport))
+        for pattern, transport in client._mounts.items()
+    }
+    return client
 
 
 def _compute_backoff(attempt: int) -> float:
@@ -183,11 +244,13 @@ async def vendor_client(
             impersonate=_CURL_CFFI_IMPERSONATE,
         )
     else:
-        client = httpx.AsyncClient(
-            timeout=timeout,
-            headers=headers,
-            proxy=proxy,
-            follow_redirects=True,
+        client = guard_client(
+            httpx.AsyncClient(
+                timeout=timeout,
+                headers=headers,
+                proxy=proxy,
+                follow_redirects=True,
+            )
         )
     try:
         # Typed as ``httpx.AsyncClient`` for call-site ergonomics — in
@@ -287,6 +350,7 @@ async def request_with_retry(
 
 __all__ = [
     "VendorHTTPClient",
+    "guard_client",
     "request_with_retry",
     "vendor_client",
 ]

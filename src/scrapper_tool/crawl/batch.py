@@ -27,6 +27,7 @@ from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
 
 from scrapper_tool._logging import get_logger
+from scrapper_tool._urlguard import assert_url_allowed
 from scrapper_tool.errors import ConfigurationError
 
 if TYPE_CHECKING:
@@ -186,6 +187,12 @@ async def batch_fetch(
     """
     if not urls:
         return BatchResult(pages=[], requested=0)
+    # The URLs go to an external binary, so there is no transport of ours to
+    # hook — pre-flight is the only check available on this path, and it has to
+    # refuse rather than filter: silently dropping one URL from a batch would
+    # leave the caller comparing counts to work out what happened.
+    for target in urls:
+        await assert_url_allowed(target)
     if shutil.which(executable) is None:
         raise ConfigurationError(_OBSCURA_NOT_FOUND)
 
@@ -260,6 +267,7 @@ async def obscura_fetch(
     if dump not in _VALID_DUMPS:
         msg = f"unknown dump format {dump!r}; choose one of {sorted(_VALID_DUMPS)}"
         raise ValueError(msg)
+    await assert_url_allowed(url)
     if shutil.which(executable) is None:
         raise ConfigurationError(_OBSCURA_NOT_FOUND)
 

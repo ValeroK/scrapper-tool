@@ -81,12 +81,14 @@ from typing import TYPE_CHECKING, Any
 from scrapper_tool import __version__, _extras
 from scrapper_tool._challenge import is_interstitial
 from scrapper_tool._classify import classify_extraction_success
+from scrapper_tool._urlguard import assert_url_allowed
 from scrapper_tool.canary import run_canary
 from scrapper_tool.errors import (
     AgentBlockedError,
     AgentError,
     AgentLLMError,
     BlockedError,
+    UrlNotAllowed,
     VendorHTTPError,
 )
 from scrapper_tool.http import request_with_retry, vendor_client
@@ -152,6 +154,34 @@ def _structured_json_ld(html: str, base_url: str | None) -> list[Any] | None:
     result = get_extractor("json_ld_product").extract(html, base_url=base_url)
     if result.has_signal and isinstance(result.data, dict):
         return result.data.get("json_ld")
+    return None
+
+
+async def _guard_or_error(url: str, *, template: dict[str, Any]) -> dict[str, Any] | None:
+    """``None`` when ``url`` is allowed; a 200-with-error envelope when it isn't.
+
+    One helper rather than a try/except around each of the six URL-taking
+    tools: MCP never raises to the client, so without this every tool would
+    grow its own near-identical except branch — nine chances to word the same
+    refusal differently, and nine barely-covered branches against the coverage
+    gate.
+
+    The returned envelope is a *superset* of the tool's own shape: existing
+    keys keep their meaning, and ``error_code`` plus ``remedy`` are added.
+    ``blocked`` is deliberately left as the caller's template set it (False):
+    it means "an anti-bot system walled us", and an agent that reads a guard
+    refusal as a block will escalate to the browser tier against a target that
+    will never be permitted.
+    """
+    try:
+        await assert_url_allowed(url)
+    except UrlNotAllowed as exc:
+        return {
+            **template,
+            "error": str(exc),
+            "error_code": "url_not_allowed",
+            "remedy": exc.remedy,
+        }
     return None
 
 
@@ -1074,6 +1104,21 @@ def _build_server(  # noqa: PLR0915 — single-place tool registration
         and ``microdata_price`` fields in the result. Eliminates the
         common two-tool pattern (fetch then extract_product).
         """
+        refused = await _guard_or_error(
+            url,
+            template={
+                "url": url,
+                "blocked": False,
+                "winning_profile": None,
+                "status": None,
+                "body": None,
+                "truncated": False,
+                "error": None,
+            },
+        )
+        if refused is not None:
+            return refused
+
         if use_curl_cffi:
             try:
                 resp, profile = await request_with_ladder(method, url)
@@ -1195,6 +1240,10 @@ def _build_server(  # noqa: PLR0915 — single-place tool registration
         timeout_s: float = 120.0,
     ) -> dict[str, Any]:
         """Run Pattern E1 (Crawl4AI extraction) and return a serializable dict."""
+        refused = await _guard_or_error(url, template=_agent_error_payload(""))
+        if refused is not None:
+            return refused
+
         try:
             from scrapper_tool.agent import AgentConfig  # noqa: PLC0415
             from scrapper_tool.agent import agent_extract as _agent_extract  # noqa: PLC0415
@@ -1253,6 +1302,10 @@ def _build_server(  # noqa: PLR0915 — single-place tool registration
         timeout_s: float = 180.0,
     ) -> dict[str, Any]:
         """Run Pattern E2 (browser-use agent) and return a serializable dict."""
+        refused = await _guard_or_error(url, template=_agent_error_payload(""))
+        if refused is not None:
+            return refused
+
         try:
             from scrapper_tool.agent import AgentConfig  # noqa: PLC0415
             from scrapper_tool.agent import agent_browse as _agent_browse  # noqa: PLC0415
@@ -1343,6 +1396,21 @@ def _build_server(  # noqa: PLR0915 — single-place tool registration
         ``persist_browser_profile_dir`` to opt into cross-request reuse
         (caller owns lifecycle).
         """
+        refused = await _guard_or_error(
+            url,
+            template=_agent_error_payload("")
+            | {
+                "pattern_used": None,
+                "pattern_attempts": [],
+                "product": None,
+                "hostile_skipped": False,
+                "is_structured": False,
+                "challenge_detected": None,
+            },
+        )
+        if refused is not None:
+            return refused
+
         # v1.3.0: resolve and own the cascade's profile dir lifecycle.
         # Mirrors http_server._resolve_profile_dir.
         cleanup_dir: str | None = None
@@ -1409,6 +1477,23 @@ def _build_server(  # noqa: PLR0915 — single-place tool registration
         timeout_s: float = 30.0,
     ) -> dict[str, Any]:
         """Discover URLs on the seed's site."""
+        refused = await _guard_or_error(
+            url,
+            template={
+                "seed": url,
+                "urls": [],
+                "count": 0,
+                "from_sitemap": 0,
+                "from_links": 0,
+                "truncated": False,
+                "dropped_by_limit": 0,
+                "dropped_by_guard": 0,
+                "sitemaps_read": [],
+            },
+        )
+        if refused is not None:
+            return refused
+
         from scrapper_tool.crawl.map import make_ladder_fetch, map_site  # noqa: PLC0415
 
         result = await map_site(
@@ -1426,6 +1511,7 @@ def _build_server(  # noqa: PLR0915 — single-place tool registration
             "from_links": result.from_links,
             "truncated": result.truncated,
             "dropped_by_limit": result.dropped_by_limit,
+            "dropped_by_guard": result.dropped_by_guard,
             "sitemaps_read": list(result.sitemaps_read),
         }
 
@@ -1456,6 +1542,10 @@ def _build_server(  # noqa: PLR0915 — single-place tool registration
         timeout_s: float = 120.0,
     ) -> dict[str, Any]:
         """Crawl from ``url``, running the auto cascade per page."""
+        refused = await _guard_or_error(url, template={"seed": url, "pages": [], "stats": {}})
+        if refused is not None:
+            return refused
+
         from scrapper_tool.crawl.crawl import crawl_to_list  # noqa: PLC0415
 
         async def scrape_one(target: str) -> dict[str, Any]:
@@ -1513,6 +1603,13 @@ def _build_server(  # noqa: PLR0915 — single-place tool registration
         url: str,
         profiles: list[str] | None = None,
     ) -> dict[str, Any]:
+        refused = await _guard_or_error(
+            url,
+            template={"url": url, "winning_profile": None, "exit_code": 1, "results": []},
+        )
+        if refused is not None:
+            return refused
+
         ladder: tuple[str, ...] = tuple(profiles) if profiles else IMPERSONATE_LADDER
         return await run_canary(url, ladder=ladder)
 

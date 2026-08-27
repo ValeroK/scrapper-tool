@@ -154,6 +154,48 @@ Without a key, Tier 2 is skipped — captcha-encountered → `AgentBlockedError(
 
 ---
 
+## Target URL guard (SSRF protection, v2.2.1+)
+
+Every surface that accepts a URL vets it before a request is issued. Private,
+loopback, link-local and cloud-metadata targets are refused, as are non-`http(s)`
+schemes and hostnames that *resolve* into private space.
+
+**On by default.** A control you have to switch on is not a control. To reach a
+legitimate internal target, allowlist it — that keeps the guard running for
+everything else — rather than turning the guard off.
+
+| Env var | Default | Purpose |
+|---------|---------|---------|
+| `SCRAPPER_TOOL_URL_GUARD` | `1` (on) | `0`/`false`/`no`/`off` disables the guard entirely. Logs one loud warning per process. Prefer the allowlist below. |
+| `SCRAPPER_TOOL_URL_GUARD_ALLOW` | unset | Comma-separated hostnames, IPs and CIDRs that are permitted anyway, e.g. `127.0.0.1,10.0.0.0/8,fixtures.internal`. The escape hatch for a local fixture server or an authorised internal scrape. |
+| `SCRAPPER_TOOL_URL_GUARD_DNS` | `1` (on) | `0` skips the DNS check, so only what is visible in the URL is vetted. For air-gapped or slow-resolver hosts. A hostname pointing into private space will not be caught. |
+
+A refusal is reported, never silent:
+
+- **REST** — `403` with `{"error": "url_not_allowed", "reason", "detail", "remedy"}`.
+  Deliberately not `422`, which in this API means "anti-bot blocked" and would
+  make a caller escalate to Pattern D against a permanently refused target.
+- **MCP** — a normal `200` payload with `error_code: "url_not_allowed"` plus
+  `remedy`, and `blocked` left `false` for the same reason.
+- **Crawl / map** — a refused *discovered* link is dropped and counted in
+  `dropped_by_guard`; the seed is the caller's own URL, so it raises instead.
+- **`doctor`** — reports the guard's state in `checks.url_guard`
+  (`on` / `on (allowlist: n)` / `on (no DNS)` / `OFF`).
+
+### What it does and does not cover
+
+| Path | Enforcement |
+|------|-------------|
+| httpx (A/B/C plain, sitemap, robots.txt) | **Per hop.** A redirect into private space is blocked before the connection. |
+| curl_cffi ladder | Pre-flight on the target, then post-flight on the final URL. libcurl follows redirects internally with no per-hop hook, so a redirected request *is issued* — we refuse to return the body. Closing this needs our own hop loop; tracked for a later increment. |
+| Pattern D (Scrapling), render, E1, E2 | Pre-flight on the target only. These tiers own their own navigation. |
+| `obscura` subprocess (`batch_fetch`, `obscura_fetch`) | Pre-flight on every URL. An external binary exposes no hook. |
+
+DNS pinning (resolve once, connect to the pinned address) would close the
+remaining resolve-then-connect race and is deliberately **not** done: it breaks
+TLS SNI, and with it the impersonation fingerprint that Pattern A/B/C exists to
+protect.
+
 ## Cascade tiers
 
 `/scrape` (REST) and `auto_scrape` (MCP) run the same ladder:

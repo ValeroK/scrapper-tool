@@ -3751,3 +3751,72 @@ class TestMetricsEndpoint:
         if metrics_resp.status_code != 200:
             pytest.skip("prometheus-client not installed")
         assert 'scrapper_policy_skips_total{start_tier="render"}' in metrics_resp.text
+
+
+class TestUrlGuard:
+    """The sidecar must refuse a target it should never fetch on a caller's behalf.
+
+    The sidecar is the exposed surface — its API key is optional and compose
+    publishes its port — so this is the layer where an unauthenticated caller
+    would otherwise get a general-purpose request forwarder into the private
+    network.
+    """
+
+    @pytest.mark.parametrize(
+        "endpoint",
+        ["/fetch", "/scrape", "/extract", "/browse", "/map", "/crawl"],
+    )
+    @pytest.mark.asyncio
+    async def test_metadata_target_is_refused_with_403(
+        self, app_no_auth: Any, endpoint: str
+    ) -> None:
+        body: dict[str, Any] = {"url": "http://169.254.169.254/latest/meta-data/"}
+        if endpoint in {"/extract", "/browse"}:
+            body["schema_json"] = {"type": "object"}
+        if endpoint == "/browse":
+            body["instruction"] = "read it"
+        async with _client(app_no_auth) as client:
+            resp = await client.post(endpoint, json=body)
+        assert resp.status_code == 403, f"{endpoint} returned {resp.status_code}"
+        payload = resp.json()
+        assert payload["error"] == "url_not_allowed"
+        assert payload["reason"] == "metadata"
+        # A refusal that doesn't say what to do instead is a dead end.
+        assert payload["remedy"]
+
+    @pytest.mark.asyncio
+    async def test_refusal_is_not_reported_as_a_bot_block(self, app_no_auth: Any) -> None:
+        """422 + blocked=true would make a caller escalate to Pattern D. It must not."""
+        async with _client(app_no_auth) as client:
+            resp = await client.post("/scrape", json={"url": "http://10.0.0.1/admin"})
+        assert resp.status_code == 403
+        assert "blocked" not in resp.json()
+
+    @pytest.mark.parametrize(
+        "url",
+        [
+            "file:///etc/passwd",
+            "http://127.0.0.1:8000/",
+            "http://[::1]/",
+            "http://2130706433/",
+            "http://expected.com@169.254.169.254/",
+            "http://db.internal/",
+        ],
+    )
+    @pytest.mark.asyncio
+    async def test_refused_targets(self, app_no_auth: Any, url: str) -> None:
+        async with _client(app_no_auth) as client:
+            resp = await client.post("/scrape", json={"url": url})
+        assert resp.status_code == 403, f"{url} was not refused"
+
+    @pytest.mark.asyncio
+    async def test_allowlist_lets_a_local_fixture_server_through(
+        self, app_no_auth: Any, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The escape hatch keeps the guard on rather than turning it off."""
+        monkeypatch.setenv("SCRAPPER_TOOL_URL_GUARD_ALLOW", "127.0.0.1")
+        async with _client(app_no_auth) as client:
+            resp = await client.post("/fetch", json={"url": "http://127.0.0.1:9/x"})
+        # Anything but a guard refusal: the fetch itself is expected to fail,
+        # since nothing is listening on port 9.
+        assert resp.status_code != 403

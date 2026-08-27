@@ -30,6 +30,7 @@ from urllib.robotparser import RobotFileParser
 import httpx
 
 from scrapper_tool._logging import get_logger
+from scrapper_tool.http import guard_client
 
 _logger = get_logger(__name__)
 
@@ -127,7 +128,9 @@ class RobotsCache:
     async def _fetch(self, origin: str, client: httpx.AsyncClient | None) -> _Entry:
         robots_url = f"{origin}/robots.txt"
         owns_client = client is None
-        http = client or httpx.AsyncClient(timeout=self.timeout_s, follow_redirects=True)
+        http = client or guard_client(
+            httpx.AsyncClient(timeout=self.timeout_s, follow_redirects=True)
+        )
         try:
             response = await http.get(robots_url, headers={"User-Agent": self.user_agent})
         except httpx.HTTPError as exc:

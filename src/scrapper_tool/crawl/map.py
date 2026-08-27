@@ -26,6 +26,8 @@ import httpx
 from selectolax.lexbor import LexborHTMLParser
 
 from scrapper_tool._logging import get_logger
+from scrapper_tool._urlguard import check_url
+from scrapper_tool.http import guard_client
 
 if TYPE_CHECKING:
     from collections.abc import Awaitable, Callable, Iterable
@@ -89,6 +91,11 @@ class MapResult:
     from_links: int = 0
     dropped_by_limit: int = 0
     sitemaps_read: tuple[str, ...] = field(default_factory=tuple)
+    #: Discovered URLs the pre-flight guard refused (private/loopback/metadata
+    #: targets, non-http schemes). Reported for the same reason as
+    #: ``dropped_by_limit``: a count of what was silently not returned is the
+    #: difference between a trustworthy inventory and a misleading one.
+    dropped_by_guard: int = 0
 
     @property
     def truncated(self) -> bool:
@@ -169,7 +176,7 @@ async def fetch_sitemap_urls(
     no sitemap is normal, and link discovery covers it.
     """
     owns_client = client is None
-    http = client or httpx.AsyncClient(timeout=timeout_s, follow_redirects=True)
+    http = client or guard_client(httpx.AsyncClient(timeout=timeout_s, follow_redirects=True))
     urls: list[str] = []
     read: list[str] = []
     try:
@@ -246,8 +253,19 @@ async def map_site(
     from_links = 0
     sitemaps_read: list[str] = []
 
-    def add(candidate: str) -> bool:
+    refused = 0
+
+    def add(candidate: str, *, discovered: bool = True) -> bool:
+        nonlocal refused
         if same_domain and not same_site(candidate, seed):
+            return False
+        # Discovered URLs come from a page or a sitemap the target controls, so
+        # they are attacker-influenced input and get vetted. The seed does not:
+        # it is the caller's own explicit choice, and it was already vetted at
+        # the public surface, where a refusal *raises* rather than quietly
+        # dropping the one URL the caller asked about.
+        if discovered and not check_url(candidate).allowed:
+            refused += 1
             return False
         if candidate in seen:
             return False
@@ -255,7 +273,7 @@ async def map_site(
         ordered.append(candidate)
         return True
 
-    add(seed)
+    add(seed, discovered=False)
 
     if include_sitemap:
         sitemap_urls, sitemaps_read = await fetch_sitemap_urls(seed, client=client)
@@ -279,6 +297,8 @@ async def map_site(
         # Never silently truncate: a caller planning a crawl needs to know the
         # difference between "the whole site" and "the first page of it".
         _logger.info("crawl.map.truncated", seed=seed, kept=max_urls, dropped=dropped)
+    if refused:
+        _logger.info("crawl.map.guard_dropped", seed=seed, dropped=refused)
     _logger.info(
         "crawl.map.done",
         seed=seed,
@@ -292,6 +312,7 @@ async def map_site(
         from_sitemap=from_sitemap,
         from_links=from_links,
         dropped_by_limit=dropped,
+        dropped_by_guard=refused,
         sitemaps_read=tuple(sitemaps_read),
     )
 

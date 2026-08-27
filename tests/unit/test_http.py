@@ -196,3 +196,71 @@ class TestMaxAttempts:
         async with vendor_client() as client:
             await request_with_retry(client, "GET", "https://example.test/limit", max_attempts=5)
         assert route.call_count == 5
+
+
+class TestGuardedTransport:
+    """The URL guard must vet every hop without disturbing httpx's own routing.
+
+    Regression cover for a real bug: the guard was first installed by passing
+    ``transport=`` at client construction, which makes httpx skip building its
+    proxy ``mounts`` entirely — silently disabling the standard HTTP_PROXY /
+    HTTPS_PROXY / NO_PROXY variables that ``trust_env`` honours by default.
+    Traffic that used to go through a proxy would have quietly gone direct, and
+    no mocked test could see it because respx patches underneath that layer.
+    """
+
+    @pytest.mark.asyncio
+    async def test_env_proxy_is_still_honoured(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setenv("HTTPS_PROXY", "http://proxy.invalid:8080")
+        async with vendor_client() as client:
+            assert client._mounts, (
+                "env-var proxies stopped being resolved — the guard must wrap "
+                "httpx's transports, not replace them"
+            )
+
+    @pytest.mark.asyncio
+    async def test_every_route_is_guarded_including_the_proxied_one(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from scrapper_tool.http import _GuardedTransport
+
+        monkeypatch.setenv("HTTPS_PROXY", "http://proxy.invalid:8080")
+        monkeypatch.setenv("NO_PROXY", "direct.example.test")
+        async with vendor_client() as client:
+            for url in ("https://example.test/x", "https://direct.example.test/x"):
+                transport = client._transport_for_url(httpx.URL(url))
+                assert isinstance(transport, _GuardedTransport), f"{url} routed unguarded"
+
+    @pytest.mark.asyncio
+    async def test_a_redirect_into_private_space_is_refused_mid_chain(
+        self, respx_mock: respx.Router
+    ) -> None:
+        """The hop the caller never named is the one a call-site check misses."""
+        from scrapper_tool.errors import UrlNotAllowed
+
+        respx_mock.get("https://example.test/redirect").mock(
+            return_value=httpx.Response(302, headers={"Location": "http://169.254.169.254/creds"})
+        )
+        hop = respx_mock.get("http://169.254.169.254/creds").mock(
+            return_value=httpx.Response(200, text="secrets")
+        )
+        async with vendor_client() as client:
+            with pytest.raises(UrlNotAllowed):
+                await request_with_retry(client, "GET", "https://example.test/redirect")
+        assert hop.call_count == 0, (
+            "the second hop was issued — post-flight refusal is not prevention"
+        )
+
+    @pytest.mark.asyncio
+    async def test_an_ordinary_redirect_still_follows(self, respx_mock: respx.Router) -> None:
+        """The guard must be invisible to legitimate redirects."""
+        respx_mock.get("https://example.test/old").mock(
+            return_value=httpx.Response(301, headers={"Location": "https://example.test/new"})
+        )
+        respx_mock.get("https://example.test/new").mock(
+            return_value=httpx.Response(200, text="arrived")
+        )
+        async with vendor_client() as client:
+            resp = await request_with_retry(client, "GET", "https://example.test/old")
+        assert resp.status_code == 200
+        assert resp.text == "arrived"

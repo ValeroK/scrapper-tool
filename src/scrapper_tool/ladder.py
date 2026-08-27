@@ -46,6 +46,7 @@ from typing import TYPE_CHECKING, Any, cast
 from curl_cffi.requests import AsyncSession as _CurlCffiAsyncSession
 
 from scrapper_tool._logging import get_logger
+from scrapper_tool._urlguard import assert_url_allowed_nodns
 from scrapper_tool.errors import BlockedError, VendorHTTPError
 from scrapper_tool.http import _DEFAULT_USER_AGENT, request_with_retry
 from scrapper_tool.proxy import resolve_proxy
@@ -282,6 +283,16 @@ async def request_with_ladder(
                 proxied=attempt_proxy is not None,
             )
             continue
+
+        # Post-flight check on where we actually ended up. libcurl follows
+        # redirects inside a single ``request()`` call and exposes no per-hop
+        # hook, so unlike the httpx path we cannot *prevent* a hop into private
+        # space here — only refuse to hand the body back. That is a real
+        # limitation, not a complete control: the request was issued, and a
+        # state-changing GET has already happened. Closing it properly needs
+        # ``allow_redirects=False`` plus a hop loop of our own, which has to be
+        # proven not to disturb the impersonation fingerprint first.
+        assert_url_allowed_nodns(str(resp.url))
 
         if managed_pool is not None:
             managed_pool.mark_ok(attempt_proxy)

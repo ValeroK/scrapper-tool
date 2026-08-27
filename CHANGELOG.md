@@ -4,6 +4,104 @@ All notable changes to `scrapper-tool` are recorded here. Format follows [Keep a
 
 ## [Unreleased]
 
+First increment of the concept-adoption series planned in
+`docs/research/2026-08-26-donsetch-concepts.md`, which audited a competing tool
+against this one and ranked what was worth rebuilding. This one closes the item
+that was a live security hole rather than a missed optimisation.
+
+### Added
+
+- **A pre-flight target-URL guard (`scrapper_tool._urlguard`), on by default.**
+  Until now nothing in this library validated a URL's host on any surface. Every
+  public entry point takes a caller-supplied URL and fetches it, and the REST
+  sidecar's API key is a no-op when unset while `docker-compose.yml` publishes
+  its port on all interfaces — so a reachable sidecar was a general-purpose
+  request forwarder aimed at whatever the caller named: `169.254.169.254` and
+  the cloud credentials behind it, any RFC1918 host, anything on loopback.
+
+  Refused: non-`http(s)` schemes; credentials in the authority
+  (`https://expected.com@169.254.169.254/` reads as one host and fetches
+  another); loopback, private, link-local, CGNAT, benchmark, multicast and
+  reserved space; cloud-metadata endpoints by address *and* by name; special-use
+  suffixes (`.local`, `.internal`, `.onion`, ...); and hostnames that **resolve**
+  into any of the above, checked across every address returned — one public plus
+  one private answer is a rebinding attack, not a misconfiguration.
+
+  Two classes of bypass get explicit handling because the standard library does
+  not cover them. `ipaddress.IPv4Address` *rejects* `2130706433`, `0x7f000001`,
+  `0177.0.0.1` and `127.1`, so left alone they are treated as hostnames and
+  handed to a resolver that maps every one of them to loopback; and
+  `IPv6Address("::ffff:127.0.0.1").is_loopback` is **False**, so mapped, 6to4 and
+  Teredo addresses pass every stdlib property. Both are normalised and
+  re-classified.
+
+  `.test`, `.invalid` and `.example` are deliberately **not** refused: they are
+  reserved never to resolve, so they cannot reach private infrastructure, and
+  `.test` is the TLD RFC 6761 sets aside for exactly the hermetic testing this
+  repo's suite does.
+
+  A DNS failure is **allowed**, not refused. A resolver blip must not become a
+  403 that reads like a caller error — the fetch fails on its own with a
+  transport error callers already handle. A guard that invents its own flakiness
+  is a guard that gets switched off.
+
+- **Per-hop enforcement on the httpx path** via `http.guarded_transport()`.
+  A check at the call site cannot see where a `302` sends us, and every client
+  here follows redirects — so `https://harmless.example/r?to=169.254.169.254`
+  would defeat a call-site check entirely. httpx re-enters the transport once per
+  hop, which makes that the only place on this path where every hop is visible.
+
+- `dropped_by_guard` on `CrawlStats` and `MapResult`, surfaced on both
+  surfaces' crawl and map responses. A refused *discovered* link is dropped and
+  counted; the seed is the caller's own URL, so it raises instead of vanishing.
+  Same reasoning as the existing `dropped_by_limit`: a count of what was not
+  returned is the difference between a trustworthy inventory and a misleading one.
+
+- `checks.url_guard` in `doctor` — `on` / `on (allowlist: n)` / `on (no DNS)` /
+  `OFF`, with a fix line when disabled. Upper-case when off, following how
+  `proxy_pool` already names an untrusted pool: not a fault the operator must
+  fix, but a weakened-by-choice posture that should be impossible to miss.
+
+- `UrlNotAllowed` in the exception hierarchy, carrying `reason` and `remedy`.
+  Deliberately **not** `ConfigurationError` (that means local misconfiguration
+  and maps to 503, telling every retry layer to back off and try again forever)
+  and **not** `BlockedError` (that means "anti-bot walled us", maps to 422 with
+  `blocked: true`, and would make a caller's escalation logic aim Pattern D at
+  the refused host).
+
+### Changed
+
+- **Behavior change: the guard is enabled by default.** Set
+  `SCRAPPER_TOOL_URL_GUARD_ALLOW=<host-or-cidr>` to reach a legitimate internal
+  target — that keeps the guard running for everything else — in preference to
+  `SCRAPPER_TOOL_URL_GUARD=0`, which disables it wholesale and logs one loud
+  warning per process. `SCRAPPER_TOOL_URL_GUARD_DNS=0` keeps the guard but skips
+  resolution, for air-gapped or slow-resolver hosts.
+
+- REST refusals return **403** `{"error": "url_not_allowed", "reason", "detail",
+  "remedy"}`, matching the 403 the sidecar already returns when it declines to
+  carry cookies for an unauthenticated caller — same meaning: the sidecar will
+  not do this on your behalf. MCP tools, which never raise, return their normal
+  payload shape as a superset with `error_code` and `remedy` added and `blocked`
+  left `false`.
+
+### Known limits
+
+- **The curl_cffi ladder and the browser tiers are pre-flight and post-flight
+  only.** libcurl follows redirects inside one `request()` call and exposes no
+  per-hop hook, and the browser tiers own their own navigation, so a redirect
+  into private space on those paths *does issue the request* — we can only
+  refuse to return the body. That is blind SSRF, and it is not a safe residual:
+  a state-changing GET has already happened, and the distinct error codes and
+  timings we return make a serviceable internal port scanner. Closing it needs
+  `allow_redirects=False` plus a hop loop of our own, which has to be proven not
+  to disturb the impersonation fingerprint first. Tracked as the next increment;
+  the per-path matrix is documented in `docs/SETTINGS.md`.
+
+- DNS pinning (resolve once, then connect to the pinned address) would close the
+  remaining resolve-then-connect race and is **rejected permanently**: it breaks
+  TLS SNI, and with it the impersonation fingerprint Pattern A/B/C exists to
+  protect.
 ### Changed
 
 - **CI pins the Camoufox browser build.** `uv.lock` pins `camoufox==0.5.4` — the

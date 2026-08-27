@@ -7,6 +7,7 @@
     │   └── VendorUnavailable     (alias for breaker call-sites)
     ├── BlockedError              (403 / Cloudflare challenge / Akamai EVA / Distil — anti-bot)
     ├── ParseError                (extractor couldn't find expected fields in the response)
+    ├── UrlNotAllowed             (target URL refused before any request was issued)
     └── AgentError                (Pattern E LLM-agent failures)
         ├── AgentTimeoutError     (asyncio.wait_for exceeded)
         ├── AgentBlockedError     (also subclasses BlockedError — caught by existing handlers)
@@ -66,6 +67,41 @@ class ParseError(ScrapingError):
     Indicates parser drift (vendor changed markup) or a fixture-vs-live
     mismatch. NOT a circuit-breaker signal — re-fetching won't help.
     """
+
+
+class UrlNotAllowed(ScrapingError):
+    """Raised when a target URL is refused *before* any request is issued.
+
+    Covers everything the pre-flight guard rejects: a non-http(s) scheme,
+    a host that resolves into private/loopback/link-local space, cloud
+    metadata endpoints, and special-use suffixes like ``.internal``.
+
+    Named for the event rather than the threat model on purpose. The same
+    refusal fires for a typo'd ``file://`` URL as for a deliberate SSRF
+    probe, and calling that class of mistake an attack reads badly in a
+    log. The guard's verdict carries the machine-readable ``reason``.
+
+    Deliberately NOT :class:`ConfigurationError` (that means *local*
+    misconfiguration and maps to 503, which tells every retry layer to
+    back off and try again later — wrong for a URL that will never be
+    allowed) and NOT :class:`BlockedError` (that means "anti-bot walled
+    us" and would make a caller's escalation logic aim Pattern D at the
+    refused host). The HTTP sidecar maps this to ``403 Forbidden`` with
+    ``{"error": "url_not_allowed", "detail": ..., "remedy": ...}``,
+    matching the 403 it already returns when it refuses to carry cookies
+    for an unauthenticated caller: the sidecar declines to act, rather
+    than reporting that the target failed.
+
+    Carries the guard's verdict alongside the message so a surface can put
+    a stable code and a fix in its error payload without re-parsing prose.
+    Both default to ``""`` for anyone constructing this by hand.
+    """
+
+    #: Stable refusal code — ``"metadata"``, ``"private_ip"``, ``"scheme"``, …
+    #: See ``scrapper_tool._urlguard.Reason`` for the full set.
+    reason: str = ""
+    #: Operator-facing remediation for :attr:`reason`.
+    remedy: str = ""
 
 
 class ConfigurationError(ScrapingError):
@@ -147,6 +183,7 @@ __all__ = [
     "ConfigurationError",
     "ParseError",
     "ScrapingError",
+    "UrlNotAllowed",
     "VendorHTTPError",
     "VendorUnavailable",
 ]

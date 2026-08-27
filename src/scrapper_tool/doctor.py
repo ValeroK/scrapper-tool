@@ -37,7 +37,7 @@ import os
 import sys
 from typing import TYPE_CHECKING, Any
 
-from scrapper_tool import __version__, _extras
+from scrapper_tool import __version__, _extras, _urlguard
 from scrapper_tool.recipe.policy import TIER_ORDER
 
 if TYPE_CHECKING:
@@ -300,11 +300,35 @@ def _environment_checks(cfg: Any) -> tuple[dict[str, Any], list[str]]:
 
     checks["proxy_pool"] = _proxy_pool_state()
 
+    checks["url_guard"] = _url_guard_state()
+    if not _urlguard.url_guard_enabled():
+        fixes.append(
+            "unset SCRAPPER_TOOL_URL_GUARD (or set it to 1) to re-enable SSRF "
+            "protection; to reach a specific internal target instead, use "
+            "SCRAPPER_TOOL_URL_GUARD_ALLOW=<host-or-cidr>"
+        )
+
     lxml_state = _lxml_state()
     if lxml_state is not None:
         checks["lxml"] = lxml_state
 
     return checks, fixes
+
+
+def _url_guard_state() -> str:
+    """``on`` / ``on (allowlist: n)`` / ``OFF``.
+
+    Reported in upper case when disabled, following ``proxy_pool``'s treatment
+    of an untrusted pool: not an error the operator has to fix, but a
+    weakened-by-choice posture that should be impossible to miss in a report
+    they are reading precisely to find out what this install will do.
+    """
+    if not _urlguard.url_guard_enabled():
+        return "OFF"
+    policy = _urlguard.guard_policy()
+    detail = "on" if policy.resolve_dns else "on (no DNS)"
+    allowed = len(policy.allow_hosts) + len(policy.allow_networks)
+    return f"{detail} (allowlist: {allowed})" if allowed else detail
 
 
 def _proxy_pool_state() -> str:

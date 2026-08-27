@@ -54,6 +54,7 @@ from pydantic import BaseModel, ConfigDict, Field  # noqa: E402 — after warnin
 
 from scrapper_tool import __version__, _extras  # noqa: E402
 from scrapper_tool._logging import get_logger  # noqa: E402
+from scrapper_tool._urlguard import REFUSAL_REMEDIES, assert_url_allowed  # noqa: E402
 
 # CookieIn is a runtime import, not a TYPE_CHECKING one: it appears in a
 # Pydantic field annotation, and pydantic resolves those against module globals
@@ -67,6 +68,7 @@ from scrapper_tool.errors import (  # noqa: E402
     BlockedError,
     ConfigurationError,
     ScrapingError,
+    UrlNotAllowed,
     VendorHTTPError,
 )
 from scrapper_tool.ladder import IMPERSONATE_LADDER  # noqa: E402
@@ -576,6 +578,24 @@ def _build_app(
     async def _h_agent(_req: Request, exc: AgentError) -> Response:
         return JSONResponse(status_code=500, content={"error": "agent_error", "detail": str(exc)})
 
+    @app.exception_handler(UrlNotAllowed)
+    async def _h_url_not_allowed(_req: Request, exc: UrlNotAllowed) -> Response:
+        # 403, not 400 or 422. The request is well-formed, so 400 would invite a
+        # fix-and-retry loop over a target that will never be permitted; and 422
+        # already means "anti-bot blocked" in this API's vocabulary, which would
+        # make a caller escalate to Pattern D against a refused host. 403 is what
+        # the sidecar already returns when it declines to carry cookies for an
+        # unauthenticated caller — same meaning: the sidecar will not do this.
+        return JSONResponse(
+            status_code=403,
+            content={
+                "error": "url_not_allowed",
+                "detail": str(exc),
+                "reason": exc.reason,
+                "remedy": exc.remedy or REFUSAL_REMEDIES.get(exc.reason, ""),
+            },
+        )
+
     @app.exception_handler(ScrapingError)
     async def _h_scraping(_req: Request, exc: ScrapingError) -> Response:
         return JSONResponse(
@@ -900,6 +920,8 @@ def _looks_like_spa_shell(html: str) -> bool:
 
 async def _do_fetch(req: Any) -> dict[str, Any]:
     """POST /fetch — runs the impersonation ladder + optional B/C extraction."""
+    await assert_url_allowed(req.url)
+
     from scrapper_tool.ladder import request_with_ladder  # noqa: PLC0415
 
     response, profile = await request_with_ladder(
@@ -940,6 +962,8 @@ async def _do_fetch(req: Any) -> dict[str, Any]:
 
 async def _do_extract(req: Any) -> dict[str, Any]:
     """POST /extract — Pattern E1."""
+    await assert_url_allowed(req.url)
+
     try:
         from scrapper_tool.agent import AgentConfig, agent_extract  # noqa: PLC0415
     except ImportError as exc:
@@ -952,6 +976,8 @@ async def _do_extract(req: Any) -> dict[str, Any]:
 
 async def _do_browse(req: Any) -> dict[str, Any]:
     """POST /browse — Pattern E2."""
+    await assert_url_allowed(req.url)
+
     try:
         from scrapper_tool.agent import AgentConfig, agent_browse  # noqa: PLC0415
     except ImportError as exc:
@@ -2376,6 +2402,7 @@ async def _do_scrape(req: Any) -> dict[str, Any]:
     req.__dict__["_resolved_profile_dir"] = profile_dir
 
     # Before any tier runs, and before a byte leaves the process.
+    await assert_url_allowed(req.url)
     _assert_cookies_safe_to_send(req)
 
     payload: dict[str, Any] | None = None
@@ -2610,6 +2637,8 @@ async def _do_deterministic_tiers(
 
 async def _do_map(req: MapRequest) -> dict[str, Any]:
     """POST /map — discover URLs on the seed's site."""
+    await assert_url_allowed(req.url)
+
     from scrapper_tool.crawl.map import make_ladder_fetch, map_site  # noqa: PLC0415
 
     start = time.perf_counter()
@@ -2628,6 +2657,7 @@ async def _do_map(req: MapRequest) -> dict[str, Any]:
         "from_links": result.from_links,
         "truncated": result.truncated,
         "dropped_by_limit": result.dropped_by_limit,
+        "dropped_by_guard": result.dropped_by_guard,
         "sitemaps_read": list(result.sitemaps_read),
         "duration_s": round(time.perf_counter() - start, 3),
     }
@@ -2640,6 +2670,8 @@ async def _do_crawl(req: CrawlRequest) -> dict[str, Any]:
     the render tier, challenge detection, and proxy rotation for free — and the
     recipe learned on page one makes the rest of the crawl cheap.
     """
+    await assert_url_allowed(req.url)
+
     from scrapper_tool.crawl.crawl import crawl_to_list  # noqa: PLC0415
 
     start = time.perf_counter()

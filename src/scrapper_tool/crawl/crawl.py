@@ -26,6 +26,7 @@ from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
 
 from scrapper_tool._logging import get_logger
+from scrapper_tool._urlguard import check_url
 from scrapper_tool.crawl.map import extract_links, normalise_url, same_site
 from scrapper_tool.crawl.robots import RobotsCache
 
@@ -73,6 +74,10 @@ class CrawlStats:
     hit_page_limit: bool = False
     hit_depth_limit: bool = False
     elapsed_s: float = 0.0
+    #: Discovered links the pre-flight guard refused. Counted for the same
+    #: reason as ``skipped_robots``: a crawl that quietly declines to follow
+    #: links is one whose coverage you cannot reason about.
+    dropped_by_guard: int = 0
 
     def as_dict(self) -> dict[str, Any]:
         return {
@@ -83,6 +88,7 @@ class CrawlStats:
             "hit_page_limit": self.hit_page_limit,
             "hit_depth_limit": self.hit_depth_limit,
             "elapsed_s": round(self.elapsed_s, 3),
+            "dropped_by_guard": self.dropped_by_guard,
         }
 
 
@@ -187,7 +193,9 @@ async def crawl(
                 continue
 
             if page.depth < depth:
-                _enqueue_links(frontier, page, seed=seed, same_domain=same_domain)
+                _enqueue_links(
+                    frontier, page, seed=seed, same_domain=same_domain, counters=counters
+                )
             else:
                 counters.hit_depth_limit = True
             yield page
@@ -206,8 +214,21 @@ async def crawl(
     _logger.info("crawl.done", seed=seed, **counters.as_dict())
 
 
-def _enqueue_links(frontier: _Frontier, page: CrawlPage, *, seed: str, same_domain: bool) -> None:
-    """Queue this page's outbound links for the next depth level."""
+def _enqueue_links(
+    frontier: _Frontier,
+    page: CrawlPage,
+    *,
+    seed: str,
+    same_domain: bool,
+    counters: CrawlStats,
+) -> None:
+    """Queue this page's outbound links for the next depth level.
+
+    Every link here came out of a document the target controls, which makes it
+    the one place in a crawl where a third party chooses our next URL. So links
+    are vetted before they reach the frontier, and what was refused is counted
+    rather than silently discarded.
+    """
     payload = page.payload or {}
     # The two surfaces name the HTML field differently — REST uses `raw_text`,
     # MCP uses `body` (truncated for the agent's context). Reading only one
@@ -223,6 +244,9 @@ def _enqueue_links(frontier: _Frontier, page: CrawlPage, *, seed: str, same_doma
         if candidate is None:
             continue
         if same_domain and not same_site(candidate, seed):
+            continue
+        if not check_url(candidate).allowed:
+            counters.dropped_by_guard += 1
             continue
         frontier.push(candidate, page.depth + 1)
 
