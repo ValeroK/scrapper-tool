@@ -13,9 +13,13 @@ on:
         required: false
         default: "patchright"
       model:
-        description: "Ollama model"
+        description: "Ollama model (extraction)"
         required: false
         default: "qwen3-vl:8b"
+      captcha_vision_model:
+        description: "Model for the captcha grid tier (empty reuses `model`)"
+        required: false
+        default: "qwen3.8-27b-apex"
       ollama_url:
         description: "Ollama base URL"
         required: false
@@ -35,6 +39,7 @@ jobs:
       SCRAPPER_TOOL_AGENT: "1"
       SCRAPPER_TOOL_AGENT_BROWSER: ${{ inputs.browser }}
       SCRAPPER_TOOL_AGENT_MODEL: ${{ inputs.model }}
+      SCRAPPER_TOOL_CAPTCHA_VISION_MODEL: ${{ inputs.captcha_vision_model }}
       SCRAPPER_TOOL_AGENT_OLLAMA_URL: ${{ inputs.ollama_url }}
     steps:
       - uses: actions/checkout@v6

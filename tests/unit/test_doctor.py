@@ -17,6 +17,7 @@ and the CLI can be tested against a hand-built report.
 
 from __future__ import annotations
 
+import asyncio
 import json
 from typing import Any
 
@@ -35,11 +36,27 @@ class _FakeCfg:
         llm: str = "ollama",
         model: str = "qwen3-vl:8b",
         ollama_url: str = "http://localhost:11434",
+        captcha_vision_model: str | None = None,
     ) -> None:
         self.browser = browser
         self.llm = llm
         self.model = model
         self.ollama_url = ollama_url
+        self.captcha_vision_model = captcha_vision_model
+
+    def merged(self, **overrides: Any) -> _FakeCfg:
+        """Mirror AgentConfig.merged — doctor probes the vision model through it."""
+        merged = _FakeCfg(
+            browser=self.browser,
+            llm=self.llm,
+            model=self.model,
+            ollama_url=self.ollama_url,
+            captcha_vision_model=self.captcha_vision_model,
+        )
+        for key, value in overrides.items():
+            if value is not None:
+                setattr(merged, key, value)
+        return merged
 
 
 @pytest.fixture
@@ -366,3 +383,111 @@ class TestCliIntegration:
         monkeypatch.setattr("sys.argv", ["scrapper-tool-doctor", "--json"])
         doctor_module.main()
         json.loads(capsys.readouterr().out)  # would raise if --json were dropped
+
+
+class TestCaptchaVisionModelCheck:
+    """The grid tier's model is reported separately from the e1 tier's.
+
+    They are different models by design, so `e1 | ok` says nothing about whether
+    the grid tier can see. The vision default is a large VLM many hosts cannot
+    serve, and the tier fails quietly on purpose (honest False, cascade
+    escalates) -- so if doctor stays silent, an operator finds out mid-solve.
+    """
+
+    @pytest.mark.asyncio
+    async def test_reports_ok_when_available(
+        self, all_healthy: None, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setattr(
+            doctor_module,
+            "_load_agent_config",
+            lambda: (_FakeCfg(captcha_vision_model="big-vlm:27b"), None),
+        )
+        report = await doctor_module.run_doctor()
+        assert report["checks"]["captcha_vision_model"] == "big-vlm:27b ok"
+
+    @pytest.mark.asyncio
+    async def test_unavailable_model_is_named_and_gets_a_fix(
+        self, all_healthy: None, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        async def _no_model(_cfg: Any) -> tuple[bool, bool]:
+            return True, False
+
+        monkeypatch.setattr(_extras, "probe_llm", _no_model)
+        monkeypatch.setattr(
+            doctor_module,
+            "_load_agent_config",
+            lambda: (_FakeCfg(captcha_vision_model="big-vlm:27b"), None),
+        )
+        report = await doctor_module.run_doctor()
+        assert "NOT AVAILABLE" in report["checks"]["captcha_vision_model"]
+        assert any("big-vlm:27b" in fix for fix in report["fixes"]), (
+            "an unavailable vision model must come with a remedy naming it"
+        )
+
+    @pytest.mark.asyncio
+    async def test_empty_setting_reports_that_it_reuses_the_extraction_model(
+        self, all_healthy: None
+    ) -> None:
+        report = await doctor_module.run_doctor()
+        assert report["checks"]["captcha_vision_model"].startswith("reuses model")
+
+    @pytest.mark.asyncio
+    async def test_a_probe_failure_degrades_to_a_line_not_an_exception(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A diagnostic that crashes the diagnosis is worthless.
+
+        Exercised against ``_captcha_vision_state`` directly rather than through
+        ``run_doctor``: ``_extras.probe_llm`` never raises by contract (it catches
+        and returns a tuple), so a raising stub would be testing a fiction at the
+        whole-report level -- and it would surface in ``_probe_e1``, which runs
+        first and only catches ``TimeoutError``. This asserts the narrower, true
+        claim: *this* probe tolerates a backend that misbehaves.
+        """
+
+        async def _boom(_cfg: Any) -> tuple[bool, bool]:
+            msg = "backend exploded"
+            raise RuntimeError(msg)
+
+        monkeypatch.setattr(_extras, "probe_llm", _boom)
+        state, fix = await doctor_module._captcha_vision_state(
+            _FakeCfg(captcha_vision_model="big-vlm:27b")
+        )
+        assert state == "big-vlm:27b (probe failed)"
+        assert fix == "", "a probe we could not run is not grounds for a fix line"
+
+    @pytest.mark.asyncio
+    async def test_a_timeout_degrades_to_a_line(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        async def _hang(_cfg: Any) -> tuple[bool, bool]:
+            await asyncio.sleep(doctor_module._PROBE_TIMEOUT_S * 3)
+            return True, True
+
+        monkeypatch.setattr(_extras, "probe_llm", _hang)
+        monkeypatch.setattr(doctor_module, "_PROBE_TIMEOUT_S", 0.01)
+        state, _fix = await doctor_module._captcha_vision_state(
+            _FakeCfg(captcha_vision_model="big-vlm:27b")
+        )
+        assert "probe failed" in state
+
+    @pytest.mark.asyncio
+    async def test_an_unavailable_vision_model_does_not_fail_the_install(
+        self, all_healthy: None, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The grid tier is best-effort; a missing VLM is not a broken install.
+
+        It must not push the report to not_ready, or every machine without a 27B
+        would look broken while every other tier works.
+        """
+
+        async def _no_model(_cfg: Any) -> tuple[bool, bool]:
+            return True, False
+
+        monkeypatch.setattr(_extras, "probe_llm", _no_model)
+        monkeypatch.setattr(
+            doctor_module,
+            "_load_agent_config",
+            lambda: (_FakeCfg(captcha_vision_model="big-vlm:27b"), None),
+        )
+        report = await doctor_module.run_doctor()
+        assert report["status"] != "not_ready"

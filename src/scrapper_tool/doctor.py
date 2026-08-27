@@ -315,6 +315,50 @@ def _environment_checks(cfg: Any) -> tuple[dict[str, Any], list[str]]:
     return checks, fixes
 
 
+async def _captcha_vision_state(  # noqa: PLR0911 — one return per probe outcome
+    cfg: Any,
+) -> tuple[str | None, str]:
+    """``(state, fix)`` for the captcha grid tier's vision model.
+
+    Reported separately from the ``e1`` tier because they use *different models*
+    on purpose, so ``e1 | ok`` says nothing about whether the grid tier can see.
+    The vision default is a large VLM that plenty of machines cannot serve, and
+    the failure is quiet by design — the tier returns an honest ``False`` and the
+    cascade escalates — so without this line an operator discovers it mid-solve
+    instead of at install time.
+
+    Not a :data:`REPORT_TIERS` entry: that tuple is the cascade ladder and it
+    gates ``--require-tier``, and this is one model inside one tier.
+    """
+    if cfg is None:
+        return None, ""
+    configured = getattr(cfg, "captcha_vision_model", None)
+    if not configured:
+        return f"reuses model ({getattr(cfg, 'model', '?')})", ""
+
+    try:
+        reachable, available = await asyncio.wait_for(
+            _extras.probe_llm(cfg.merged(model=configured)), timeout=_PROBE_TIMEOUT_S
+        )
+    except Exception:  # a diagnostic that crashes the diagnosis is worthless
+        return f"{configured} (probe failed)", ""
+
+    if reachable is None:
+        return f"{configured} (backend not probeable)", ""
+    if not reachable:
+        # The e1 row already reports an unreachable backend with its own fix;
+        # repeating it here would just duplicate a line in the Fixes block.
+        return f"{configured} (LLM unreachable)", ""
+    if not available:
+        return (
+            f"{configured} NOT AVAILABLE",
+            f"pull the captcha vision model ({configured}) or set "
+            "SCRAPPER_TOOL_CAPTCHA_VISION_MODEL to one this host serves; "
+            "leave it empty to reuse the extraction model",
+        )
+    return f"{configured} ok", ""
+
+
 def _url_guard_state() -> str:
     """``on`` / ``on (allowlist: n)`` / ``OFF``.
 
@@ -406,6 +450,12 @@ async def run_doctor(*, require_tier: str | None = None) -> dict[str, Any]:
     checks, env_fixes = _environment_checks(cfg)
     if cfg_error is not None:
         checks["agent_config_error"] = cfg_error
+
+    vision_state, vision_fix = await _captcha_vision_state(cfg)
+    if vision_state is not None:
+        checks["captcha_vision_model"] = vision_state
+    if vision_fix:
+        env_fixes.append(vision_fix)
 
     # De-duplicate fixes while preserving first-seen order: the same
     # `pip install` line is often the remedy for several tiers at once, and a

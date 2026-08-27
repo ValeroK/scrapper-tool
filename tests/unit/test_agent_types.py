@@ -14,6 +14,7 @@ from __future__ import annotations
 import pytest
 
 from scrapper_tool.agent.types import (
+    DEFAULT_CAPTCHA_VISION_MODEL,
     ActionTrace,
     AgentConfig,
     AgentResult,
@@ -158,3 +159,49 @@ class TestAgentResultSerialization:
         assert roundtripped.data == {"title": "Hello"}
         assert roundtripped.actions[0].action == "extract"
         assert roundtripped.steps_used == 1
+
+
+class TestCaptchaVisionModel:
+    """The grid tier gets its own model, and the two must not collapse into one.
+
+    Extraction wants a small instruction-follower; grids want a large VLM. The
+    repo's own measurements have them at opposite ends (gemma-4-e4b: 0/5 on
+    grids but fastest at extraction), so a change that quietly makes one field
+    follow the other breaks whichever job it was not chosen for -- silently,
+    which is the failure mode these tests exist to prevent.
+    """
+
+    def test_vision_model_defaults_to_a_dedicated_model(self) -> None:
+        cfg = AgentConfig()
+        assert cfg.captcha_vision_model == DEFAULT_CAPTCHA_VISION_MODEL
+
+    def test_vision_model_is_not_the_extraction_model(self) -> None:
+        cfg = AgentConfig()
+        assert cfg.captcha_vision_model != cfg.model, (
+            "the whole point of the field is that these differ; if a change "
+            "makes them equal, the grid tier silently inherits a model measured "
+            "at 0-1/5 on reCAPTCHA"
+        )
+
+    def test_env_override_wins(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setenv("SCRAPPER_TOOL_CAPTCHA_VISION_MODEL", "some-other-vlm:9b")
+        assert AgentConfig.from_env().captcha_vision_model == "some-other-vlm:9b"
+
+    def test_empty_env_value_means_reuse_the_extraction_model(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Empty and unset must not mean the same thing.
+
+        Unset takes the default; explicitly empty is how an operator says "one
+        model is fine for both here". Collapsing them would remove the only way
+        to opt out of a second model download.
+        """
+        monkeypatch.setenv("SCRAPPER_TOOL_CAPTCHA_VISION_MODEL", "")
+        assert AgentConfig.from_env().captcha_vision_model is None
+
+    def test_unset_env_takes_the_default(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.delenv("SCRAPPER_TOOL_CAPTCHA_VISION_MODEL", raising=False)
+        assert AgentConfig.from_env().captcha_vision_model == DEFAULT_CAPTCHA_VISION_MODEL
+
+    def test_explicit_none_is_preserved(self) -> None:
+        assert AgentConfig(captcha_vision_model=None).captcha_vision_model is None

@@ -69,6 +69,9 @@ services:
       SCRAPPER_TOOL_AGENT_LLM: "${SCRAPPER_TOOL_AGENT_LLM:-ollama}"
       SCRAPPER_TOOL_AGENT_OLLAMA_URL: "${SCRAPPER_TOOL_AGENT_OLLAMA_URL:-http://host.docker.internal:11434}"
       SCRAPPER_TOOL_AGENT_MODEL: "${SCRAPPER_TOOL_AGENT_MODEL:-qwen3-vl:8b}"
+      # Grid-captcha tier only; a different job from extraction (see
+      # docs/SETTINGS.md). Empty value reuses SCRAPPER_TOOL_AGENT_MODEL.
+      SCRAPPER_TOOL_CAPTCHA_VISION_MODEL: "${SCRAPPER_TOOL_CAPTCHA_VISION_MODEL:-qwen3.8-27b-apex}"
       # ---- LM Studio example (OpenAI-compatible; port is user-configurable) ----
       # SCRAPPER_TOOL_AGENT_LLM=openai_compat
       # SCRAPPER_TOOL_AGENT_OLLAMA_URL=http://host.docker.internal:6543
@@ -123,6 +126,9 @@ services:
       SCRAPPER_TOOL_AGENT_LLM: "${SCRAPPER_TOOL_AGENT_LLM:-ollama}"
       SCRAPPER_TOOL_AGENT_OLLAMA_URL: "${SCRAPPER_TOOL_AGENT_OLLAMA_URL:-http://host.docker.internal:11434}"
       SCRAPPER_TOOL_AGENT_MODEL: "${SCRAPPER_TOOL_AGENT_MODEL:-qwen3-vl:8b}"
+      # Grid-captcha tier only; a different job from extraction (see
+      # docs/SETTINGS.md). Empty value reuses SCRAPPER_TOOL_AGENT_MODEL.
+      SCRAPPER_TOOL_CAPTCHA_VISION_MODEL: "${SCRAPPER_TOOL_CAPTCHA_VISION_MODEL:-qwen3.8-27b-apex}"
       SCRAPPER_TOOL_AGENT_BROWSER: "${SCRAPPER_TOOL_AGENT_BROWSER:-patchright}"
       SCRAPPER_TOOL_AGENT_HEADFUL: "0"
       SCRAPPER_TOOL_AGENT_BEHAVIOR: "${SCRAPPER_TOOL_AGENT_BEHAVIOR:-humanlike}"
@@ -186,6 +192,9 @@ services:
       SCRAPPER_TOOL_AGENT_LLM: "${SCRAPPER_TOOL_AGENT_LLM:-ollama}"
       SCRAPPER_TOOL_AGENT_OLLAMA_URL: "${SCRAPPER_TOOL_AGENT_OLLAMA_URL:-http://host.docker.internal:11434}"
       SCRAPPER_TOOL_AGENT_MODEL: "${SCRAPPER_TOOL_AGENT_MODEL:-qwen3-vl:8b}"
+      # Grid-captcha tier only; a different job from extraction (see
+      # docs/SETTINGS.md). Empty value reuses SCRAPPER_TOOL_AGENT_MODEL.
+      SCRAPPER_TOOL_CAPTCHA_VISION_MODEL: "${SCRAPPER_TOOL_CAPTCHA_VISION_MODEL:-qwen3.8-27b-apex}"
       # ---- Browser backend ----
       SCRAPPER_TOOL_AGENT_BROWSER: "${SCRAPPER_TOOL_AGENT_BROWSER:-patchright}"
       SCRAPPER_TOOL_AGENT_HEADFUL: "0"
@@ -219,6 +228,9 @@ services:
       SCRAPPER_TOOL_AGENT_LLM: "${SCRAPPER_TOOL_AGENT_LLM:-ollama}"
       SCRAPPER_TOOL_AGENT_OLLAMA_URL: "${SCRAPPER_TOOL_AGENT_OLLAMA_URL:-http://host.docker.internal:11434}"
       SCRAPPER_TOOL_AGENT_MODEL: "${SCRAPPER_TOOL_AGENT_MODEL:-qwen3-vl:8b}"
+      # Grid-captcha tier only; a different job from extraction (see
+      # docs/SETTINGS.md). Empty value reuses SCRAPPER_TOOL_AGENT_MODEL.
+      SCRAPPER_TOOL_CAPTCHA_VISION_MODEL: "${SCRAPPER_TOOL_CAPTCHA_VISION_MODEL:-qwen3.8-27b-apex}"
       SCRAPPER_TOOL_AGENT_BROWSER: "${SCRAPPER_TOOL_AGENT_BROWSER:-patchright}"
     entrypoint:
       [

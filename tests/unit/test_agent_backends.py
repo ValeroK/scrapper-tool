@@ -1344,12 +1344,22 @@ class TestVisionBackendResolution:
         assert backend.model == "qwen/qwen3.8-27b"
 
     @pytest.mark.asyncio
-    async def test_falls_back_to_the_main_model_when_unset(
+    async def test_falls_back_to_the_main_model_when_set_to_none(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
+        """``None`` is how an operator says "one model is fine for both here".
+
+        Stated explicitly rather than by omission: since v2.2.2 the field has a
+        non-``None`` default, so leaving it out of the constructor no longer
+        means "reuse the main model" — it means "use the 27B default". The
+        fallback itself is unchanged and still keyed on ``None``.
+        """
         self._serve(monkeypatch, {"google/gemma-4-e4b"})
         cfg = AgentConfig(
-            llm="openai_compat", model="google/gemma-4-e4b", ollama_url="http://lm.test"
+            llm="openai_compat",
+            model="google/gemma-4-e4b",
+            captcha_vision_model=None,
+            ollama_url="http://lm.test",
         )
         backend = await llm_mod.get_vision_backend(cfg)
         assert backend is not None
@@ -1362,6 +1372,9 @@ class TestVisionBackendResolution:
         """Skip the grid tier rather than hand a text-only model an image."""
         self._serve(monkeypatch, set())
         cfg = AgentConfig(
-            llm="openai_compat", model="google/gemma-4-e4b", ollama_url="http://lm.test"
+            llm="openai_compat",
+            model="google/gemma-4-e4b",
+            captcha_vision_model=None,
+            ollama_url="http://lm.test",
         )
         assert await llm_mod.get_vision_backend(cfg) is None

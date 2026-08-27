@@ -139,6 +139,40 @@ Free OSS by default. Escalates to a paid solver only when an API key is configur
 | `captcha_api_key` | `SCRAPPER_TOOL_CAPTCHA_KEY` | unset | Paid-vendor API key. Triggers Tier-2 escalation. |
 | `captcha_paid_fallback` | `SCRAPPER_TOOL_CAPTCHA_PAID_FALLBACK` | `capsolver` | `capsolver` / `nopecha` / `twocaptcha` / `none` |
 | `captcha_timeout_s` | `SCRAPPER_TOOL_CAPTCHA_TIMEOUT_S` | `120` | Per-solve cap. |
+| `captcha_vision_model` | `SCRAPPER_TOOL_CAPTCHA_VISION_MODEL` | `qwen3.8-27b-apex` | Model for the image-grid tier. Set **empty** to reuse `model`. See below. |
+
+### The grid tier uses a different model from extraction, on purpose
+
+Extraction and captcha grids are different jobs with opposite requirements, so
+one model cannot serve both without silently losing at whichever it was not
+chosen for. Measured on live reCAPTCHA with its own verify button as ground
+truth:
+
+| Model | Grid score | Extraction |
+|---|---|---|
+| `google/gemma-4-e4b` | 0/5 | fast and accurate — 1.1 s, 3-of-3 fields |
+| `qwen3-vl-8b` | 1/5 | good |
+| a ~27B VLM | **4-5/5** | a reasoning-distilled model ran 8x slower and *less* accurately |
+
+Hence two settings: `SCRAPPER_TOOL_AGENT_MODEL` for extraction (small, wins on
+instruction-following) and `SCRAPPER_TOOL_CAPTCHA_VISION_MODEL` for grids
+(large VLM). Since v2.2.2 the vision default is a ~27B rather than inheriting
+the extraction model.
+
+**It is safe to leave this pointing at a model this host cannot serve.** The
+grid tier is best-effort: it returns an honest `False` and the cascade escalates
+past it, so a wrong value costs a diagnostic line rather than a failed scrape.
+`scrapper-tool doctor` reports the state in `checks.captcha_vision_model`:
+
+| Value | Meaning |
+|---|---|
+| `<model> ok` | probed and available |
+| `<model> NOT AVAILABLE` | backend is up but does not serve it — a fix line is printed |
+| `<model> (LLM unreachable)` | backend down; the `e1` row carries the fix |
+| `reuses model (<model>)` | set empty, so extraction's model is used |
+
+Mind the context length: a 27B's 262k default KV cache, not its weights, is what
+overflows a 24 GB card.
 
 ### `auto` cascade order
 

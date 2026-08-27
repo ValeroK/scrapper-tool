@@ -100,6 +100,16 @@ BehaviorName = Literal["humanlike", "fast", "off"]
 FingerprintName = Literal["browserforge", "none"]
 PaidFallbackName = Literal["capsolver", "nopecha", "twocaptcha", "none"]
 
+#: Default model for the captcha image-grid tier. Named here rather than inlined
+#: so ``doctor``, the docs and the tests all quote one string — the same reason
+#: ``_extras.INSTALL_HINTS`` exists.
+#:
+#: Deliberately a different model from :attr:`AgentConfig.model`: see that
+#: field's docstring for the measurements: extraction wants a small
+#: instruction-follower, grids want a large VLM, and one model cannot be both
+#: without silently losing at whichever job it was not picked for.
+DEFAULT_CAPTCHA_VISION_MODEL = "qwen3.8-27b-apex"
+
 
 class AgentConfig(BaseModel):
     """Knobs for the Pattern E agent.
@@ -160,7 +170,7 @@ class AgentConfig(BaseModel):
     model: str = "qwen3-vl:8b"
     ollama_url: str = "http://localhost:11434"
     llm_api_key: SecretStr | None = None
-    captcha_vision_model: str | None = None
+    captcha_vision_model: str | None = DEFAULT_CAPTCHA_VISION_MODEL
     """Model for the captcha image-grid tier, when it should differ from ``model``.
 
     Extraction and captcha-solving are different jobs with opposite requirements,
@@ -176,9 +186,17 @@ class AgentConfig(BaseModel):
       4-5/5 on the identical pipeline.
 
     Pinning one model for both therefore breaks whichever job it was not chosen
-    for, silently. Leave ``None`` to reuse ``model`` (correct when the same model
-    is genuinely good at both, or when captcha solving is not wanted); set it to
-    a ~27B VLM to make the grid tier work without disturbing extraction.
+    for, silently. Set explicitly to ``None`` to reuse ``model`` (correct when the
+    same model is genuinely good at both, or when captcha solving is not wanted).
+
+    Defaults to :data:`DEFAULT_CAPTCHA_VISION_MODEL` since v2.2.2, so the grid
+    tier points at a model in the class the measurements above actually favour
+    rather than silently inheriting an extraction model that scores 0-1/5. The
+    default is safe to leave pointing at a model this machine cannot serve: the
+    grid tier is best-effort, returns an honest ``False`` when it cannot answer,
+    and the cascade escalates past it. ``doctor`` reports whether the configured
+    vision model is actually available, so the cost of a wrong default is a
+    diagnostic line rather than a failed scrape.
 
     Remember the context length — a 27B's 262k default KV cache, not its weights,
     is what overflows a 24 GB card."""
@@ -233,7 +251,12 @@ class AgentConfig(BaseModel):
                 "camoufox_locale": env.get("SCRAPPER_TOOL_AGENT_CAMOUFOX_LOCALE") or None,
                 "llm": env.get("SCRAPPER_TOOL_AGENT_LLM", "ollama"),
                 "model": env.get("SCRAPPER_TOOL_AGENT_MODEL", "qwen3-vl:8b"),
-                "captcha_vision_model": env.get("SCRAPPER_TOOL_CAPTCHA_VISION_MODEL") or None,
+                # An explicit empty value means "reuse `model`"; unset means the
+                # default. `or None` alone would collapse those two into one.
+                "captcha_vision_model": env.get(
+                    "SCRAPPER_TOOL_CAPTCHA_VISION_MODEL", DEFAULT_CAPTCHA_VISION_MODEL
+                )
+                or None,
                 "ollama_url": env.get("SCRAPPER_TOOL_AGENT_OLLAMA_URL", "http://localhost:11434"),
                 "llm_api_key": SecretStr(llm_api_key) if llm_api_key else None,
                 "max_steps": int(env.get("SCRAPPER_TOOL_AGENT_MAX_STEPS", "50")),

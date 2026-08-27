@@ -85,6 +85,51 @@ that was a live security hole rather than a missed optimisation.
   payload shape as a superset with `error_code` and `remedy` added and `blocked`
   left `false`.
 
+### Changed (captcha grid tier)
+
+- **`captcha_vision_model` now defaults to `qwen3.8-27b-apex`** instead of `None`
+  (which silently reused `model`). New `DEFAULT_CAPTCHA_VISION_MODEL` constant so
+  the code, the docs, compose and the tests quote one string.
+
+  The field has existed since 2.2.0 precisely because extraction and captcha
+  grids are opposite jobs — its docstring records `google/gemma-4-e4b` at **0/5**
+  on live reCAPTCHA and `qwen3-vl-8b` at **1/5**, against **4-5/5** for a ~27B on
+  the identical pipeline, while that same gemma is the *fastest and most accurate*
+  extractor measured. Defaulting to `None` meant the grid tier inherited whatever
+  the operator picked for extraction, which is the one choice guaranteed to be
+  wrong for it. The default now points at the class of model the measurements
+  favour, and extraction is untouched.
+
+  **Safe to leave pointing at a model a host cannot serve.** The grid tier is
+  best-effort by construction: it returns an honest `False` and the cascade
+  escalates past it, so a wrong value costs a diagnostic line, not a scrape.
+
+  Set the env var to an **empty string** to go back to reusing `model`. Empty and
+  unset deliberately mean different things now — unset takes the default, empty
+  is how an operator says "one model is fine here" — so `or None` alone would
+  have collapsed the only opt-out.
+
+- **`doctor` reports `checks.captcha_vision_model`** — `<model> ok`,
+  `<model> NOT AVAILABLE` (with a fix naming it), `(LLM unreachable)`,
+  `(backend not probeable)`, `(probe failed)`, or `reuses model (<model>)`.
+
+  Reported separately from the `e1` row because they use *different models*, so
+  `e1 | ok` says nothing about whether the grid tier can see. And reported rather
+  than left implicit because this tier fails quietly on purpose — without the
+  line an operator discovers a missing VLM mid-solve instead of at install time.
+  An unavailable vision model does **not** make the install `not_ready`: every
+  other tier still works, and a machine without a 27B is not broken.
+
+  Not a `REPORT_TIERS` entry: that tuple is the cascade ladder and it gates
+  `--require-tier`; this is one model inside one tier.
+
+- **Correction to the 2.2.0 entry above.** That release recorded
+  *"`qwen/qwen3.6-27b` will not load on the test machine"*, which read as though
+  the ~27B grid figures were untested. They were measured — on other hardware —
+  and the `AgentConfig.captcha_vision_model` docstring has carried the 4-5/5
+  number since. The 2.2.0 text is left as written (released entries are not
+  edited); this is the correction.
+
 ### Known limits
 
 - **The curl_cffi ladder and the browser tiers are pre-flight and post-flight
@@ -237,6 +282,20 @@ that was a live security hole rather than a missed optimisation.
   serve a fixture page that A/B/C accepts, and never leave the first tier.
 
   No production code changed — this is a test-hermeticity fix.
+
+- **`_VISION_MAX_TOKENS` is still 512, calibrated on a 4B model.** A 27B
+  reasoning model spends far more of its budget before emitting content — 75
+  reasoning tokens on a *1x1 pixel* in local testing — so a 3x3 grid with a real
+  instruction may exhaust it. The existing fallback (`llm.py` surfaces
+  `reasoning_content` and logs "raise max_tokens") keeps that legible rather than
+  silent, and `_VISION_TIMEOUT_S`/`captcha_timeout_s` bound the same operation.
+  Deliberately not adjusted by guesswork: the number should come from reading
+  `usage.completion_tokens_details.reasoning_tokens` on a live grid solve.
+
+- **`qwen3-vl:8b` vs a ~27B has not been re-measured on one machine.** The
+  figures above come from different hosts, and a dedicated vision-language model
+  may still beat a larger general one at grid localisation. The default follows
+  the evidence that exists; a head-to-head belongs in `docs/research/`.
 
 ## [2.2.0] - 2026-08-15
 
