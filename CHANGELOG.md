@@ -7,23 +7,25 @@ All notable changes to `scrapper-tool` are recorded here. Format follows [Keep a
 ### Changed
 
 - **CI pins the Camoufox browser build.** `uv.lock` pins `camoufox==0.5.4` — the
-  1.3 MB Python package — while the ~490 MB patched Firefox it drives was
-  fetched at launch and resolved to whatever was newest. Build
-  `152.0.4-beta.29` landed 2026-08-20 and turned a commit that had been green
-  on 2026-08-15 red with no code change, which is the defining symptom of an
-  undeclared input. It is now pinned via `CAMOUFOX_BUILD` and cached, so moving
-  it is a reviewable edit. Production is unchanged: the Dockerfile still bakes
-  the current build at image-build time, where a fresh fingerprint is worth
-  more than a reproducible one.
+  1.3 MB Python package — while the ~490 MB patched Firefox it drives is fetched
+  separately at launch, and which build that is was declared nowhere. Commit
+  `bcda42e` was green on 2026-08-15 and fails today with no code change (proven
+  by re-running its own workflow), so something outside the repo moved. Pinned
+  via `CAMOUFOX_BUILD` and cached, so the browser is a declared dependency and
+  moving it is a reviewable edit. Production is unchanged: the Dockerfile still
+  bakes the current build at image-build time, where a fresh fingerprint is
+  worth more than a reproducible one.
 
-  **Known and deliberately not papered over:** under `beta.29`, `window.gokuProps`
-  is not visible to the AWS WAF detection JS by the time it runs, so the
-  `gokuProps` triple comes back empty. The pin is set to `beta.28` — the build
-  `docs/research/2026-camoufox-obscura-capabilities.md` records as validated —
-  which restores a known-good baseline but does **not** explain the difference.
-  Before bumping, establish whether that is a `set_content` timing artefact in
-  the test or a real detection regression that would also affect production
-  scraping of AWS WAF sites.
+  **The pin is for determinism, not a diagnosis — the failure is still open.**
+  `window.gokuProps` is not visible to the AWS WAF detection JS by the time it
+  runs, so the triple comes back empty and the falsy filter in
+  `_detect_challenge_detail` drops it. An early guess that browser
+  `152.0.4-beta.29` (released 2026-08-20) caused it does **not** hold up: a
+  fresh install resolves to `beta.28`, so CI was most likely on `beta.28` the
+  whole time. The cause is unidentified. Whether it is a `set_content` timing
+  artefact in the test or a real detection regression that would also affect
+  production scraping of AWS WAF sites is the open question, and it should be
+  answered before anyone trusts AWS WAF detection.
 
 - **`test_detection_js_against_real_markup` moved to `tests/integration/`.** It
   launches a real browser, which `tests/unit/` ("fast, hermetic, no network")
