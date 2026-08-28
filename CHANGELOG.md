@@ -16,17 +16,22 @@ All notable changes to `scrapper-tool` are recorded here. Format follows [Keep a
   bakes the current build at image-build time, where a fresh fingerprint is
   worth more than a reproducible one.
 
-  **The pin is for determinism, not a diagnosis — the failure is still open.**
+  **Confirmed cause: browser build `152.0.4-beta.29`.** Under it,
   `window.gokuProps` is not visible to the AWS WAF detection JS by the time it
   runs, so the triple comes back empty and the falsy filter in
-  `_detect_challenge_detail` drops it. An early guess that browser
-  `152.0.4-beta.29` (released 2026-08-20) caused it does **not** hold up: a
-  fresh install resolves to `beta.28`. An intermediate run appeared to clear
-  the browser too, but that reading was unsafe: `set` records a pin while bare
-  `camoufox fetch` re-resolves the channel and can make a *newer* build active,
-  so what the test launched was not what the pin said. The pin step now names
-  the build in both commands and verifies `camoufox active` afterwards. The
-  cause remains unconfirmed at the time of writing. Whether it is a `set_content` timing
+  `_detect_challenge_detail` drops it. Under `beta.28` the same test passes.
+  Established by enforcing the pin end to end — `set`, `fetch` *naming the
+  build*, then reading back `camoufox active` — because a pin that only records
+  an intention is not evidence: bare `camoufox fetch` re-resolves the channel
+  and had been silently reactivating `beta.29` one line after the pin.
+
+  **This is a production exposure, not just a CI one.** The Dockerfile runs an
+  unpinned `camoufox fetch` at image-build time, so any image built after
+  2026-08-20 gets `beta.29` and loses the `gokuProps` triple — which AWS WAF
+  solvers need and cannot reconstruct from the page URL. AWS WAF detection is
+  degraded in those images. Deliberately not pinned here: production wants a
+  current fingerprint, and that trade-off is a call to make explicitly rather
+  than as a side effect of a CI fix. Whether it is a `set_content` timing
   artefact in the test or a real detection regression that would also affect
   production scraping of AWS WAF sites is the open question, and it should be
   answered before anyone trusts AWS WAF detection.
