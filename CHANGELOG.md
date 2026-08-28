@@ -182,10 +182,18 @@ that was a live security hole rather than a missed optimisation.
   `169.254.169.254` three times (once per retry attempt, visible in the curl
   error), and with it **on** the hop was refused before being issued.
 
-  It remains opt-in only because this is one host, one target pair and one
-  impersonation profile; the loop is profile-agnostic (it reuses the session, so
-  the profile is whatever that session carries), but "measured once" is not
-  "soaked".
+  Repeated across **four of the five ladder profiles** — `chrome146`,
+  `chrome142`, `firefox147` and `safari260`, i.e. three different browser
+  families — all identical off-versus-on. The JA4 values differ *between*
+  profiles, which is what shows the comparison is sensitive enough to have
+  caught a change rather than being trivially equal.
+
+  That result is what the mechanism predicts: the loop calls `request()` on the
+  *same* session, and impersonation is a session-level property, so the loop
+  cannot reach the fingerprint whichever profile is loaded.
+
+  Still opt-in, now for a narrower reason: this is one host and one target pair,
+  so it has been *measured* but not *soaked* under real volume.
 
 ### Known limits
 
