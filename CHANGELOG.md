@@ -9,7 +9,7 @@ First increment of the concept-adoption series planned in
 against this one and ranked what was worth rebuilding. This one closes the item
 that was a live security hole rather than a missed optimisation.
 
-### Added
+### Added (target URL guard)
 
 - **A pre-flight target-URL guard (`scrapper_tool._urlguard`), on by default.**
   Until now nothing in this library validated a URL's host on any surface. Every
@@ -69,7 +69,7 @@ that was a live security hole rather than a missed optimisation.
   `blocked: true`, and would make a caller's escalation logic aim Pattern D at
   the refused host).
 
-### Changed
+### Changed (target URL guard)
 
 - **Behavior change: the guard is enabled by default.** Set
   `SCRAPPER_TOOL_URL_GUARD_ALLOW=<host-or-cidr>` to reach a legitimate internal
@@ -196,7 +196,7 @@ that was a live security hole rather than a missed optimisation.
   remaining resolve-then-connect race and is **rejected permanently**: it breaks
   TLS SNI, and with it the impersonation fingerprint Pattern A/B/C exists to
   protect.
-### Changed
+### Changed (test hermeticity)
 
 - **CI pins the Camoufox browser build.** `uv.lock` pins `camoufox==0.5.4` — the
   1.3 MB Python package — while the ~490 MB patched Firefox it drives is fetched
