@@ -18,6 +18,7 @@ Last updated: 2026-08-27. Branch: `feat/url-guard` (unpushed).
 | **2.2.3** | Render tier aborts page-initiated SSRF; opt-in per-hop redirect vetting for curl_cffi |
 | — | Dependency tree upgraded; `mcp` capped `<2` |
 | — | Ladder refreshed to `chrome150 → chrome146 → safari2601 → firefox147 → chrome133a`, and the impersonated User-Agent is no longer overwritten |
+| — | `SCRAPPER_TOOL_URL_GUARD_STRICT` — opt-in refusal of tiers whose requests cannot be vetted |
 
 Also merged from `main` (separate session): the unit-suite hermeticity fixes,
 a hard-E1-failure handoff to E2, and a raise when Crawl4AI reports a page that
@@ -77,13 +78,16 @@ Where it is open, the request *is issued* and only the body is withheld. That is
 not a safe residual: a state-changing GET has already happened, and the distinct
 error codes and timings make a serviceable internal port scanner.
 
-### `SCRAPPER_TOOL_URL_GUARD_STRICT` was planned for 2.2.3 and not built
+### `SCRAPPER_TOOL_URL_GUARD_STRICT` — now built
 
-The mode that refuses to *run* a tier that cannot be intercepted — the only way
-to offer a genuinely closed configuration, and the thing that would make the
-table above honest for an operator who needs one. 2.2.3 was scoped down to the
-two interception mechanisms and this was dropped without being flagged at the
-time.
+Was planned for 2.2.3, dropped from it without being flagged, and has since
+landed. Setting it to `1` refuses to *run* `d`, `render`, `e1`, `e2`, `obscura`,
+and `ladder` (the last only while `..._STRICT_REDIRECTS` is off), which is the
+one configuration where the table above has no open row.
+
+It costs capability by design: on a hostile target A/B/C is all that is left and
+it is the tier such sites wall, so the scrape fails. Off by default because that
+trade is the operator's. `doctor` names the refused tiers.
 
 ### `_VISION_MAX_TOKENS` is still 512
 

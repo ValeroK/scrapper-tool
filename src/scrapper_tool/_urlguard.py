@@ -82,6 +82,7 @@ Reason = Literal[
     "benchmark",
     "special_tld",
     "unresolvable",
+    "uninterceptable_tier",
 ]
 
 #: Operator-facing remediation, keyed by :data:`Reason`. Same role — and same
@@ -119,6 +120,12 @@ REFUSAL_REMEDIES: Final[dict[str, str]] = {
         "private network and are blocked by design"
     ),
     "unresolvable": "",  # allowed; see _resolve_all
+    "uninterceptable_tier": (
+        "SCRAPPER_TOOL_URL_GUARD_STRICT is on, and this tier issues requests the "
+        "guard cannot vet first. Unset it to trade that guarantee back for the "
+        "tier, or allowlist the specific target with SCRAPPER_TOOL_URL_GUARD_ALLOW "
+        "if it is one you trust"
+    ),
 }
 
 # --- Address space the stdlib's own properties do not cover -----------------
@@ -281,6 +288,78 @@ def strict_redirects_enabled() -> bool:
     if raw is None or not raw.strip():
         return False
     return raw.strip().lower() in _TRUTHY
+
+
+#: Tiers that can issue a request this module never gets to vet, and why.
+#:
+#: The guard's coverage is not uniform. The httpx path is checked per hop; the
+#: curl_cffi ladder is too, but only with ``..._STRICT_REDIRECTS``; and the tiers
+#: below hand navigation to something we cannot hook — an external binary, or a
+#: browser whose redirect handling Playwright's ``route`` does not expose. On
+#: those a redirect into private space *is issued*, and only the body is
+#: withheld. Strict mode is for operators who need that gap closed and would
+#: rather lose the tier than keep it.
+UNINTERCEPTABLE_TIERS: Final[dict[str, str]] = {
+    "d": "Scrapling owns its own fetcher and exposes no request hook",
+    "render": (
+        "page-initiated requests are aborted, but Playwright's route does not "
+        "fire for navigation redirect hops"
+    ),
+    "e1": "Crawl4AI drives its own browser; no route is registered on its context",
+    "e2": "browser-use drives its own browser; no route is registered on its context",
+    "obscura": "an external binary; nothing of ours sits between it and the network",
+    "ladder": (
+        "libcurl follows redirects with no per-hop hook unless "
+        "SCRAPPER_TOOL_URL_GUARD_STRICT_REDIRECTS=1"
+    ),
+}
+
+
+def url_guard_strict_enabled() -> bool:
+    """Whether to refuse tiers whose requests cannot be vetted before they go out.
+
+    Off by default, because turning it on **removes capability**: Pattern D, the
+    render tier and both LLM tiers stop running, which on a hostile target means
+    the scrape simply fails. That is the trade — containment bought with reach —
+    and it is the operator's to make, not ours to make for them.
+
+    What it buys is the only configuration in which the guard's promise is
+    actually complete. With it off, those tiers issue a redirect into private
+    space and we merely decline to return the body; blind SSRF is still a
+    state-changing GET that already happened.
+    """
+    raw = os.environ.get("SCRAPPER_TOOL_URL_GUARD_STRICT")
+    if raw is None or not raw.strip():
+        return False
+    return raw.strip().lower() in _TRUTHY
+
+
+def tier_is_interceptable(tier: str) -> bool:
+    """Whether ``tier`` vets every request it issues before issuing it."""
+    if tier not in UNINTERCEPTABLE_TIERS:
+        return True
+    if tier == "ladder":
+        # The one tier whose answer depends on another setting.
+        return strict_redirects_enabled()
+    return False
+
+
+def assert_tier_allowed(tier: str, *, url: str | None = None) -> None:
+    """Raise :class:`UrlNotAllowed` when strict mode forbids running ``tier``.
+
+    A no-op unless :func:`url_guard_strict_enabled`. Raises the same exception a
+    refused URL does, deliberately: both surfaces already map it (REST 403, MCP
+    envelope with ``error_code``), and to a caller the meaning is the same — this
+    request will not be made on your behalf.
+    """
+    if not url_guard_strict_enabled() or tier_is_interceptable(tier):
+        return
+    why = UNINTERCEPTABLE_TIERS.get(tier, "this tier cannot be intercepted")
+    _logger.warning("urlguard.tier_refused", tier=tier, url=url, reason=why)
+    error = UrlNotAllowed(f"refused tier {tier!r} under SCRAPPER_TOOL_URL_GUARD_STRICT: {why}")
+    error.reason = "uninterceptable_tier"
+    error.remedy = REFUSAL_REMEDIES["uninterceptable_tier"]
+    raise error
 
 
 def _dns_enabled() -> bool:
@@ -658,10 +737,12 @@ def all_reasons() -> Iterable[str]:
 
 __all__ = [
     "REFUSAL_REMEDIES",
+    "UNINTERCEPTABLE_TIERS",
     "GuardPolicy",
     "GuardVerdict",
     "Reason",
     "all_reasons",
+    "assert_tier_allowed",
     "assert_url_allowed",
     "assert_url_allowed_nodns",
     "check_host",
@@ -670,5 +751,7 @@ __all__ = [
     "raise_if_refused",
     "resolve_and_check",
     "strict_redirects_enabled",
+    "tier_is_interceptable",
     "url_guard_enabled",
+    "url_guard_strict_enabled",
 ]

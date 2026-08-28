@@ -384,3 +384,151 @@ class TestImportDiscipline:
         )
         assert result.returncode == 0, result.stderr
         assert "OK" in result.stdout
+
+
+class TestStrictTierMode:
+    """`SCRAPPER_TOOL_URL_GUARD_STRICT` refuses tiers whose requests we cannot vet.
+
+    The guard's coverage is not uniform: the httpx path is checked per hop, the
+    curl_cffi ladder only with `..._STRICT_REDIRECTS`, and the browser/subprocess
+    tiers not at all. Strict mode is the only configuration where the guard's
+    promise is actually complete -- bought by losing those tiers, which on a
+    hostile target means the scrape simply fails. That trade is the operator's.
+    """
+
+    def test_off_by_default(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """It removes capability, so it must never turn itself on."""
+        monkeypatch.delenv("SCRAPPER_TOOL_URL_GUARD_STRICT", raising=False)
+        assert _urlguard.url_guard_strict_enabled() is False
+        for tier in _urlguard.UNINTERCEPTABLE_TIERS:
+            _urlguard.assert_tier_allowed(tier)  # must not raise
+
+    @pytest.mark.parametrize("tier", ["d", "render", "e1", "e2", "obscura"])
+    def test_uninterceptable_tiers_are_refused(
+        self, tier: str, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setenv("SCRAPPER_TOOL_URL_GUARD_STRICT", "1")
+        with pytest.raises(UrlNotAllowed) as excinfo:
+            _urlguard.assert_tier_allowed(tier, url="https://example.com/")
+        assert excinfo.value.reason == "uninterceptable_tier"
+        assert excinfo.value.remedy
+        assert tier in str(excinfo.value)
+
+    def test_interceptable_tiers_are_untouched(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setenv("SCRAPPER_TOOL_URL_GUARD_STRICT", "1")
+        # A/B/C rides the guarded httpx transport, so strict mode has no quarrel.
+        _urlguard.assert_tier_allowed("a_b_c")
+        _urlguard.assert_tier_allowed("replay")
+
+    def test_the_ladder_is_conditional_on_strict_redirects(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The one tier whose answer depends on another setting.
+
+        Without per-hop vetting libcurl can be redirected into private space, so
+        strict mode refuses it; with `..._STRICT_REDIRECTS=1` every hop is
+        checked before it is issued and there is nothing left to object to.
+        """
+        monkeypatch.setenv("SCRAPPER_TOOL_URL_GUARD_STRICT", "1")
+        monkeypatch.delenv("SCRAPPER_TOOL_URL_GUARD_STRICT_REDIRECTS", raising=False)
+        assert _urlguard.tier_is_interceptable("ladder") is False
+        with pytest.raises(UrlNotAllowed):
+            _urlguard.assert_tier_allowed("ladder")
+
+        monkeypatch.setenv("SCRAPPER_TOOL_URL_GUARD_STRICT_REDIRECTS", "1")
+        assert _urlguard.tier_is_interceptable("ladder") is True
+        _urlguard.assert_tier_allowed("ladder")  # must not raise
+
+    def test_every_uninterceptable_tier_says_why(self) -> None:
+        """A refusal that does not explain itself is indistinguishable from a bug."""
+        for tier, why in _urlguard.UNINTERCEPTABLE_TIERS.items():
+            assert why, f"{tier} is refused with no reason given"
+            assert len(why) > 20, f"{tier}'s reason is too terse to act on"
+
+    def test_the_refusal_reuses_the_url_refusal_shape(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Same exception as a refused URL, so both surfaces map it for free.
+
+        REST already turns UrlNotAllowed into a 403 with reason+remedy and MCP
+        into an envelope with error_code; a bespoke exception would need both
+        wired again for no gain to the caller, who sees the same thing either
+        way: this request will not be made on your behalf.
+        """
+        monkeypatch.setenv("SCRAPPER_TOOL_URL_GUARD_STRICT", "1")
+        with pytest.raises(UrlNotAllowed) as excinfo:
+            _urlguard.assert_tier_allowed("e2")
+        assert excinfo.value.reason in set(_urlguard.all_reasons())
+        assert _urlguard.REFUSAL_REMEDIES[excinfo.value.reason]
+
+
+class TestStrictModeAtTheTierEntryPoints:
+    """The helper being right is not enough; it has to be *called*.
+
+    Each assertion below drives the real public entry point, so a guard that
+    gets dropped from one tier during a refactor fails here rather than
+    silently restoring the gap.
+    """
+
+    @pytest.fixture(autouse=True)
+    def _strict(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setenv("SCRAPPER_TOOL_URL_GUARD_STRICT", "1")
+        monkeypatch.delenv("SCRAPPER_TOOL_URL_GUARD_STRICT_REDIRECTS", raising=False)
+
+    @pytest.mark.asyncio
+    async def test_ladder_refuses(self) -> None:
+        from scrapper_tool.ladder import request_with_ladder
+
+        with pytest.raises(UrlNotAllowed, match="ladder"):
+            await request_with_ladder("GET", "https://example.test/x")
+
+    @pytest.mark.asyncio
+    async def test_render_refuses_before_launching_a_browser(self) -> None:
+        """Refused up front — starting Camoufox first would only be slower."""
+        from scrapper_tool.patterns.render import render_html
+
+        with pytest.raises(UrlNotAllowed, match="render"):
+            await render_html("https://example.test/x", settle_s=0)
+
+    @pytest.mark.asyncio
+    async def test_pattern_d_refuses(self) -> None:
+        from scrapper_tool.patterns.d import hostile_client
+
+        with pytest.raises(UrlNotAllowed, match="'d'"):
+            async with hostile_client():
+                pass
+
+    @pytest.mark.asyncio
+    async def test_e1_and_e2_refuse(self) -> None:
+        pytest.importorskip("crawl4ai", reason="E1/E2 entry points need the [llm-agent] extra")
+        from scrapper_tool.agent import agent_browse, agent_extract
+
+        with pytest.raises(UrlNotAllowed, match="e1"):
+            await agent_extract("https://example.test/x", {"type": "object"})
+        with pytest.raises(UrlNotAllowed, match="e2"):
+            await agent_browse("https://example.test/x", "do a thing")
+
+    @pytest.mark.asyncio
+    async def test_obscura_refuses_both_entry_points(self) -> None:
+        from scrapper_tool.crawl.batch import batch_fetch, obscura_fetch
+
+        with pytest.raises(UrlNotAllowed, match="obscura"):
+            await batch_fetch(["https://example.test/x"])
+        with pytest.raises(UrlNotAllowed, match="obscura"):
+            await obscura_fetch("https://example.test/x")
+
+    @pytest.mark.asyncio
+    async def test_the_ladder_runs_again_once_hops_are_vetted(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Strict mode is not a blanket ban; it objects to unvetted requests."""
+        monkeypatch.setenv("SCRAPPER_TOOL_URL_GUARD_STRICT_REDIRECTS", "1")
+        from scrapper_tool import ladder as ladder_module
+        from scrapper_tool.ladder import request_with_ladder
+        from scrapper_tool.testing import FakeCurlSession
+
+        FakeCurlSession.reset()
+        FakeCurlSession.STATUS_FOR_PROFILE = {ladder_module.IMPERSONATE_LADDER[0]: 200}
+        monkeypatch.setattr(ladder_module, "_CurlCffiAsyncSession", FakeCurlSession)
+        resp, _profile = await request_with_ladder("GET", "https://example.test/x")
+        assert resp.status_code == 200

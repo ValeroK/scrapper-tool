@@ -70,6 +70,7 @@ from contextlib import asynccontextmanager
 from typing import TYPE_CHECKING, Any
 
 from scrapper_tool._logging import get_logger
+from scrapper_tool._urlguard import assert_tier_allowed
 
 if TYPE_CHECKING:
     from collections.abc import AsyncIterator
@@ -154,6 +155,11 @@ async def hostile_client(
     CookieKwargUnsupported
         If ``cookies`` was supplied and this Scrapling version rejects it.
     """
+    # Refuse before launching anything: under strict mode this tier cannot
+    # vet the requests it will make, and starting a browser first would
+    # only make the refusal slower.
+    assert_tier_allowed("d")
+
     try:
         from scrapling.fetchers import (  # noqa: PLC0415
             StealthyFetcher,

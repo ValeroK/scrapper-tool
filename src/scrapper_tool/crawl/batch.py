@@ -27,7 +27,7 @@ from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
 
 from scrapper_tool._logging import get_logger
-from scrapper_tool._urlguard import assert_url_allowed
+from scrapper_tool._urlguard import assert_tier_allowed, assert_url_allowed
 from scrapper_tool.errors import ConfigurationError
 
 if TYPE_CHECKING:
@@ -185,6 +185,7 @@ async def batch_fetch(
     and still emit usable records for the rest, and throwing away good pages
     because one URL 404'd would be worse than reporting both.
     """
+    assert_tier_allowed("obscura", url=urls[0] if urls else None)
     if not urls:
         return BatchResult(pages=[], requested=0)
     # The URLs go to an external binary, so there is no transport of ours to
@@ -267,6 +268,7 @@ async def obscura_fetch(
     if dump not in _VALID_DUMPS:
         msg = f"unknown dump format {dump!r}; choose one of {sorted(_VALID_DUMPS)}"
         raise ValueError(msg)
+    assert_tier_allowed("obscura", url=url)
     await assert_url_allowed(url)
     if shutil.which(executable) is None:
         raise ConfigurationError(_OBSCURA_NOT_FOUND)

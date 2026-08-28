@@ -235,6 +235,37 @@ that was a live security hole rather than a missed optimisation.
   Still opt-in, now for a narrower reason: this is one host and one target pair,
   so it has been *measured* but not *soaked* under real volume.
 
+### Added (fully-closed configuration)
+
+- **`SCRAPPER_TOOL_URL_GUARD_STRICT=1` refuses to run any tier that cannot vet
+  its requests before issuing them.** Planned for 2.2.3 and dropped from it
+  without being flagged; this closes that gap.
+
+  Until now the guard's coverage was uneven and there was no way to opt out of
+  the uneven part. The httpx path is vetted per hop, the curl_cffi ladder only
+  with `..._STRICT_REDIRECTS`, and the browser and subprocess tiers not at all —
+  so on those a redirect into private space is *issued* and only the body is
+  withheld. Strict mode is the one configuration where that cannot happen,
+  because the tiers that could do it stop running: `d`, `render`, `e1`, `e2`,
+  `obscura`, and `ladder` unless per-hop vetting is also on.
+
+  **It costs capability, deliberately.** On a hostile target A/B/C is all that
+  remains and it is the tier such sites wall, so the scrape fails. Off by
+  default because that is the operator's trade to make, not a default they meet
+  mid-incident.
+
+  Refusals raise `UrlNotAllowed` with `reason="uninterceptable_tier"` — the same
+  exception a refused URL raises, so REST's 403 and the MCP envelope map it with
+  no new wiring, and a caller sees the same thing either way: this request will
+  not be made on your behalf. `doctor` names the refused tiers in
+  `checks.url_guard` rather than just echoing the flag.
+
+  Guarded at each real entry point (`request_with_ladder`, `render_html`,
+  `hostile_client`, `agent_extract`, `agent_browse`, `batch_fetch`,
+  `obscura_fetch`) and tested there, not only against the helper — a guard
+  dropped during a refactor should fail a test rather than quietly restore the
+  gap.
+
 ### Known limits
 
 - **Playwright's `route` does not fire for navigation redirect hops** — measured,

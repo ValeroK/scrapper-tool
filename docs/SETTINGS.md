@@ -250,6 +250,39 @@ return the body. That is not a safe residual: a state-changing GET has already
 happened, and the distinct error codes and timings make a serviceable internal
 port scanner. It is a known gap, not a closed one.
 
+### `SCRAPPER_TOOL_URL_GUARD_STRICT` — the fully-closed configuration
+
+| Env var | Default | Meaning |
+|---------|---------|---------|
+| `SCRAPPER_TOOL_URL_GUARD_STRICT` | **off** | `1` refuses to *run* any tier that cannot vet its requests before issuing them. |
+
+This is the only setting under which the guard's promise is complete. Everything
+in the "remains blind" paragraph above stops being possible, because the tiers
+that could do it stop running.
+
+**It costs you capability, and that is the whole trade.** With it on, these are
+refused outright:
+
+| Tier | Why it cannot be vetted |
+|---|---|
+| `d` (Scrapling) | owns its own fetcher, exposes no request hook |
+| `render` | page-initiated requests *are* aborted, but Playwright's `route` does not fire for navigation redirect hops |
+| `e1` (Crawl4AI) | drives its own browser; no route on its context |
+| `e2` (browser-use) | same |
+| `obscura` | an external binary; nothing of ours sits between it and the network |
+| `ladder` | **only when `..._STRICT_REDIRECTS` is off** — with it on, every hop is vetted and the ladder runs normally |
+
+On a hostile target that means the scrape simply fails: A/B/C is the only tier
+left, and it is the one such sites wall. That is the point — containment bought
+with reach — and it is a decision for the operator, which is why it is opt-in
+rather than a default someone discovers mid-incident.
+
+A refusal raises `UrlNotAllowed` with `reason="uninterceptable_tier"`, so it
+surfaces the same way a refused URL does: REST `403`, MCP envelope with
+`error_code`. `scrapper-tool doctor` names the refused tiers in
+`checks.url_guard` rather than just reporting the flag, e.g.
+`on STRICT (tiers refused: d, e1, e2, obscura, render)`.
+
 DNS pinning (resolve once, connect to the pinned address) would close the
 remaining resolve-then-connect race and is deliberately **not** done: it breaks
 TLS SNI, and with it the impersonation fingerprint that Pattern A/B/C exists to

@@ -371,6 +371,17 @@ def _url_guard_state() -> str:
         return "OFF"
     policy = _urlguard.guard_policy()
     detail = "on" if policy.resolve_dns else "on (no DNS)"
+    if _urlguard.url_guard_strict_enabled():
+        # Name the cost, not just the setting. Strict mode removes tiers, so an
+        # operator reading this line should see which ones stopped running
+        # rather than discover it from a scrape that suddenly fails on a
+        # hostile target.
+        refused = sorted(
+            tier
+            for tier in _urlguard.UNINTERCEPTABLE_TIERS
+            if not _urlguard.tier_is_interceptable(tier)
+        )
+        detail += f" STRICT (tiers refused: {', '.join(refused)})"
     allowed = len(policy.allow_hosts) + len(policy.allow_networks)
     return f"{detail} (allowlist: {allowed})" if allowed else detail
 

@@ -56,7 +56,7 @@ from typing import TYPE_CHECKING, Any, cast
 from curl_cffi.requests import AsyncSession as _CurlCffiAsyncSession
 
 from scrapper_tool._logging import get_logger
-from scrapper_tool._urlguard import assert_url_allowed_nodns
+from scrapper_tool._urlguard import assert_tier_allowed, assert_url_allowed_nodns
 from scrapper_tool.errors import BlockedError, VendorHTTPError
 from scrapper_tool.http import request_with_retry
 from scrapper_tool.proxy import resolve_proxy
@@ -255,6 +255,10 @@ async def request_with_ladder(
     single profile pin (not exposed yet — the lib's surface in v0.1
     keeps the ladder behind one entrypoint).
     """
+    # Conditional: with SCRAPPER_TOOL_URL_GUARD_STRICT_REDIRECTS=1 this tier
+    # vets every hop and strict mode has no quarrel with it.
+    assert_tier_allowed("ladder", url=url)
+
     if not ladder:
         msg = "ladder must contain at least one impersonation profile"
         raise ValueError(msg)

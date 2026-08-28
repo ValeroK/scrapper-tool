@@ -32,7 +32,7 @@ from typing import TYPE_CHECKING, Any
 
 from scrapper_tool._challenge import has_real_content
 from scrapper_tool._logging import get_logger
-from scrapper_tool._urlguard import check_url, url_guard_enabled
+from scrapper_tool._urlguard import assert_tier_allowed, check_url, url_guard_enabled
 from scrapper_tool.agent.backends.browser import (
     BrowserLaunchOptions,
     get_browser_backend,
@@ -180,6 +180,7 @@ async def render_html(
     ImportError
         If the chosen backend's dependency (or its browser binary) is missing.
     """
+    assert_tier_allowed("render", url=url)
     opts = options or BrowserLaunchOptions()
     # Browser tiers need the IP-reputation dimension too — a stealth browser on a
     # burned IP still gets walled. Only consult the pool when no proxy was pinned.

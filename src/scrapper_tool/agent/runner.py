@@ -20,6 +20,7 @@ from contextlib import asynccontextmanager
 from typing import TYPE_CHECKING, Any
 
 from scrapper_tool._logging import get_logger
+from scrapper_tool._urlguard import assert_tier_allowed
 from scrapper_tool.agent import browse as _browse
 from scrapper_tool.agent import extract as _extract
 from scrapper_tool.agent.types import AgentConfig, AgentResult
@@ -73,6 +74,7 @@ async def agent_extract(
         Per-call config overrides (``model="qwen3-vl"``, ``headful=True``,
         …). Applied via ``config.merged(**overrides)``.
     """
+    assert_tier_allowed("e1", url=url)
     cfg = _resolve_config(config, overrides)
     _logger.info("agent.extract.start", url=url, model=cfg.model, browser=cfg.browser)
     return await _extract.run_extract(url, schema, config=cfg, instruction=instruction)
@@ -114,6 +116,7 @@ async def agent_browse(
     **overrides
         Per-call overrides — same shape as :func:`agent_extract`.
     """
+    assert_tier_allowed("e2", url=url)
     cfg = _resolve_config(config, overrides)
     _logger.info("agent.browse.start", url=url, model=cfg.model, browser=cfg.browser)
     return await _browse.run_browse(url, instruction, config=cfg, schema=schema)
