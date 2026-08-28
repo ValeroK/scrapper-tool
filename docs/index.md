@@ -21,6 +21,9 @@ A reusable Python web-scraping toolkit. See the [README](../README.md) for the e
   - [2026-08-26 DonSeTch concept audit](research/2026-08-26-donsetch-concepts.md) — a competitor's architecture, ranked adopt / candidate / reject.
   - [Tool catalog](research/tool-catalog.md) — adopted / candidate / rejected matrix.
   - [Do-not-adopt list](research/do-not-adopt.md) — append-only rejects with dates + reasons.
+- **[Target URL guard](SETTINGS.md#target-url-guard-ssrf-protection-v221)** — what is vetted before a request goes out, what is not, and the fully-closed `..._STRICT` mode.
+- **[Docker](docker.md)** — the bundled all-five-patterns image, compose services, and build options.
+- **[MCP server](mcp.md)** — tool surface, transports, client wiring, and the stdio entrypoint.
 - **[HTTP REST sidecar](http-sidecar.md)** — call scrapper-tool from any service over plain HTTP (v1.1.0+). OpenAPI spec at [`openapi/openapi.yaml`](openapi/openapi.yaml).
 - **[Agent integration](agent-integration.md)** — MCP wiring for LLM agents (v0.2.0+).
 - **[Cookbook](cookbook.md)** — task-shaped recipes.

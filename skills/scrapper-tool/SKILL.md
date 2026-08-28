@@ -354,6 +354,32 @@ browser profile dir and let the browser keep its own jar.
 - **"I already have the HTML"** → `extract_product(html)` /
   `extract_microdata_price(html)`, no fetch.
 
+## Refused targets — what `url_not_allowed` means
+
+Since v2.2.1 every surface vets a URL **before** issuing a request. If you get
+`url_not_allowed`, the tool declined to fetch on your behalf; the site was never
+contacted. **Do not retry it, and do not escalate to another tier** — every tier
+refuses the same target.
+
+You will see it as REST `403` with `{"error": "url_not_allowed", "reason", "remedy"}`,
+or on MCP as a normal result carrying `error_code: "url_not_allowed"` and a
+`remedy`. Note `blocked` stays `false`: this is not an anti-bot wall, so the
+usual "climb a tier" reflex is wrong here.
+
+What gets refused, and what to do:
+
+| `reason` | Meaning | What to do |
+|---|---|---|
+| `metadata` | A cloud metadata endpoint (`169.254.169.254` and friends) | Nothing. These hand out credentials; there is no legitimate scrape here. |
+| `private_ip`, `loopback`, `link_local`, `cgnat` | Private/internal address | If the user genuinely wants an internal target, they set `SCRAPPER_TOOL_URL_GUARD_ALLOW=<host-or-cidr>`. Ask; do not disable the guard. |
+| `special_tld` | `.local`, `.internal`, `.onion`, `.corp`… | Same — allowlist the specific host if intended. |
+| `scheme` | Not `http(s)` — `file:`, `data:`, `gopher:` | Usually a malformed URL. Re-read it. |
+| `userinfo` | Credentials in the URL (`user@host`) | Strip them; the whole URL is refused rather than parsed, because `https://real.com@169.254.169.254/` reads as one host and fetches another. |
+| `uninterceptable_tier` | The operator set `SCRAPPER_TOOL_URL_GUARD_STRICT=1`, which refuses tiers whose requests cannot be vetted (`d`, `render`, `e1`, `e2`, `obscura`) | Report it. On a protected site this means the scrape cannot proceed without the operator relaxing that setting — it is a deliberate containment choice, not a bug. |
+
+The escape hatch is always **allowlist the target**, never turn the guard off:
+`SCRAPPER_TOOL_URL_GUARD=0` disables it for every URL in the process.
+
 ## Gotchas
 
 - The LLM tiers (`e1`/`e2`) need the `[llm-agent]` extra and a running local LLM
@@ -378,6 +404,7 @@ browser profile dir and let the browser keep its own jar.
 - **`docker run … scrapper-tool doctor` does not work.** The image entrypoint is
   `scrapper-tool-serve`, so those tokens are parsed as server flags and it exits
   2. Use `docker run --rm --entrypoint scrapper-tool <image> doctor --json`.
+- **The captcha grid tier uses a *different* model from extraction** (`SCRAPPER_TOOL_CAPTCHA_VISION_MODEL`, default `qwen3.8-27b-apex`). Grids want a large VLM; extraction wants a small instruction-follower, and one model loses at whichever job it was not picked for. If the grid tier never solves anything, check `scrapper-tool doctor`'s `captcha_vision_model` row — a large model that this host cannot serve degrades quietly by design.
 - Captcha solving is best-effort and its rates are above. If a run needs a
   guaranteed solve, configure a paid solver key (`SCRAPPER_TOOL_CAPTCHA_KEY`);
   the free tiers try first regardless, so the key only costs money when they fail.
@@ -385,6 +412,8 @@ browser profile dir and let the browser keep its own jar.
 ## Reference
 
 - Full settings: `docs/SETTINGS.md`
+- The URL guard in full, incl. what is *not* covered: `docs/SETTINGS.md#target-url-guard-ssrf-protection-v221`
+- What has shipped and what is knowingly unfinished: `docs/PROGRESS.md`
 - Per-tool MCP wiring for each framework: `docs/agent-integration.md`
 - The cascade tiers in depth: `docs/patterns/`
 - What is tested and how to reproduce it: `docs/TESTING.md`
