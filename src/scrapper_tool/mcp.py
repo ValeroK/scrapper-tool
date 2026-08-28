@@ -85,6 +85,7 @@ from scrapper_tool.canary import run_canary
 from scrapper_tool.errors import (
     AgentBlockedError,
     AgentError,
+    AgentLLMError,
     BlockedError,
     VendorHTTPError,
 )
@@ -177,7 +178,7 @@ def _agent_error_payload(
     return payload
 
 
-async def _continue_to_e_tier(
+async def _continue_to_e_tier(  # noqa: PLR0915 — linear cascade; splitting hides the order
     url: str,
     schema_json: dict[str, Any] | None,
     instruction: str | None,
@@ -251,6 +252,19 @@ async def _continue_to_e_tier(
         last_error = f"e1: {result.error or 'blocked'}"
         blocked_e1 = result
     except AgentBlockedError as exc:
+        last_error = f"e1: {exc}"
+    except AgentLLMError:
+        # E2 drives the same LLM backend — escalating fails identically and
+        # slower. A deployment fault, not a property of the target. See the
+        # matching carve-out in http_server._do_scrape_e_tier.
+        raise
+    except AgentError as exc:
+        # A tier that could not deliver hands off to the next rung. But E2 is
+        # the only rung left, and the gate below closes it when the caller did
+        # not ask for interaction — with nothing beneath us, surface the real
+        # failure rather than dressing a dead host up as a block.
+        if not interactive:
+            raise
         last_error = f"e1: {exc}"
 
     # ----- E2 gate: interactive tasks only -----

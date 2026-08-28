@@ -2316,6 +2316,106 @@ class TestE2InteractiveGate:
         assert resp.json()["error"] == "blocked"
 
 
+class TestHardE1FailureHandsOffToE2:
+    """A tier that could not deliver hands off — that is what the ladder is for.
+
+    A blocked E1 has always escalated. A *hard* E1 failure — a page that never
+    loaded, a browser crash, an unsolved captcha — used to abort the cascade
+    instead, so the rung below never got its turn on exactly the failures it
+    exists to catch.
+    """
+
+    @staticmethod
+    def _dead_host(monkeypatch: pytest.MonkeyPatch) -> None:
+        from scrapper_tool.errors import BlockedError
+
+        async def fake_ladder(method: str, url: str, **kwargs: Any) -> Any:
+            raise BlockedError("blocked")
+
+        monkeypatch.setattr("scrapper_tool.ladder.request_with_ladder", fake_ladder)
+        monkeypatch.setattr(http_server, "_hostile_available", lambda: False)
+
+    @pytest.mark.asyncio
+    async def test_it_escalates_with_interactive(
+        self, app_no_auth: Any, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from scrapper_tool.errors import AgentError
+
+        self._dead_host(monkeypatch)
+        _mock_agent_module(
+            monkeypatch,
+            extract_side_effect=AgentError("agent_extract failed: browser crashed"),
+            browse_result=_fake_agent_result("browse"),
+        )
+
+        async with _client(app_no_auth) as client:
+            resp = await client.post(
+                "/scrape", json={"url": "https://protected.com/p", "interactive": True}
+            )
+
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["pattern_used"] == "e2"
+        assert body["pattern_attempts"] == ["a_b_c", "e1", "e2"]
+        e1_log = [r for r in body["escalation_log"] if r["step"] == "e1"]
+        assert e1_log[0]["outcome"] == "failed"
+        assert "browser crashed" in e1_log[0]["detail"]
+
+    @pytest.mark.asyncio
+    async def test_it_still_stops_without_interactive(
+        self, app_no_auth: Any, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The gate is unchanged: E2 is priced per agent loop, so the caller asks.
+
+        The failure surfaces as itself rather than as a block — a dead host is
+        not a wall, and reporting it as one sends the caller hunting for an
+        anti-bot problem they do not have.
+        """
+        from scrapper_tool.errors import AgentError
+
+        self._dead_host(monkeypatch)
+        _mock_agent_module(
+            monkeypatch,
+            extract_side_effect=AgentError("net::ERR_NAME_NOT_RESOLVED"),
+            browse_side_effect=AssertionError("E2 must not run without interactive=true"),
+        )
+
+        async with _client(app_no_auth) as client:
+            resp = await client.post("/scrape", json={"url": "https://protected.com/p"})
+
+        assert resp.status_code == 500
+        body = resp.json()
+        assert body["error"] == "agent_error"
+        assert "ERR_NAME_NOT_RESOLVED" in body["detail"]
+
+    @pytest.mark.asyncio
+    async def test_an_unreachable_llm_never_escalates(
+        self, app_no_auth: Any, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The one carve-out: E2 drives the same LLM, so handing off is pointless.
+
+        Every other hard failure is a fact about the target. This one is a fact
+        about the deployment, and spending an agent loop to rediscover that
+        Ollama is down only makes the answer slower and less clear.
+        """
+        from scrapper_tool.errors import AgentLLMError
+
+        self._dead_host(monkeypatch)
+        _mock_agent_module(
+            monkeypatch,
+            extract_side_effect=AgentLLMError("ollama unreachable at localhost:11434"),
+            browse_side_effect=AssertionError("E2 shares the LLM backend — must not run"),
+        )
+
+        async with _client(app_no_auth) as client:
+            resp = await client.post(
+                "/scrape", json={"url": "https://protected.com/p", "interactive": True}
+            )
+
+        assert resp.status_code == 502
+        assert resp.json()["error"] == "llm_unreachable"
+
+
 # --- B3: challenge detection drives escalation ------------------------------
 
 

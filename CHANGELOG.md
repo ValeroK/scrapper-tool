@@ -27,6 +27,27 @@ All notable changes to `scrapper-tool` are recorded here. Format follows [Keep a
 
 ### Fixed
 
+- **A hard E1 failure aborted the cascade instead of handing off to E2.** A
+  blocked E1 has always escalated, but a page that never loaded, a browser
+  crash, or an unsolved captcha raised straight out of the cascade — so the rung
+  below never got its turn on exactly the failures it exists to catch. Both
+  cascades caught only `AgentBlockedError` around E1.
+
+  E1 now hands off on any `AgentError`, and the existing `interactive` gate
+  decides whether E2 is worth paying for. Applies to `http_server`
+  `_do_scrape_e_tier` and the MCP `_continue_to_e_tier`.
+
+  **`AgentLLMError` is deliberately exempt.** E2 drives the same LLM backend, so
+  escalating fails identically and slower; an unreachable Ollama is a fault in
+  the deployment rather than a property of the target, and it stays a **502
+  `llm_unreachable`** saying so.
+
+  Scoped to the `interactive=true` path. With `interactive=false` there is no
+  rung below, so the failure still surfaces as itself — **500 `agent_error`**,
+  not a block. A dead host is not a wall, and reporting it as one sends the
+  caller hunting for an anti-bot problem they do not have. `mode="extract"` is
+  likewise unchanged.
+
 - **E1 scored a page that never loaded as a win.** A host that doesn't resolve,
   a refused connection, a navigation timeout — `/scrape` returned **200** for all
   of them, `pattern_used: "e1"`, `data: null`. A crawl counted those pages as

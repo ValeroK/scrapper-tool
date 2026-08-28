@@ -627,12 +627,13 @@ def _fake_agent_module_for_e1() -> MagicMock:
 
 
 class TestAutoScrapeE1FailureHandling:
-    """MCP shares the ``if not result.blocked`` accept rule with REST.
+    """MCP shares both E1 rules with REST, so it shares both fixes.
 
-    Both surfaces read that one flag, so an E1 result carrying a navigation
-    failure was scored a win on both. The fix lives in ``run_extract`` rather
-    than in either cascade precisely so one change covers both; this is the MCP
-    half of that claim.
+    The accept rule is one flag — ``if not result.blocked`` — so an E1 result
+    carrying a navigation failure scored as a win on both surfaces. That is
+    fixed in ``run_extract`` rather than in either cascade, precisely so one
+    change covers both. The handoff rule is the same story: a hard E1 failure
+    aborted the cascade here exactly as it did in REST.
     """
 
     @pytest.mark.asyncio
@@ -666,6 +667,92 @@ class TestAutoScrapeE1FailureHandling:
         tool = _get_tool(server, "auto_scrape")
         with pytest.raises(AgentError, match="ERR_NAME_NOT_RESOLVED"):
             await tool.fn(url="https://gone.test/p")  # type: ignore[attr-defined]
+
+    @pytest.mark.asyncio
+    async def test_a_hard_e1_failure_hands_off_to_e2_when_interactive(
+        self,
+        server: object,
+        fake_curl: type[FakeCurlSession],
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """REST parity: the rung below gets its turn on a hard E1 failure."""
+        import sys
+
+        from scrapper_tool.errors import AgentError
+
+        fake_curl.STATUS_FOR_PROFILE = dict.fromkeys(IMPERSONATE_LADDER, 403)
+        monkeypatch.setattr(mcp_module, "_try_pattern_d_for_auto_scrape", _skip_d_for_auto_scrape)
+
+        agent_module = MagicMock()
+        agent_module.AgentConfig = MagicMock()
+        agent_module.AgentConfig.from_env = MagicMock(
+            return_value=MagicMock(merged=lambda **_: MagicMock())
+        )
+
+        async def crashed(*_args: Any, **_kwargs: Any) -> Any:
+            raise AgentError("agent_extract failed: browser crashed")
+
+        browse_result = MagicMock()
+        browse_result.mode = "browse"
+        browse_result.data = {"name": "Salvaged by E2"}
+        browse_result.final_url = "https://walled.test/p"
+        browse_result.rendered_markdown = None
+        browse_result.screenshots = None
+        browse_result.actions = []
+        browse_result.tokens_used = 200
+        browse_result.steps_used = 4
+        browse_result.blocked = False
+        browse_result.error = None
+        browse_result.duration_s = 9.0
+
+        async def fake_browse(*_args: Any, **_kwargs: Any) -> Any:
+            return browse_result
+
+        agent_module.agent_extract = crashed
+        agent_module.agent_browse = fake_browse
+        monkeypatch.setitem(sys.modules, "scrapper_tool.agent", agent_module)
+
+        tool = _get_tool(server, "auto_scrape")
+        result = await tool.fn(url="https://walled.test/p", interactive=True)  # type: ignore[attr-defined]
+
+        assert result["pattern_used"] == "e2"
+        assert result["pattern_attempts"] == ["a_b_c", "e1", "e2"]
+        assert result["data"] == {"name": "Salvaged by E2"}
+
+    @pytest.mark.asyncio
+    async def test_an_unreachable_llm_never_hands_off(
+        self,
+        server: object,
+        fake_curl: type[FakeCurlSession],
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """E2 shares the LLM backend, so this one stays a fault, not an escalation."""
+        import sys
+
+        from scrapper_tool.errors import AgentLLMError
+
+        fake_curl.STATUS_FOR_PROFILE = dict.fromkeys(IMPERSONATE_LADDER, 403)
+        monkeypatch.setattr(mcp_module, "_try_pattern_d_for_auto_scrape", _skip_d_for_auto_scrape)
+
+        agent_module = MagicMock()
+        agent_module.AgentConfig = MagicMock()
+        agent_module.AgentConfig.from_env = MagicMock(
+            return_value=MagicMock(merged=lambda **_: MagicMock())
+        )
+
+        async def llm_down(*_args: Any, **_kwargs: Any) -> Any:
+            raise AgentLLMError("ollama unreachable at localhost:11434")
+
+        async def never(*_args: Any, **_kwargs: Any) -> Any:
+            raise AssertionError("E2 shares the LLM backend — must not run")
+
+        agent_module.agent_extract = llm_down
+        agent_module.agent_browse = never
+        monkeypatch.setitem(sys.modules, "scrapper_tool.agent", agent_module)
+
+        tool = _get_tool(server, "auto_scrape")
+        with pytest.raises(AgentLLMError, match="ollama unreachable"):
+            await tool.fn(url="https://walled.test/p", interactive=True)  # type: ignore[attr-defined]
 
 
 # ---- F2: per-domain tier memory (MCP parity) ------------------------------

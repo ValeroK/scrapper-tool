@@ -2093,7 +2093,7 @@ def _run_d_extractors(
     return css_data, product, json_ld, microdata_price
 
 
-async def _do_scrape_e_tier(  # noqa: PLR0915 — linear cascade; splitting hides the order
+async def _do_scrape_e_tier(  # noqa: PLR0912, PLR0915 — linear cascade; splitting hides the order
     req: Any,
     attempts: list[str],
     start: float,
@@ -2177,6 +2177,28 @@ async def _do_scrape_e_tier(  # noqa: PLR0915 — linear cascade; splitting hide
                     reason="blocked",
                     duration_s=time.perf_counter() - e1_start,
                     detail=str(exc),
+                )
+            )
+            last_error = exc
+        except AgentLLMError:
+            # The one AgentError that must NOT fall to E2: E2 drives the same
+            # LLM backend, so escalating means failing identically and slower.
+            # An unreachable Ollama is a fault in this deployment, not a
+            # property of the target, and it stays a 502 saying so.
+            raise
+        except AgentError as exc:
+            # Everything else — a page that never loaded, a browser crash, a
+            # timeout, an unsolved captcha — is this tier failing to deliver,
+            # which is the whole reason there is a rung below it. E1 used to
+            # abort the cascade here; now it hands off, and the E2 gate below
+            # decides whether that rung is worth paying for.
+            log.append(
+                _build_log_entry(
+                    "e1",
+                    outcome="failed",
+                    reason="exception",
+                    duration_s=time.perf_counter() - e1_start,
+                    detail=f"{type(exc).__name__}: {exc!s}",
                 )
             )
             last_error = exc
