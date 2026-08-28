@@ -292,6 +292,58 @@ class TestCrawlEndpoint:
         assert body["stats"]["visited"] == 3, "the other two pages still got crawled"
 
     @pytest.mark.asyncio
+    async def test_a_page_e1_could_not_load_counts_as_a_failure(
+        self, app_no_auth: Any, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The regression, end to end: a dead page must not be crawled as ``ok``.
+
+        This is the shape that actually broke. Crawl4AI returns
+        ``success=False`` for a navigation failure rather than raising, and
+        ``net::ERR_NAME_NOT_RESOLVED`` matches no block signature, so E1 handed
+        back a non-blocked ``AgentResult``, the cascade scored it a win, and the
+        crawl recorded a page that never loaded as a successful scrape carrying
+        ``data: null``. ``run_extract`` now raises ``AgentError`` there, so the
+        page fails — which is the only reading under which ``stats.failed``
+        means anything.
+        """
+        from scrapper_tool.errors import AgentError
+
+        site = {
+            "https://site.test/": _PRODUCT_HTML.replace('href="/b"', 'href="/missing"'),
+            "https://site.test/a": _PRODUCT_HTML,
+        }
+        _serve_site(monkeypatch, site)
+        monkeypatch.setattr(http_server, "_hostile_available", lambda: False)
+
+        import sys
+        from unittest.mock import AsyncMock, MagicMock
+
+        agent_module = MagicMock()
+        agent_module.AgentConfig = MagicMock()
+        agent_module.AgentConfig.from_env = MagicMock(
+            return_value=MagicMock(merged=lambda **_: MagicMock())
+        )
+        # Exactly what run_extract now raises for a host that doesn't resolve.
+        agent_module.agent_extract = AsyncMock(
+            side_effect=AgentError(
+                "agent_extract failed at https://site.test/missing: "
+                "Page.goto: net::ERR_NAME_NOT_RESOLVED"
+            )
+        )
+        monkeypatch.setitem(sys.modules, "scrapper_tool.agent", agent_module)
+
+        async with _client(app_no_auth) as client:
+            resp = await client.post("/crawl", json={"url": "https://site.test/", "depth": 1})
+
+        assert resp.status_code == 200, "one dead page must not 5xx the whole crawl"
+        body = resp.json()
+        failed = [p for p in body["pages"] if not p["ok"]]
+        assert [p["url"] for p in failed] == ["https://site.test/missing"]
+        assert "ERR_NAME_NOT_RESOLVED" in failed[0]["error"]
+        assert body["stats"]["failed"] == 1
+        assert body["stats"]["visited"] == 3
+
+    @pytest.mark.asyncio
     async def test_a_crawl_learns_a_recipe_once_and_replays_it(
         self, app_no_auth: Any, monkeypatch: pytest.MonkeyPatch
     ) -> None:

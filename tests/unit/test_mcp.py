@@ -626,6 +626,48 @@ def _fake_agent_module_for_e1() -> MagicMock:
     return agent_module
 
 
+class TestAutoScrapeE1FailureHandling:
+    """MCP shares the ``if not result.blocked`` accept rule with REST.
+
+    Both surfaces read that one flag, so an E1 result carrying a navigation
+    failure was scored a win on both. The fix lives in ``run_extract`` rather
+    than in either cascade precisely so one change covers both; this is the MCP
+    half of that claim.
+    """
+
+    @pytest.mark.asyncio
+    async def test_a_navigation_failure_is_not_an_e1_win(
+        self,
+        server: object,
+        fake_curl: type[FakeCurlSession],
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        import sys
+
+        from scrapper_tool.errors import AgentError
+
+        fake_curl.STATUS_FOR_PROFILE = dict.fromkeys(IMPERSONATE_LADDER, 403)
+        monkeypatch.setattr(mcp_module, "_try_pattern_d_for_auto_scrape", _skip_d_for_auto_scrape)
+
+        agent_module = MagicMock()
+        agent_module.AgentConfig = MagicMock()
+        agent_module.AgentConfig.from_env = MagicMock(
+            return_value=MagicMock(merged=lambda **_: MagicMock())
+        )
+
+        async def dead_host(*_args: Any, **_kwargs: Any) -> Any:
+            raise AgentError(
+                "agent_extract failed at https://gone.test/p: Page.goto: net::ERR_NAME_NOT_RESOLVED"
+            )
+
+        agent_module.agent_extract = dead_host
+        monkeypatch.setitem(sys.modules, "scrapper_tool.agent", agent_module)
+
+        tool = _get_tool(server, "auto_scrape")
+        with pytest.raises(AgentError, match="ERR_NAME_NOT_RESOLVED"):
+            await tool.fn(url="https://gone.test/p")  # type: ignore[attr-defined]
+
+
 # ---- F2: per-domain tier memory (MCP parity) ------------------------------
 
 

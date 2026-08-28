@@ -26,7 +26,7 @@ from pydantic import BaseModel
 
 from scrapper_tool.agent import extract as extract_mod
 from scrapper_tool.agent.types import AgentConfig
-from scrapper_tool.errors import AgentBlockedError, AgentTimeoutError
+from scrapper_tool.errors import AgentBlockedError, AgentError, AgentTimeoutError
 
 # ---------------------------------------------------------------------------
 # Crawl4AI / Ollama fakes
@@ -276,6 +276,58 @@ class TestRunExtractFailures:
         result = await extract_mod.run_extract("https://e.com", _Schema, config=cfg)
         assert result.blocked is True
         assert result.error and "cloudflare" in result.error.lower()
+
+    @pytest.mark.asyncio
+    async def test_a_page_that_never_loaded_raises_instead_of_returning(
+        self, fake_crawl4ai: MagicMock
+    ) -> None:
+        """The regression: a dead host used to come back as a *successful* E1.
+
+        Crawl4AI catches navigation errors itself and returns ``success=False``
+        rather than raising, and ``net::ERR_NAME_NOT_RESOLVED`` matches none of
+        the block signatures — so the old code returned a non-blocked
+        ``AgentResult``, both cascades scored it as an E1 win on
+        ``if not result.blocked``, and the caller got a 200 with ``data: null``.
+        """
+        crawler = fake_crawl4ai.crawler_cls
+        crawler.return_value = _CrawlResult(
+            success=False,
+            extracted=None,
+            markdown=None,
+            error_message="Page.goto: net::ERR_NAME_NOT_RESOLVED at https://site.test/missing",
+        )
+        cfg = AgentConfig(captcha_solver="none", browser="patchright")
+        with pytest.raises(AgentError, match="ERR_NAME_NOT_RESOLVED"):
+            await extract_mod.run_extract("https://site.test/missing", _Schema, config=cfg)
+
+    @pytest.mark.asyncio
+    async def test_an_unsuccessful_crawl_with_no_message_still_raises(
+        self, fake_crawl4ai: MagicMock
+    ) -> None:
+        """``success=False`` is the signal; an empty message must not soften it."""
+        crawler = fake_crawl4ai.crawler_cls
+        crawler.return_value = _CrawlResult(success=False, extracted=None, error_message="")
+        cfg = AgentConfig(captcha_solver="none", browser="patchright")
+        with pytest.raises(AgentError, match="unsuccessful crawl"):
+            await extract_mod.run_extract("https://e.com", _Schema, config=cfg)
+
+    @pytest.mark.asyncio
+    async def test_a_successful_crawl_with_nothing_extracted_still_returns(
+        self, fake_crawl4ai: MagicMock
+    ) -> None:
+        """The guard keys on ``success``, not on emptiness.
+
+        A page can render fine and yield no structured data — that is a real
+        result with markdown in it, and ``is_structured`` is how the cascade
+        reports it. Raising here instead would break the render-only path.
+        """
+        crawler = fake_crawl4ai.crawler_cls
+        crawler.return_value = _CrawlResult(success=True, extracted=None, markdown="# a page")
+        cfg = AgentConfig(captcha_solver="none", browser="patchright")
+        result = await extract_mod.run_extract("https://e.com", _Schema, config=cfg)
+        assert result.blocked is False
+        assert result.data is None
+        assert result.rendered_markdown == "# a page"
 
 
 class TestSchemaNormalization:

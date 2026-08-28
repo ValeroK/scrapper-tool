@@ -290,6 +290,52 @@ class TestScrape:
         assert body["error"] == "blocked"
         assert "All patterns blocked" in body["detail"]
 
+    @pytest.mark.asyncio
+    async def test_a_page_e1_could_not_load_is_never_reported_as_a_win(
+        self, app_no_auth: Any, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A dead host must surface as an error, not a 200 carrying ``data: null``.
+
+        Crawl4AI returns ``success=False`` for a navigation failure instead of
+        raising, and the message (``net::ERR_NAME_NOT_RESOLVED``) matches no
+        block signature — so E1 used to hand the cascade a non-blocked
+        ``AgentResult`` and ``if not result.blocked`` scored it a win.
+        ``run_extract`` now raises :class:`AgentError` for that case (see
+        ``_raise_if_the_page_never_loaded``); this pins the surface behaviour
+        that depends on it.
+        """
+        from scrapper_tool.errors import AgentError
+
+        async def fake_ladder(method: str, url: str, **kwargs: Any) -> Any:
+            return _make_response(text="", url=url, status_code=404), "chrome146"
+
+        monkeypatch.setattr("scrapper_tool.ladder.request_with_ladder", fake_ladder)
+        monkeypatch.setattr(http_server, "_hostile_available", lambda: False)
+
+        agent_module = MagicMock()
+        agent_module.AgentConfig = MagicMock()
+        agent_module.AgentConfig.from_env = MagicMock(
+            return_value=MagicMock(merged=lambda **_: MagicMock())
+        )
+        agent_module.agent_extract = AsyncMock(
+            side_effect=AgentError(
+                "agent_extract failed at https://site.test/missing: "
+                "Page.goto: net::ERR_NAME_NOT_RESOLVED"
+            )
+        )
+
+        import sys
+
+        monkeypatch.setitem(sys.modules, "scrapper_tool.agent", agent_module)
+
+        async with _client(app_no_auth) as client:
+            resp = await client.post("/scrape", json={"url": "https://site.test/missing"})
+
+        assert resp.status_code == 500
+        body = resp.json()
+        assert body["error"] == "agent_error"
+        assert "ERR_NAME_NOT_RESOLVED" in body["detail"]
+
 
 # --- /extract — agent extra not installed -> 503 -------------------------
 

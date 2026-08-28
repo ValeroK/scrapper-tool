@@ -27,6 +27,33 @@ All notable changes to `scrapper-tool` are recorded here. Format follows [Keep a
 
 ### Fixed
 
+- **E1 scored a page that never loaded as a win.** A host that doesn't resolve,
+  a refused connection, a navigation timeout — `/scrape` returned **200** for all
+  of them, `pattern_used: "e1"`, `data: null`. A crawl counted those pages as
+  `ok`, so `stats.failed` was 0 on a run where nothing was fetched.
+
+  Crawl4AI does not raise for a navigation failure; it catches it and returns
+  `success=False` with the reason in `error_message`. That bypassed the
+  `except` block in `run_extract` that exists to classify exactly this, and
+  `_crawl4ai_result_to_agent` folded the failure into `AgentResult.error` — a
+  field documented as *recoverable* categories only, "hard failures raise an
+  exception instead". Nothing downstream could tell the difference: both
+  cascades accept E1 on `if not result.blocked`
+  (`http_server._do_scrape_e_tier`, `mcp._auto_scrape_inner`), and
+  `net::ERR_NAME_NOT_RESOLVED` matches none of the block signatures, so it read
+  as a clean result.
+
+  `run_extract` now raises `AgentError` when Crawl4AI reports an unsuccessful
+  crawl that isn't a block. REST maps that to **500 `agent_error`**; a crawl
+  records the page as failed with the navigation error attached. Fixed at the
+  agent layer rather than in either cascade, because both had the same bug for
+  the same reason.
+
+  **A block is deliberately still returned rather than raised.** The cascade
+  wants a blocked E1 as a value so it can hand back the partial content and the
+  escalation log instead of a bare error — that path, and its `422`, are
+  unchanged.
+
 - **Three `tests/unit/` tests reached the real internet, and one of them
   passed only because of it.** `tests/conftest.py` states that `tests/unit/` is "fast,
   hermetic, no network". Three tests did not honour that, and the outcome of one

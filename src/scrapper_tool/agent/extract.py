@@ -182,6 +182,7 @@ async def run_extract(
         raise AgentError(f"agent_extract failed at {url}: {exc}") from exc
 
     duration = time.perf_counter() - started
+    _raise_if_the_page_never_loaded(result, url=url)
     return _crawl4ai_result_to_agent(
         result,
         url=url,
@@ -287,6 +288,40 @@ def _crawl4ai_browser_type(name: str) -> str:
         # attach path is ever bypassed.
         "obscura": "chromium",
     }.get(name, "chromium")
+
+
+def _raise_if_the_page_never_loaded(result: Any, *, url: str) -> None:
+    """Turn a Crawl4AI hard failure back into an exception.
+
+    :attr:`~scrapper_tool.agent.types.AgentResult.error` is documented as a
+    *recoverable* category — ``schema-validation-failed`` / ``no-match`` — with
+    hard failures raising instead. Crawl4AI quietly breaks that contract: it
+    catches navigation errors internally and hands back ``success=False`` with
+    the reason in ``error_message``, so a page that never loaded arrived here as
+    an ordinary ``AgentResult`` and skipped the ``except`` block above that
+    exists to classify exactly this.
+
+    Nothing downstream could tell the difference. Both cascades accept E1 on
+    ``if not result.blocked`` (:func:`http_server._do_scrape_e_tier`,
+    :func:`mcp._auto_scrape_inner`), so ``net::ERR_NAME_NOT_RESOLVED`` — which
+    matches none of the block signatures — scored as an **E1 win** and was
+    returned to the caller as a successful scrape carrying ``data: null``. A
+    crawl counted those pages as ``ok``, which is how a dead host looked like a
+    clean run.
+
+    A block is deliberately *not* raised here. The cascade wants a blocked E1 as
+    a value rather than an exception, so it can hand back the partial content
+    and the escalation log instead of a bare error; that path is unchanged, and
+    ``_crawl4ai_result_to_agent`` still marks it.
+    """
+    if getattr(result, "success", True):
+        return
+    message = (getattr(result, "error_message", "") or "").strip()
+    if looks_like_block_message(message):
+        return
+    raise AgentError(
+        f"agent_extract failed at {url}: {message or 'crawl4ai reported an unsuccessful crawl'}"
+    )
 
 
 def _looks_like_block(exc: Exception) -> bool:
