@@ -14,6 +14,7 @@ from typing import Any
 import pytest
 
 from scrapper_tool import crawl_site, scrape
+from scrapper_tool.ladder import IMPERSONATE_LADDER
 
 _PRODUCT_HTML = (
     '<html><head><script type="application/ld+json">'
@@ -32,7 +33,7 @@ def _fake_ladder(monkeypatch: pytest.MonkeyPatch, html: str = _PRODUCT_HTML) -> 
 
     async def ladder(method: str, url: str, **kwargs: Any) -> tuple[Any, str]:
         _Resp.url = url
-        return _Resp(), "chrome146"
+        return _Resp(), IMPERSONATE_LADDER[0]
 
     monkeypatch.setattr("scrapper_tool.ladder.request_with_ladder", ladder)
 
@@ -161,7 +162,7 @@ async def test_crawl_site_streams_pages(monkeypatch: pytest.MonkeyPatch) -> None
             self.headers = {"content-type": "text/html"}
 
     async def ladder(method: str, url: str, **kwargs: Any) -> tuple[Any, str]:
-        return _Resp(url), "chrome146"
+        return _Resp(url), IMPERSONATE_LADDER[0]
 
     monkeypatch.setattr("scrapper_tool.ladder.request_with_ladder", ladder)
 

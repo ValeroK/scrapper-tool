@@ -55,7 +55,7 @@ Most scrapers are written from scratch every time, even though 90% of the work i
 `scrapper-tool` packages the parts that don't change per vendor, so you only write the parts that do.
 
 - **Pattern-first design.** Five named, documented extraction patterns (A–E) — pick the one DevTools points at, skip the rest.
-- **Anti-bot ladder built in.** Auto-walks `chrome146 → chrome142 → safari260 → firefox147 → chrome133a` when a profile gets fingerprinted.
+- **Anti-bot ladder built in.** Auto-walks `chrome150 → chrome146 → safari2601 → firefox147 → chrome133a` when a profile gets fingerprinted.
 - **Deterministic tests.** Fixture-replay (`FakeCurlSession`, `replay_fixture`, golden snapshots) — no live HTTP in CI.
 - **Optional hostile mode.** Cloudflare Turnstile / Akamai EVA defeat path via [Scrapling](https://github.com/D4Vinci/Scrapling) — opt-in extra, no Playwright bloat by default.
 - **LLM-agent ready.** `v0.2.0+` ships an MCP server so Claude, AutoGen, LangChain, etc. can drive the scraper directly.
@@ -76,7 +76,7 @@ Web scraping in 2026 is dominated by five recurring patterns. This lib gives eac
 | **D — Hostile** | Cloudflare Turnstile, Akamai EVA, etc. defeat both default `httpx` and `curl_cffi`. | `patterns.d.hostile_client()` (via [Scrapling](https://github.com/D4Vinci/Scrapling)) — `pip install scrapper-tool[hostile]` | High — Playwright runtime, ≈400 MB image bloat. |
 | **E — LLM agent** *(v1.0.0+)* | Pattern D still gets blocked, OR the page needs interaction (login, multi-step nav, dynamic forms), OR there's no stable selector. | `agent_extract()` (Crawl4AI + Ollama) and `agent_browse()` (browser-use + Camoufox + Ollama) — `pip install scrapper-tool[llm-agent]` | Highest — local-LLM latency. Free at run-time (no API). See [Pattern E docs](docs/patterns/e-llm-agent.md). |
 
-Plus a five-profile **anti-bot ladder** (`chrome146 → chrome142 → safari260 → firefox147 → chrome133a`) that auto-walks when a profile gets fingerprinted, and a `scrapper-tool canary` CLI for nightly fingerprint-health probes.
+Plus a five-profile **anti-bot ladder** (`chrome150 → chrome146 → safari2601 → firefox147 → chrome133a`) that auto-walks when a profile gets fingerprinted, and a `scrapper-tool canary` CLI for nightly fingerprint-health probes.
 
 ### Checking your install
 
@@ -93,7 +93,7 @@ scrapper-tool doctor - v2.1.0     Status: degraded
 Tier     | Status   | Detail
 -------- | -------- | ------------------------------------------------
 replay   | ok       | cache dir writable at /tmp/scrapper-tool-recipes
-a_b_c    | ok       | chrome146, chrome142, safari260, firefox147, chrome133a
+a_b_c    | ok       | chrome150, chrome146, safari2601, firefox147, chrome133a
 d        | degraded | scrapling installed, but no Camoufox/Firefox binary found on disk
 render   | degraded | camoufox module imports, but its browser binary is missing
 e1       | degraded | crawl4ai ok; LLM unreachable at http://localhost:11434
@@ -131,7 +131,7 @@ flowchart TD
     B --> C{TLS-sensitive?}
     C -- no --> D[httpx]
     C -- yes --> E[curl_cffi ladder]
-    E --> E1[chrome146] --> E2[chrome142] --> E3[safari260] --> E4[firefox147]
+    E --> E1[chrome150] --> E2[chrome146] --> E3[safari2601] --> E4[firefox147]
     D --> F[Response]
     E4 --> F
     F --> G{Pattern}
@@ -261,7 +261,7 @@ For TLS-sensitive vendors, flip one switch:
 
 ```python
 async with vendor_client(use_curl_cffi=True) as client:
-    ...   # walks chrome146 → chrome142 → safari → firefox until one returns 200
+    ...   # walks chrome150 → chrome146 → safari → firefox until one returns 200
 ```
 
 For protected sites (Cloudflare, DataDome, Akamai) where Pattern D fails, escalate to Pattern E:
@@ -789,7 +789,7 @@ result = await agent_extract(url, schema=..., config=cfg)
 
 ## Why these tools?
 
-Short version: `curl_cffi` is the only actively-maintained TLS-impersonation lib with `chrome131+`/`chrome133a`/`chrome142`/`chrome146` profiles; `puppeteer-stealth` and `playwright-extra` were deprecated in 2025-02; Scrapling is the only OSS Playwright-based stack with a working Turnstile auto-solve as of 2026; managed SaaS (Firecrawl, ZenRows, Bright Data) is deliberately not bundled.
+Short version: `curl_cffi` is the only actively-maintained TLS-impersonation lib with `chrome133a`/`chrome146`/`chrome150` profiles; `puppeteer-stealth` and `playwright-extra` were deprecated in 2025-02; Scrapling is the only OSS Playwright-based stack with a working Turnstile auto-solve as of 2026; managed SaaS (Firecrawl, ZenRows, Bright Data) is deliberately not bundled.
 
 Full sourced rationale: **[`docs/research/2026-04-30-landscape.md`](docs/research/2026-04-30-landscape.md)**.
 

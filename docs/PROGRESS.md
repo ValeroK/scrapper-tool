@@ -17,6 +17,7 @@ Last updated: 2026-08-27. Branch: `feat/url-guard` (unpushed).
 | **2.2.2** | Captcha grid tier gets its own vision model (`qwen3.8-27b-apex`) + a doctor probe for it |
 | **2.2.3** | Render tier aborts page-initiated SSRF; opt-in per-hop redirect vetting for curl_cffi |
 | — | Dependency tree upgraded; `mcp` capped `<2` |
+| — | Ladder refreshed to `chrome150 → chrome146 → safari2601 → firefox147 → chrome133a`, and the impersonated User-Agent is no longer overwritten |
 
 Also merged from `main` (separate session): the unit-suite hermeticity fixes,
 a hard-E1-failure handoff to E2, and a raise when Crawl4AI reports a page that
@@ -29,17 +30,7 @@ mypy `--strict` clean, zero `docs/openapi/` drift, `pip-audit` clean.
 
 ## Decisions waiting on a human
 
-### 1. The ladder still leads with `chrome146`; `chrome150` is now available
-
-`curl_cffi` 0.16.2 (installed) ships a `chrome150` target. `IMPERSONATE_LADDER`
-still leads with `chrome146`, two Chrome releases behind.
-
-This matters on this project's own terms — `ladder.py`'s docstring already argues
-that pinning a build no real user runs is *itself* a fingerprint, and the file
-documents a "Bumping the primary" procedure. Deliberately not done as part of the
-dependency bump: it changes anti-bot behaviour and wants its own canary run.
-
-### 2. `SCRAPPER_TOOL_URL_GUARD_STRICT_REDIRECTS` is still off by default
+### 1. `SCRAPPER_TOOL_URL_GUARD_STRICT_REDIRECTS` is still off by default
 
 The fingerprint question it was gated on has been answered. Measured on the
 redirected hop itself across `chrome146`, `chrome142`, `firefox147` and

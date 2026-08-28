@@ -85,6 +85,46 @@ that was a live security hole rather than a missed optimisation.
   payload shape as a superset with `error_code` and `remedy` added and `blocked`
   left `false`.
 
+### Changed (impersonation ladder)
+
+- **Ladder refreshed to `chrome150 -> chrome146 -> safari2601 -> firefox147 ->
+  chrome133a`.** `curl_cffi` 0.16.2 added `chrome150` and `safari2601`; the
+  ladder was still leading with `chrome146`, two Chrome releases behind, and
+  `ladder.py`'s own docstring argues that impersonating a build nobody runs is
+  itself a fingerprint.
+
+  Every rung was probed live before promotion — a 200 from `tls.peet.ws`, plus
+  the reported UA version, because the numeric suffixes do not order themselves
+  (`safari2601` is Version/26.0.1 against `safari260`'s 26.0). `chrome150` is
+  distinguishable from `chrome146` at the TLS layer, not just in the UA: JA4
+  extension hashes `806a8c22fdea` vs `d8a2da3f94cd`, so this is a real rotation
+  rather than a version-number bump.
+
+- **The impersonated User-Agent is no longer overwritten. This is the bigger
+  fix.** Both `ladder._curl_cffi_session` and `vendor_client(use_curl_cffi=True)`
+  layered the polite `scrapper-tool/0.1` UA on top of the headers `impersonate`
+  installs, which *replaced* the browser one. Every impersonating request went
+  out with a Chrome TLS handshake and a User-Agent naming the scraper — a
+  self-identifying mismatch to anything that cross-checks the two, which is the
+  first thing an anti-bot vendor does.
+
+  Measured against `tls.peet.ws`: before, `ua=Mozilla/5.0 (compatible;
+  scrapper-tool/0.1; ...)` alongside a Chrome JA4; after, `ua=Chrome/150.0.0.0`
+  matching. `Accept-Language` was dropped for the same reason. The polite UA
+  stays on the non-impersonating httpx path, where being honest is the intent.
+
+- **The freshness guard's tolerance tightened from 4 to 2.**
+  `test_ladder_leads_with_a_fresh_profile` exists to prompt exactly this bump and
+  did not fire: `chrome150 - chrome146` is exactly 4, so it sat on its own
+  boundary and stayed green while the staleness was found by hand instead.
+  curl_cffi's chrome targets are sparse (136, 142, 145, 146, 150), so a window of
+  4 spans whole releases — that is a blind spot, not a safety margin.
+
+- Ladder-dependent tests now index `IMPERSONATE_LADDER` rather than naming a
+  build. 22 tests broke on this bump purely because they hardcoded `chrome146`;
+  what they actually assert is "the first rung wins" or "it falls through to the
+  second", which is what they now say.
+
 ### Changed (captcha grid tier)
 
 - **`captcha_vision_model` now defaults to `qwen3.8-27b-apex`** instead of `None`

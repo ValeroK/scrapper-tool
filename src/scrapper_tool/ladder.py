@@ -32,10 +32,20 @@ Ladder rules (codified in :func:`request_with_ladder`):
 Bumping the primary
 -------------------
 
-When ``chrome133a`` starts showing >5% 403 rate in the live-canary
-workflow, promote whichever ``curl_cffi`` profile has stabilised —
-``chrome142`` and ``chrome146`` are the freshest available as of
-2026-04-30. Update :data:`IMPERSONATE_LADDER` and add a CHANGELOG row.
+Two triggers. Either the leading profile starts showing a >5% 403 rate in the
+live-canary workflow, or ``curl_cffi`` ships a fresher Chrome than the one we
+lead with — ``test_ladder_leads_with_a_fresh_profile`` fails on the second, and
+is a prompt to re-benchmark rather than a bug in itself.
+
+Promote by probing the candidate live first (a 200 from a TLS-reporting endpoint,
+and the reported UA version, since the numeric suffixes do not order themselves —
+``safari2601`` is Version/26.0.1 while ``safari260`` is 26.0). Then update
+:data:`IMPERSONATE_LADDER` and add a CHANGELOG row with the evidence.
+
+Note that the impersonated header set — User-Agent included — comes from
+``curl_cffi`` and must not be overridden here. Setting our own UA on top of a
+Chrome handshake advertises a bot to anything comparing the two; see the comment
+in :func:`_curl_cffi_session`.
 """
 
 from __future__ import annotations
@@ -48,7 +58,7 @@ from curl_cffi.requests import AsyncSession as _CurlCffiAsyncSession
 from scrapper_tool._logging import get_logger
 from scrapper_tool._urlguard import assert_url_allowed_nodns
 from scrapper_tool.errors import BlockedError, VendorHTTPError
-from scrapper_tool.http import _DEFAULT_USER_AGENT, request_with_retry
+from scrapper_tool.http import request_with_retry
 from scrapper_tool.proxy import resolve_proxy
 
 if TYPE_CHECKING:
@@ -75,21 +85,31 @@ if TYPE_CHECKING:
 #
 # Refreshed 2026-07 for curl_cffi 0.15. A stale ladder is itself a detection
 # signal — impersonating a Chrome build that no real user runs any more is a
-# fingerprint, so the freshest target of each family goes first:
+# fingerprint, so the freshest target of each family goes first.
 #
-# - chrome146 — freshest stable Chrome in curl_cffi 0.15.
-# - chrome142 — recent but settled; diversity inside the Chrome family.
-# - safari260 — freshest Safari; the escape hatch when Chrome is burned.
-# - firefox147 — freshest Firefox.
-# - chrome133a — the previously-validated primary, kept as the tail rung. Its
+# Refreshed again 2026-08-27 for curl_cffi 0.16.2, which added ``chrome150`` and
+# ``safari2601``. Each rung below was probed live before promotion (200 from
+# tls.peet.ws, with the reported UA version confirming which target is actually
+# newer — ``safari2601`` is Version/26.0.1 against ``safari260``'s 26.0, and the
+# numeric suffixes are not otherwise self-explaining):
+#
+# - chrome150 — freshest stable Chrome in curl_cffi 0.16.2. Distinguishable from
+#   chrome146 at the TLS layer, not just in the UA: JA4 extension hashes are
+#   ``806a8c22fdea`` vs ``d8a2da3f94cd``, so this is a real rotation rather than
+#   a cosmetic version bump.
+# - chrome146 — the previous primary; recent but settled, diversity inside the
+#   Chrome family.
+# - safari2601 — freshest Safari; the escape hatch when Chrome is burned.
+# - firefox147 — freshest Firefox (unchanged; still the newest target available).
+# - chrome133a — the originally-validated primary, kept as the tail rung. Its
 #   only cost is one extra request on a path where all four fresher profiles
 #   already 403'd (i.e. we were heading to Pattern D regardless), and it keeps a
 #   known-good profile reachable for consumers whose adapters were shipped
 #   against it.
 IMPERSONATE_LADDER: tuple[str, ...] = (
+    "chrome150",
     "chrome146",
-    "chrome142",
-    "safari260",
+    "safari2601",
     "firefox147",
     "chrome133a",
 )
@@ -125,12 +145,22 @@ async def _curl_cffi_session(
     points at. Putting them in the jar makes libcurl apply domain and path
     scoping on every hop, which is the whole point.
     """
-    headers: dict[str, str] = {
-        "User-Agent": _DEFAULT_USER_AGENT,
-        "Accept-Language": "en-US,en;q=0.8",
-    }
-    if extra_headers:
-        headers.update(extra_headers)
+    # No default User-Agent here, deliberately. ``impersonate`` supplies a full
+    # browser header set — including the UA matching the profile's Chrome/Safari
+    # build — and setting our own on top replaced it, so every ladder request
+    # went out with a Chrome TLS handshake and a User-Agent reading
+    # ``scrapper-tool/0.1``. Measured against tls.peet.ws: native chrome150
+    # reports ``Chrome/150.0.0.0``; with the old override the same request
+    # reported ``scrapper-tool/0.1``. A vendor cross-checking TLS against UA sees
+    # a self-identifying bot, which defeats the point of impersonating at all.
+    #
+    # Accept-Language is dropped for the same reason: the impersonated set
+    # already carries one appropriate to the profile.
+    #
+    # ``httpx``'s polite default UA (``http._DEFAULT_USER_AGENT``) stays where it
+    # belongs — on the non-impersonating path, where being honest about who we
+    # are is the intent rather than a leak.
+    headers: dict[str, str] = dict(extra_headers) if extra_headers else {}
 
     session: _CurlCffiAsyncSession[Any] = _CurlCffiAsyncSession(
         timeout=timeout,

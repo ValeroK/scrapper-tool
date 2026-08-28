@@ -31,6 +31,7 @@ from scrapper_tool import (
     __version__,
     http_server,
 )
+from scrapper_tool.ladder import IMPERSONATE_LADDER
 from scrapper_tool.recipe.store import cache_key
 
 # --- Fixtures -------------------------------------------------------------
@@ -122,7 +123,7 @@ class TestFetch:
         self, app_no_auth: Any, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         async def fake_ladder(method: str, url: str, **kwargs: Any) -> tuple[Any, str]:
-            return _make_response(text=_PRODUCT_HTML, url=url), "chrome146"
+            return _make_response(text=_PRODUCT_HTML, url=url), IMPERSONATE_LADDER[0]
 
         monkeypatch.setattr("scrapper_tool.ladder.request_with_ladder", fake_ladder)
 
@@ -131,7 +132,7 @@ class TestFetch:
         assert resp.status_code == 200
         body = resp.json()
         assert body["status_code"] == 200
-        assert body["profile"] == "chrome146"
+        assert body["profile"] == IMPERSONATE_LADDER[0]
         assert body["product"] is not None
         assert body["product"]["name"] == "Widget"
         assert body["product"]["price"] == "19.99"
@@ -144,7 +145,7 @@ class TestFetch:
         self, app_no_auth: Any, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         async def fake_ladder(method: str, url: str, **kwargs: Any) -> tuple[Any, str]:
-            return _make_response(text=_PRODUCT_HTML), "chrome146"
+            return _make_response(text=_PRODUCT_HTML), IMPERSONATE_LADDER[0]
 
         monkeypatch.setattr("scrapper_tool.ladder.request_with_ladder", fake_ladder)
 
@@ -185,7 +186,7 @@ class TestScrape:
         self, app_no_auth: Any, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         async def fake_ladder(method: str, url: str, **kwargs: Any) -> tuple[Any, str]:
-            return _make_response(text=_PRODUCT_HTML, url=url), "chrome146"
+            return _make_response(text=_PRODUCT_HTML, url=url), IMPERSONATE_LADDER[0]
 
         monkeypatch.setattr("scrapper_tool.ladder.request_with_ladder", fake_ladder)
 
@@ -307,7 +308,7 @@ class TestScrape:
         from scrapper_tool.errors import AgentError
 
         async def fake_ladder(method: str, url: str, **kwargs: Any) -> Any:
-            return _make_response(text="", url=url, status_code=404), "chrome146"
+            return _make_response(text="", url=url, status_code=404), IMPERSONATE_LADDER[0]
 
         monkeypatch.setattr("scrapper_tool.ladder.request_with_ladder", fake_ladder)
         monkeypatch.setattr(http_server, "_hostile_available", lambda: False)
@@ -397,7 +398,7 @@ class TestAuth:
         self, app_with_key: Any, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         async def fake_ladder(method: str, url: str, **kwargs: Any) -> tuple[Any, str]:
-            return _make_response(text="<html></html>", url=url), "chrome146"
+            return _make_response(text="<html></html>", url=url), IMPERSONATE_LADDER[0]
 
         monkeypatch.setattr("scrapper_tool.ladder.request_with_ladder", fake_ladder)
 
@@ -659,7 +660,7 @@ class TestScrapeBrowseFallback:
         self, app_no_auth: Any, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         async def fake_ladder(method: str, url: str, **kwargs: Any) -> tuple[Any, str]:
-            return _make_response(text="<html>plain</html>", url=url), "chrome146"
+            return _make_response(text="<html>plain</html>", url=url), IMPERSONATE_LADDER[0]
 
         monkeypatch.setattr("scrapper_tool.ladder.request_with_ladder", fake_ladder)
 
@@ -1092,7 +1093,7 @@ class TestScrapeAutoNoOverescalation:
         # A/B/C returns a 200 page with JSON-LD. Pre-1.1.2: escalates to E1.
         # v1.1.2: stays on a_b_c (schema_json + page_readable + has_any_signal).
         async def fake_ladder(method: str, url: str, **kwargs: Any) -> tuple[Any, str]:
-            return _make_response(text=_PRODUCT_HTML, url=url), "chrome146"
+            return _make_response(text=_PRODUCT_HTML, url=url), IMPERSONATE_LADDER[0]
 
         monkeypatch.setattr("scrapper_tool.ladder.request_with_ladder", fake_ladder)
 
@@ -1121,7 +1122,7 @@ class TestScrapeAutoNoOverescalation:
         # Opt-in to legacy behaviour: force_llm_extract=true → E1 even when
         # A/B/C had a readable page.
         async def fake_ladder(method: str, url: str, **kwargs: Any) -> tuple[Any, str]:
-            return _make_response(text=_PRODUCT_HTML, url=url), "chrome146"
+            return _make_response(text=_PRODUCT_HTML, url=url), IMPERSONATE_LADDER[0]
 
         monkeypatch.setattr("scrapper_tool.ladder.request_with_ladder", fake_ladder)
         # Skip Pattern D so the assertion stays a 2-step cascade.
@@ -1178,7 +1179,7 @@ class TestScrapeAutoNoOverescalation:
         async def fake_ladder(method: str, url: str, **kwargs: Any) -> tuple[Any, str]:
             return (
                 _make_response(text="<html><body>nothing here</body></html>", url=url),
-                "chrome146",
+                IMPERSONATE_LADDER[0],
             )
 
         monkeypatch.setattr("scrapper_tool.ladder.request_with_ladder", fake_ladder)
@@ -1392,7 +1393,7 @@ class TestScrapeWithPatternD:
         # force_llm_extract is to reach the LLM — D must inherit the same
         # opt-out and let the cascade reach E1.
         async def fake_ladder(method: str, url: str, **kwargs: Any) -> tuple[Any, str]:
-            return _make_response(text=_PRODUCT_HTML, url=url), "chrome146"
+            return _make_response(text=_PRODUCT_HTML, url=url), IMPERSONATE_LADDER[0]
 
         monkeypatch.setattr("scrapper_tool.ladder.request_with_ladder", fake_ladder)
         _install_fake_hostile_client(
@@ -1842,7 +1843,7 @@ class TestRecipeLearnAndReplay:
         _install_fake_render(monkeypatch, html=_RECIPE_LISTING_HTML, calls=renders)
 
         async def fake_ladder(method: str, url: str, **kwargs: Any) -> Any:
-            return _make_response(text=_RECIPE_LISTING_HTML, url=url), "chrome146"
+            return _make_response(text=_RECIPE_LISTING_HTML, url=url), IMPERSONATE_LADDER[0]
 
         monkeypatch.setattr("scrapper_tool.ladder.request_with_ladder", fake_ladder)
         monkeypatch.setattr(http_server, "_hostile_available", lambda: False)
@@ -1948,7 +1949,7 @@ class TestRecipeLearnAndReplay:
         monkeypatch.setenv("SCRAPPER_TOOL_RENDER_TIER", "0")
 
         async def fake_ladder(method: str, url: str, **kwargs: Any) -> Any:
-            return _make_response(text=_PRODUCT_HTML, url=url), "chrome146"
+            return _make_response(text=_PRODUCT_HTML, url=url), IMPERSONATE_LADDER[0]
 
         monkeypatch.setattr("scrapper_tool.ladder.request_with_ladder", fake_ladder)
 
@@ -1993,7 +1994,7 @@ class TestRecipeLearnAndReplay:
         get_store().put(cache_key("https://cars.test/list", {"fields": ["title"]}), recipe)
 
         async def fake_ladder(method: str, url: str, **kwargs: Any) -> Any:
-            return _make_response(text=_PRODUCT_HTML, url=url), "chrome146"
+            return _make_response(text=_PRODUCT_HTML, url=url), IMPERSONATE_LADDER[0]
 
         monkeypatch.setattr("scrapper_tool.ladder.request_with_ladder", fake_ladder)
 
@@ -2077,7 +2078,7 @@ class TestDomainPolicySkip:
         """One win is a fluke; the full cascade must still run."""
 
         async def fake_ladder(method: str, url: str, **kwargs: Any) -> Any:
-            return _make_response(text=_PRODUCT_HTML, url=url), "chrome146"
+            return _make_response(text=_PRODUCT_HTML, url=url), IMPERSONATE_LADDER[0]
 
         monkeypatch.setattr("scrapper_tool.ladder.request_with_ladder", fake_ladder)
         from datetime import UTC, datetime
@@ -2147,7 +2148,7 @@ class TestDomainPolicySkip:
         monkeypatch.setenv("SCRAPPER_TOOL_DOMAIN_POLICY", "0")
 
         async def fake_ladder(method: str, url: str, **kwargs: Any) -> Any:
-            return _make_response(text=_PRODUCT_HTML, url=url), "chrome146"
+            return _make_response(text=_PRODUCT_HTML, url=url), IMPERSONATE_LADDER[0]
 
         monkeypatch.setattr("scrapper_tool.ladder.request_with_ladder", fake_ladder)
 
@@ -2163,7 +2164,7 @@ class TestDomainPolicySkip:
         from scrapper_tool.recipe.policy import get_policy_store
 
         async def fake_ladder(method: str, url: str, **kwargs: Any) -> Any:
-            return _make_response(text=_PRODUCT_HTML, url=url), "chrome146"
+            return _make_response(text=_PRODUCT_HTML, url=url), IMPERSONATE_LADDER[0]
 
         monkeypatch.setattr("scrapper_tool.ladder.request_with_ladder", fake_ladder)
 
@@ -2446,7 +2447,7 @@ class TestChallengeDetectionEscalation:
         self, app_no_auth: Any, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         async def fake_ladder(method: str, url: str, **kwargs: Any) -> Any:
-            return _make_response(text=_RADWARE_WALL, url=url), "chrome146"
+            return _make_response(text=_RADWARE_WALL, url=url), IMPERSONATE_LADDER[0]
 
         monkeypatch.setattr("scrapper_tool.ladder.request_with_ladder", fake_ladder)
         # D is installed and would happily run — the point is that it doesn't.
@@ -2475,7 +2476,7 @@ class TestChallengeDetectionEscalation:
         """The one case where D has a real solver — don't skip it."""
 
         async def fake_ladder(method: str, url: str, **kwargs: Any) -> Any:
-            return _make_response(text=_CF_WALL, url=url), "chrome146"
+            return _make_response(text=_CF_WALL, url=url), IMPERSONATE_LADDER[0]
 
         monkeypatch.setattr("scrapper_tool.ladder.request_with_ladder", fake_ladder)
         _install_fake_hostile_client(
@@ -2495,7 +2496,7 @@ class TestChallengeDetectionEscalation:
         self, app_no_auth: Any, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         async def fake_ladder(method: str, url: str, **kwargs: Any) -> Any:
-            return _make_response(text=_RADWARE_WALL, url=url), "chrome146"
+            return _make_response(text=_RADWARE_WALL, url=url), IMPERSONATE_LADDER[0]
 
         monkeypatch.setattr("scrapper_tool.ladder.request_with_ladder", fake_ladder)
         monkeypatch.setattr(http_server, "_hostile_available", lambda: False)
@@ -2515,7 +2516,9 @@ class TestChallengeDetectionEscalation:
         """An ordinary no-signal page must not trip detection or skip D."""
 
         async def fake_ladder(method: str, url: str, **kwargs: Any) -> Any:
-            return _make_response(text="<html><body>plain page</body></html>", url=url), "chrome146"
+            return _make_response(
+                text="<html><body>plain page</body></html>", url=url
+            ), IMPERSONATE_LADDER[0]
 
         monkeypatch.setattr("scrapper_tool.ladder.request_with_ladder", fake_ladder)
         _install_fake_hostile_client(
@@ -2534,7 +2537,7 @@ class TestChallengeDetectionEscalation:
         self, app_no_auth: Any, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         async def fake_ladder(method: str, url: str, **kwargs: Any) -> Any:
-            return _make_response(text=_PRODUCT_HTML, url=url), "chrome146"
+            return _make_response(text=_PRODUCT_HTML, url=url), IMPERSONATE_LADDER[0]
 
         monkeypatch.setattr("scrapper_tool.ladder.request_with_ladder", fake_ladder)
 
@@ -2575,7 +2578,7 @@ class TestIsStructuredField:
         self, app_no_auth: Any, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         async def fake_ladder(method: str, url: str, **kwargs: Any) -> tuple[Any, str]:
-            return _make_response(text=_PRODUCT_HTML, url=url), "chrome146"
+            return _make_response(text=_PRODUCT_HTML, url=url), IMPERSONATE_LADDER[0]
 
         monkeypatch.setattr("scrapper_tool.ladder.request_with_ladder", fake_ladder)
 
@@ -3008,7 +3011,7 @@ class TestSharedProfileDir:
         monkeypatch.setattr(http_server, "_hostile_available", lambda: True)
 
         async def fake_ladder(method: str, url: str, **kwargs: Any) -> tuple[Any, str]:
-            return _make_response(text=_PRODUCT_HTML, url=url), "chrome146"
+            return _make_response(text=_PRODUCT_HTML, url=url), IMPERSONATE_LADDER[0]
 
         monkeypatch.setattr("scrapper_tool.ladder.request_with_ladder", fake_ladder)
 
@@ -3153,7 +3156,7 @@ class TestSharedProfileDir:
         caller_dir = str(tmp_path / "vendor-amayama-profile")
 
         async def fake_ladder(method: str, url: str, **kwargs: Any) -> tuple[Any, str]:
-            return _make_response(text=_PRODUCT_HTML, url=url), "chrome146"
+            return _make_response(text=_PRODUCT_HTML, url=url), IMPERSONATE_LADDER[0]
 
         monkeypatch.setattr("scrapper_tool.ladder.request_with_ladder", fake_ladder)
 
@@ -3185,7 +3188,7 @@ class TestSharedProfileDir:
         )
 
         async def fake_ladder(method: str, url: str, **kwargs: Any) -> tuple[Any, str]:
-            return _make_response(text=_PRODUCT_HTML, url=url), "chrome146"
+            return _make_response(text=_PRODUCT_HTML, url=url), IMPERSONATE_LADDER[0]
 
         monkeypatch.setattr("scrapper_tool.ladder.request_with_ladder", fake_ladder)
 
@@ -3514,7 +3517,7 @@ class TestEscalationLog:
         self, app_no_auth: Any, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         async def fake_ladder(method: str, url: str, **kwargs: Any) -> tuple[Any, str]:
-            return _make_response(text=_PRODUCT_HTML, url=url), "chrome146"
+            return _make_response(text=_PRODUCT_HTML, url=url), IMPERSONATE_LADDER[0]
 
         monkeypatch.setattr("scrapper_tool.ladder.request_with_ladder", fake_ladder)
         async with _client(app_no_auth) as client:
@@ -3638,7 +3641,7 @@ class TestMetricsEndpoint:
         # Run a /scrape that wins on A/B/C, then /metrics should show
         # scrapper_pattern_used_total{pattern="a_b_c"} >= 1.
         async def fake_ladder(method: str, url: str, **kwargs: Any) -> tuple[Any, str]:
-            return _make_response(text=_PRODUCT_HTML, url=url), "chrome146"
+            return _make_response(text=_PRODUCT_HTML, url=url), IMPERSONATE_LADDER[0]
 
         monkeypatch.setattr("scrapper_tool.ladder.request_with_ladder", fake_ladder)
         async with _client(app_no_auth) as client:
@@ -3661,7 +3664,7 @@ class TestMetricsEndpoint:
         )
 
         async def fake_ladder(method: str, url: str, **kwargs: Any) -> tuple[Any, str]:
-            return _make_response(text=radware, url=url), "chrome146"
+            return _make_response(text=radware, url=url), IMPERSONATE_LADDER[0]
 
         monkeypatch.setattr("scrapper_tool.ladder.request_with_ladder", fake_ladder)
         monkeypatch.setattr(http_server, "_hostile_available", lambda: False)
@@ -3703,7 +3706,7 @@ class TestMetricsEndpoint:
         )
 
         async def fake_ladder(method: str, url: str, **kwargs: Any) -> tuple[Any, str]:
-            return _make_response(text=_RECIPE_LISTING_HTML, url=url), "chrome146"
+            return _make_response(text=_RECIPE_LISTING_HTML, url=url), IMPERSONATE_LADDER[0]
 
         monkeypatch.setattr("scrapper_tool.ladder.request_with_ladder", fake_ladder)
 

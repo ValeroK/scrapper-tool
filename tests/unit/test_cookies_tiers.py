@@ -33,6 +33,7 @@ import pytest
 from pydantic import SecretStr
 
 from scrapper_tool.cookies import CookieIn
+from scrapper_tool.ladder import IMPERSONATE_LADDER
 
 SECRET = "SESSION-TOKEN-DO-NOT-LEAK"
 
@@ -371,7 +372,7 @@ def _patch_ladder(monkeypatch: pytest.MonkeyPatch) -> dict[str, Any]:
     async def _fake_ladder(method: str, url: str, **kw: Any) -> Any:
         captured.update(kw)
         response = type("R", (), {"text": "<html>ok</html>", "status_code": 200, "url": url})()
-        return response, "chrome146"
+        return response, IMPERSONATE_LADDER[0]
 
     monkeypatch.setattr(ladder_mod, "request_with_ladder", _fake_ladder)
     return captured

@@ -42,15 +42,15 @@ def _no_real_sleep(monkeypatch: pytest.MonkeyPatch) -> None:
 class TestRunCanary:
     @pytest.mark.asyncio
     async def test_first_profile_wins_skips_rest(self, fake_curl: type[FakeCurlSession]) -> None:
-        fake_curl.STATUS_FOR_PROFILE = {"chrome146": 200}
+        fake_curl.STATUS_FOR_PROFILE = {IMPERSONATE_LADDER[0]: 200}
         report = await canary_module.run_canary("https://example.test/x")
-        assert report["winning_profile"] == "chrome146"
+        assert report["winning_profile"] == IMPERSONATE_LADDER[0]
         assert report["exit_code"] == 0
         results = report["results"]
         assert isinstance(results, list)
         # All four profiles in the report; first one ran, others skipped.
         assert len(results) == len(IMPERSONATE_LADDER)
-        assert results[0]["profile"] == "chrome146"
+        assert results[0]["profile"] == IMPERSONATE_LADDER[0]
         assert results[0]["status"] == 200
         assert results[0]["skipped"] is False
         for skipped in results[1:]:
@@ -60,13 +60,13 @@ class TestRunCanary:
     @pytest.mark.asyncio
     async def test_403_rotates_to_next_profile(self, fake_curl: type[FakeCurlSession]) -> None:
         fake_curl.STATUS_FOR_PROFILE = {
-            "chrome146": 403,
-            "chrome142": 200,
-            "safari260": 200,
+            IMPERSONATE_LADDER[0]: 403,
+            IMPERSONATE_LADDER[1]: 200,
+            IMPERSONATE_LADDER[2]: 200,
             "firefox147": 200,
         }
         report = await canary_module.run_canary("https://example.test/x")
-        assert report["winning_profile"] == "chrome142"
+        assert report["winning_profile"] == IMPERSONATE_LADDER[1]
         assert report["exit_code"] == 0
         results = report["results"]
         assert isinstance(results, list)
@@ -91,9 +91,11 @@ class TestRunCanary:
 
     @pytest.mark.asyncio
     async def test_custom_ladder(self, fake_curl: type[FakeCurlSession]) -> None:
-        fake_curl.STATUS_FOR_PROFILE = {"chrome142": 200}
-        report = await canary_module.run_canary("https://example.test/x", ladder=("chrome142",))
-        assert report["winning_profile"] == "chrome142"
+        fake_curl.STATUS_FOR_PROFILE = {IMPERSONATE_LADDER[1]: 200}
+        report = await canary_module.run_canary(
+            "https://example.test/x", ladder=(IMPERSONATE_LADDER[1],)
+        )
+        assert report["winning_profile"] == IMPERSONATE_LADDER[1]
         results = report["results"]
         assert isinstance(results, list)
         assert len(results) == 1
@@ -105,12 +107,12 @@ class TestCliMain:
         fake_curl: type[FakeCurlSession],
         capsys: pytest.CaptureFixture[str],
     ) -> None:
-        fake_curl.STATUS_FOR_PROFILE = {"chrome146": 200}
+        fake_curl.STATUS_FOR_PROFILE = {IMPERSONATE_LADDER[0]: 200}
         exit_code = canary_module.main(["canary", "https://example.test/x"])
         assert exit_code == 0
         captured = capsys.readouterr()
         assert "URL: https://example.test/x" in captured.out
-        assert "Effective profile: chrome146" in captured.out
+        assert f"Effective profile: {IMPERSONATE_LADDER[0]}" in captured.out
         assert captured.out.endswith("\n")
 
     def test_json_mode_parseable(
@@ -118,13 +120,13 @@ class TestCliMain:
         fake_curl: type[FakeCurlSession],
         capsys: pytest.CaptureFixture[str],
     ) -> None:
-        fake_curl.STATUS_FOR_PROFILE = {"chrome146": 200}
+        fake_curl.STATUS_FOR_PROFILE = {IMPERSONATE_LADDER[0]: 200}
         exit_code = canary_module.main(["canary", "https://example.test/x", "--json"])
         assert exit_code == 0
         captured = capsys.readouterr()
         parsed = json.loads(captured.out)
         assert parsed["url"] == "https://example.test/x"
-        assert parsed["winning_profile"] == "chrome146"
+        assert parsed["winning_profile"] == IMPERSONATE_LADDER[0]
         assert parsed["exit_code"] == 0
 
     def test_profiles_flag_overrides_default(

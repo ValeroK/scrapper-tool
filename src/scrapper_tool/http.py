@@ -101,7 +101,7 @@ _TRANSPORT_ERRORS: tuple[type[Exception], ...] = (
 # to sit on chrome124 long after the ladder moved on, which meant every
 # non-ladder request advertised a Chrome build no real user runs — a fingerprint
 # in itself. See IMPERSONATE_LADDER in ladder.py for the full chain.
-_CURL_CFFI_IMPERSONATE: Literal["chrome146"] = "chrome146"
+_CURL_CFFI_IMPERSONATE: Literal["chrome150"] = "chrome150"
 
 
 class _GuardedTransport(httpx.AsyncBaseTransport):
@@ -331,9 +331,15 @@ async def vendor_client(
         # kwarg shape; the session-level ``impersonate`` propagates to
         # every request issued through this session. ``allow_redirects``
         # is the curl_cffi spelling of httpx's ``follow_redirects``.
+        #
+        # Only the caller's own headers go in. ``impersonate`` supplies a full
+        # browser set including a matching User-Agent, and layering our polite
+        # ``scrapper-tool/0.1`` UA on top replaced it — advertising a Chrome TLS
+        # handshake alongside a UA that names the scraper. See the note in
+        # ``ladder._curl_cffi_session``; same defect, same fix.
         client = _CurlCffiAsyncSession(
             timeout=timeout,
-            headers=headers,
+            headers=dict(extra_headers) if extra_headers else {},
             proxy=proxy,
             allow_redirects=True,
             impersonate=_CURL_CFFI_IMPERSONATE,

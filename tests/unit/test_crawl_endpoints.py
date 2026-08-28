@@ -16,6 +16,7 @@ from httpx import ASGITransport, AsyncClient
 
 from scrapper_tool import http_server
 from scrapper_tool import mcp as mcp_module
+from scrapper_tool.ladder import IMPERSONATE_LADDER
 
 _SITE: dict[str, str] = {
     "https://site.test/": '<a href="/a">a</a><a href="/b">b</a>',
@@ -71,7 +72,7 @@ def _serve_site(monkeypatch: pytest.MonkeyPatch, site: dict[str, str] | None = N
         response.text = pages.get(url, "")
         response.url = url
         response.headers = {"content-type": "text/html"}
-        return response, "chrome146"
+        return response, IMPERSONATE_LADDER[0]
 
     monkeypatch.setattr("scrapper_tool.ladder.request_with_ladder", fake_ladder)
     # mcp.py imports the symbol directly, so patching the ladder module alone

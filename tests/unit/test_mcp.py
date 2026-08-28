@@ -99,13 +99,13 @@ class TestFetchWithLadder:
         server: object,
         fake_curl: type[FakeCurlSession],
     ) -> None:
-        fake_curl.STATUS_FOR_PROFILE = {"chrome146": 200}
-        fake_curl.RESPONSE_TEXT_FOR_PROFILE = {"chrome146": "<html>ok</html>"}
+        fake_curl.STATUS_FOR_PROFILE = {IMPERSONATE_LADDER[0]: 200}
+        fake_curl.RESPONSE_TEXT_FOR_PROFILE = {IMPERSONATE_LADDER[0]: "<html>ok</html>"}
         tool = _get_tool(server, "fetch_with_ladder")
 
         result = await tool.fn(url="https://example.test/x")  # type: ignore[attr-defined]
         assert result["status"] == 200
-        assert result["winning_profile"] == "chrome146"
+        assert result["winning_profile"] == IMPERSONATE_LADDER[0]
         assert result["blocked"] is False
         assert "<html>ok</html>" in result["body"]
         assert result["truncated"] is False
@@ -190,10 +190,10 @@ class TestCanaryTool:
         server: object,
         fake_curl: type[FakeCurlSession],
     ) -> None:
-        fake_curl.STATUS_FOR_PROFILE = {"chrome146": 200}
+        fake_curl.STATUS_FOR_PROFILE = {IMPERSONATE_LADDER[0]: 200}
         tool = _get_tool(server, "canary")
         result = await tool.fn(url="https://example.test/x")  # type: ignore[attr-defined]
-        assert result["winning_profile"] == "chrome146"
+        assert result["winning_profile"] == IMPERSONATE_LADDER[0]
         assert result["exit_code"] == 0
 
     @pytest.mark.asyncio
@@ -202,13 +202,13 @@ class TestCanaryTool:
         server: object,
         fake_curl: type[FakeCurlSession],
     ) -> None:
-        fake_curl.STATUS_FOR_PROFILE = {"chrome142": 200}
+        fake_curl.STATUS_FOR_PROFILE = {IMPERSONATE_LADDER[1]: 200}
         tool = _get_tool(server, "canary")
         result = await tool.fn(  # type: ignore[attr-defined]
             url="https://example.test/x",
-            profiles=["chrome142"],
+            profiles=[IMPERSONATE_LADDER[1]],
         )
-        assert result["winning_profile"] == "chrome142"
+        assert result["winning_profile"] == IMPERSONATE_LADDER[1]
 
 
 # ---- v1.1.0 additions: extract_structured + auto_scrape -----------------
@@ -227,8 +227,8 @@ class TestFetchWithLadderStructured:
             '"sku":"X1","offers":{"@type":"Offer","price":"19.99","priceCurrency":"USD"}}'
             "</script></head><body></body></html>"
         )
-        fake_curl.STATUS_FOR_PROFILE = {"chrome146": 200}
-        fake_curl.RESPONSE_TEXT_FOR_PROFILE = {"chrome146": product_html}
+        fake_curl.STATUS_FOR_PROFILE = {IMPERSONATE_LADDER[0]: 200}
+        fake_curl.RESPONSE_TEXT_FOR_PROFILE = {IMPERSONATE_LADDER[0]: product_html}
 
         tool = _get_tool(server, "fetch_with_ladder")
         result = await tool.fn(  # type: ignore[attr-defined]
@@ -246,8 +246,8 @@ class TestFetchWithLadderStructured:
         server: object,
         fake_curl: type[FakeCurlSession],
     ) -> None:
-        fake_curl.STATUS_FOR_PROFILE = {"chrome146": 200}
-        fake_curl.RESPONSE_TEXT_FOR_PROFILE = {"chrome146": "<html>plain</html>"}
+        fake_curl.STATUS_FOR_PROFILE = {IMPERSONATE_LADDER[0]: 200}
+        fake_curl.RESPONSE_TEXT_FOR_PROFILE = {IMPERSONATE_LADDER[0]: "<html>plain</html>"}
 
         tool = _get_tool(server, "fetch_with_ladder")
         result = await tool.fn(url="https://example.test/p")  # type: ignore[attr-defined]
@@ -268,8 +268,8 @@ class TestAutoScrape:
             '"sku":"Y1","offers":{"@type":"Offer","price":"29.99","priceCurrency":"USD"}}'
             "</script></head><body></body></html>"
         )
-        fake_curl.STATUS_FOR_PROFILE = {"chrome146": 200}
-        fake_curl.RESPONSE_TEXT_FOR_PROFILE = {"chrome146": product_html}
+        fake_curl.STATUS_FOR_PROFILE = {IMPERSONATE_LADDER[0]: 200}
+        fake_curl.RESPONSE_TEXT_FOR_PROFILE = {IMPERSONATE_LADDER[0]: product_html}
 
         tool = _get_tool(server, "auto_scrape")
         result = await tool.fn(url="https://example.test/p")  # type: ignore[attr-defined]
@@ -295,8 +295,8 @@ class TestAutoScrape:
             '"sku":"Z1","offers":{"@type":"Offer","price":"9.99","priceCurrency":"USD"}}'
             "</script></head><body></body></html>"
         )
-        fake_curl.STATUS_FOR_PROFILE = {"chrome146": 200}
-        fake_curl.RESPONSE_TEXT_FOR_PROFILE = {"chrome146": product_html}
+        fake_curl.STATUS_FOR_PROFILE = {IMPERSONATE_LADDER[0]: 200}
+        fake_curl.RESPONSE_TEXT_FOR_PROFILE = {IMPERSONATE_LADDER[0]: product_html}
 
         tool = _get_tool(server, "auto_scrape")
         result = await tool.fn(  # type: ignore[attr-defined]
@@ -814,9 +814,9 @@ class TestAutoScrapePolicySkip:
     ) -> None:
         from scrapper_tool.recipe.policy import get_policy_store
 
-        fake_curl.STATUS_FOR_PROFILE = {"chrome146": 200}
+        fake_curl.STATUS_FOR_PROFILE = {IMPERSONATE_LADDER[0]: 200}
         fake_curl.RESPONSE_TEXT_FOR_PROFILE = {
-            "chrome146": (
+            IMPERSONATE_LADDER[0]: (
                 '<html><head><script type="application/ld+json">'
                 '{"@context":"https://schema.org","@type":"Product","name":"W",'
                 '"offers":{"@type":"Offer","price":"1.00","priceCurrency":"USD"}}'
@@ -857,8 +857,8 @@ class TestAutoScrapeChallengeDetection:
         fake_curl: type[FakeCurlSession],
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
-        fake_curl.STATUS_FOR_PROFILE = {"chrome146": 200}
-        fake_curl.RESPONSE_TEXT_FOR_PROFILE = {"chrome146": _RADWARE_WALL}
+        fake_curl.STATUS_FOR_PROFILE = {IMPERSONATE_LADDER[0]: 200}
+        fake_curl.RESPONSE_TEXT_FOR_PROFILE = {IMPERSONATE_LADDER[0]: _RADWARE_WALL}
         # D is available and would run — the point is that it doesn't.
         import scrapper_tool.patterns.d as d_mod
 
@@ -882,8 +882,8 @@ class TestAutoScrapeChallengeDetection:
         fake_curl: type[FakeCurlSession],
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
-        fake_curl.STATUS_FOR_PROFILE = {"chrome146": 200}
-        fake_curl.RESPONSE_TEXT_FOR_PROFILE = {"chrome146": _CF_WALL}
+        fake_curl.STATUS_FOR_PROFILE = {IMPERSONATE_LADDER[0]: 200}
+        fake_curl.RESPONSE_TEXT_FOR_PROFILE = {IMPERSONATE_LADDER[0]: _CF_WALL}
         import scrapper_tool.patterns.d as d_mod
 
         def fake_hostile_client(**_kwargs: object) -> _FakeMcpFetcher:
@@ -904,8 +904,8 @@ class TestAutoScrapeChallengeDetection:
         server: object,
         fake_curl: type[FakeCurlSession],
     ) -> None:
-        fake_curl.STATUS_FOR_PROFILE = {"chrome146": 200}
-        fake_curl.RESPONSE_TEXT_FOR_PROFILE = {"chrome146": _RENDER_PRODUCT_HTML}
+        fake_curl.STATUS_FOR_PROFILE = {IMPERSONATE_LADDER[0]: 200}
+        fake_curl.RESPONSE_TEXT_FOR_PROFILE = {IMPERSONATE_LADDER[0]: _RENDER_PRODUCT_HTML}
 
         tool = _get_tool(server, "auto_scrape")
         result = await tool.fn(url="https://plain.com/p")  # type: ignore[attr-defined]
@@ -1055,8 +1055,8 @@ class TestAutoScrapeIsStructured:
             '"sku":"Y1","offers":{"@type":"Offer","price":"29.99","priceCurrency":"USD"}}'
             "</script></head><body></body></html>"
         )
-        fake_curl.STATUS_FOR_PROFILE = {"chrome146": 200}
-        fake_curl.RESPONSE_TEXT_FOR_PROFILE = {"chrome146": product_html}
+        fake_curl.STATUS_FOR_PROFILE = {IMPERSONATE_LADDER[0]: 200}
+        fake_curl.RESPONSE_TEXT_FOR_PROFILE = {IMPERSONATE_LADDER[0]: product_html}
 
         tool = _get_tool(server, "auto_scrape")
         result = await tool.fn(url="https://example.test/p")  # type: ignore[attr-defined]
@@ -1518,8 +1518,8 @@ class TestUrlGuard:
         self, server: object, fake_curl: type[FakeCurlSession]
     ) -> None:
         """The guard must be invisible on a normal fetch."""
-        fake_curl.STATUS_FOR_PROFILE = {"chrome146": 200}
-        fake_curl.RESPONSE_TEXT_FOR_PROFILE = {"chrome146": "<html>ok</html>"}
+        fake_curl.STATUS_FOR_PROFILE = {IMPERSONATE_LADDER[0]: 200}
+        fake_curl.RESPONSE_TEXT_FOR_PROFILE = {IMPERSONATE_LADDER[0]: "<html>ok</html>"}
         tool = _get_tool(server, "fetch_with_ladder")
         result = await tool.fn(url="https://example.test/x")  # type: ignore[attr-defined]
         assert "error_code" not in result

@@ -49,13 +49,13 @@ def _no_real_sleep(monkeypatch: pytest.MonkeyPatch) -> None:
 class TestLadderHappyPath:
     @pytest.mark.asyncio
     async def test_first_profile_wins(self, fake_curl: type[FakeCurlSession]) -> None:
-        fake_curl.STATUS_FOR_PROFILE = {"chrome146": 200}
+        fake_curl.STATUS_FOR_PROFILE = {IMPERSONATE_LADDER[0]: 200}
         resp, profile = await request_with_ladder("GET", "https://example.test/ok")
         assert resp.status_code == 200
-        assert profile == "chrome146"
+        assert profile == IMPERSONATE_LADDER[0]
         # Only one session was constructed — we didn't touch the fallbacks.
         assert len(fake_curl.INSTANCES) == 1
-        assert fake_curl.INSTANCES[0].impersonate == "chrome146"
+        assert fake_curl.INSTANCES[0].impersonate == IMPERSONATE_LADDER[0]
 
 
 class TestLadderFallback:
@@ -63,19 +63,19 @@ class TestLadderFallback:
     async def test_403_then_200_uses_second_profile(self, fake_curl: type[FakeCurlSession]) -> None:
         # chrome133a 403, chrome124 200 — the second profile wins.
         fake_curl.STATUS_FOR_PROFILE = {
-            "chrome146": 403,
-            "chrome142": 200,
-            "safari260": 200,
+            IMPERSONATE_LADDER[0]: 403,
+            IMPERSONATE_LADDER[1]: 200,
+            IMPERSONATE_LADDER[2]: 200,
             "firefox147": 200,
         }
         resp, profile = await request_with_ladder("GET", "https://example.test/fallback")
         assert resp.status_code == 200
-        assert profile == "chrome142"
+        assert profile == IMPERSONATE_LADDER[1]
         # Two sessions constructed — chrome133a tried, chrome124 won.
         assert len(fake_curl.INSTANCES) == 2
         assert [s.impersonate for s in fake_curl.INSTANCES] == [
-            "chrome146",
-            "chrome142",
+            IMPERSONATE_LADDER[0],
+            IMPERSONATE_LADDER[1],
         ]
 
     @pytest.mark.asyncio
@@ -85,28 +85,28 @@ class TestLadderFallback:
         # the inner exhaustion still returns the 503 response, which
         # the ladder then treats as a rotate signal.
         fake_curl.STATUS_FOR_PROFILE = {
-            "chrome146": 503,
-            "chrome142": 200,
-            "safari260": 200,
+            IMPERSONATE_LADDER[0]: 503,
+            IMPERSONATE_LADDER[1]: 200,
+            IMPERSONATE_LADDER[2]: 200,
             "firefox147": 200,
         }
         resp, profile = await request_with_ladder("GET", "https://example.test/svc-unavail")
         assert resp.status_code == 200
-        assert profile == "chrome142"
+        assert profile == IMPERSONATE_LADDER[1]
 
     @pytest.mark.asyncio
     async def test_safari_wins_when_all_chrome_burned(
         self, fake_curl: type[FakeCurlSession]
     ) -> None:
         fake_curl.STATUS_FOR_PROFILE = {
-            "chrome146": 403,
-            "chrome142": 403,
-            "safari260": 200,
+            IMPERSONATE_LADDER[0]: 403,
+            IMPERSONATE_LADDER[1]: 403,
+            IMPERSONATE_LADDER[2]: 200,
             "firefox147": 200,
         }
         resp, profile = await request_with_ladder("GET", "https://example.test/all-chrome-burned")
         assert resp.status_code == 200
-        assert profile == "safari260"
+        assert profile == IMPERSONATE_LADDER[2]
         assert len(fake_curl.INSTANCES) == 3
 
 
@@ -130,14 +130,14 @@ class TestLadderExhaustion:
 class TestLadderConfiguration:
     @pytest.mark.asyncio
     async def test_custom_ladder_overrides_default(self, fake_curl: type[FakeCurlSession]) -> None:
-        fake_curl.STATUS_FOR_PROFILE = {"chrome142": 200}
+        fake_curl.STATUS_FOR_PROFILE = {IMPERSONATE_LADDER[1]: 200}
         resp, profile = await request_with_ladder(
             "GET",
             "https://example.test/custom",
-            ladder=("chrome142",),  # one-element custom ladder
+            ladder=(IMPERSONATE_LADDER[1],),  # one-element custom ladder
         )
         assert resp.status_code == 200
-        assert profile == "chrome142"
+        assert profile == IMPERSONATE_LADDER[1]
         assert len(fake_curl.INSTANCES) == 1
 
     @pytest.mark.asyncio
@@ -149,9 +149,9 @@ class TestLadderConfiguration:
     def test_default_ladder_shape(self) -> None:
         """The exported default ladder is the documented chain, in order."""
         assert IMPERSONATE_LADDER == (
+            "chrome150",
             "chrome146",
-            "chrome142",
-            "safari260",
+            "safari2601",
             "firefox147",
             "chrome133a",
         )
@@ -193,7 +193,14 @@ class TestLadderConfiguration:
         ]
         newest = max(versions)
         leading = int(re.match(r"chrome(\d+)", IMPERSONATE_LADDER[0]).group(1))  # type: ignore[union-attr]
-        assert newest - leading <= 4, (
+        # Tolerance tightened from 4 to 2 on 2026-08-27. curl_cffi 0.16.2 shipped
+        # chrome150 while the ladder still led with chrome146 — a gap of exactly
+        # 4, so this guard sat right on its own boundary and stayed green. The
+        # staleness was found by hand instead, which is the one outcome the test
+        # exists to prevent. A window this size is not a safety margin, it is a
+        # blind spot: curl_cffi's chrome targets are sparse (136, 142, 145, 146,
+        # 150), so 4 spans whole releases.
+        assert newest - leading <= 2, (
             f"curl_cffi now ships chrome{newest} but the ladder leads with "
             f"chrome{leading} — benchmark the newer target and promote it."
         )
@@ -204,7 +211,7 @@ class TestLadderHeaderMerging:
     async def test_extra_headers_propagate_to_each_session(
         self, fake_curl: type[FakeCurlSession]
     ) -> None:
-        fake_curl.STATUS_FOR_PROFILE = {"chrome146": 403, "chrome142": 200}
+        fake_curl.STATUS_FOR_PROFILE = {IMPERSONATE_LADDER[0]: 403, IMPERSONATE_LADDER[1]: 200}
         await request_with_ladder(
             "GET",
             "https://example.test/headers",
@@ -213,8 +220,17 @@ class TestLadderHeaderMerging:
         # Both sessions got the custom header (each profile is a fresh
         # session, so the merge happens per profile).
         assert all(s.headers.get("X-Custom") == "hello" for s in fake_curl.INSTANCES)
-        # And the default UA is present too.
-        assert all("scrapper-tool" in s.headers["User-Agent"] for s in fake_curl.INSTANCES)
+        # And we set NO User-Agent of our own, so the one `impersonate` installs
+        # survives. This assertion is inverted from what it used to be: the
+        # ladder previously layered the polite `scrapper-tool/0.1` UA on top of
+        # the impersonated headers, which meant every request went out with a
+        # Chrome TLS handshake and a User-Agent naming the scraper. Measured
+        # against tls.peet.ws before the fix: `ua=scrapper-tool/0.1`; after:
+        # `ua=Chrome/150.0.0.0`.
+        assert all("User-Agent" not in s.headers for s in fake_curl.INSTANCES), (
+            "setting our own UA here replaces the impersonated one and "
+            "self-identifies the scraper to any vendor cross-checking TLS vs UA"
+        )
 
 
 class TestLadderProxyRotation:
@@ -231,15 +247,15 @@ class TestLadderProxyRotation:
 
         # First two profiles blocked, third wins.
         fake_curl.STATUS_FOR_PROFILE = {
-            "chrome146": 403,
-            "chrome142": 403,
-            "safari260": 200,
+            IMPERSONATE_LADDER[0]: 403,
+            IMPERSONATE_LADDER[1]: 403,
+            IMPERSONATE_LADDER[2]: 200,
         }
         pool = ProxyPool.from_urls(["http://p1:1", "http://p2:2", "http://p3:3"])
 
         resp, profile = await request_with_ladder("GET", "https://example.test/p", proxy_pool=pool)
         assert resp.status_code == 200
-        assert profile == "safari260"
+        assert profile == IMPERSONATE_LADDER[2]
 
         used = [inst.proxy for inst in fake_curl.INSTANCES]
         assert used == ["http://p1:1", "http://p2:2", "http://p3:3"], (
@@ -252,7 +268,7 @@ class TestLadderProxyRotation:
     ) -> None:
         from scrapper_tool.proxy import ProxyPool
 
-        fake_curl.STATUS_FOR_PROFILE = {"chrome146": 403, "chrome142": 200}
+        fake_curl.STATUS_FOR_PROFILE = {IMPERSONATE_LADDER[0]: 403, IMPERSONATE_LADDER[1]: 200}
         pool = ProxyPool.from_urls(["http://p1:1", "http://p2:2"])
 
         await request_with_ladder("GET", "https://example.test/p", proxy_pool=pool)
@@ -287,7 +303,7 @@ class TestLadderProxyRotation:
     ) -> None:
         from scrapper_tool.proxy import ProxyPool
 
-        fake_curl.STATUS_FOR_PROFILE = {"chrome146": 200}
+        fake_curl.STATUS_FOR_PROFILE = {IMPERSONATE_LADDER[0]: 200}
         pool = ProxyPool.from_urls(["http://p1:1"])
         pool.mark_blocked("http://p1:1")  # everything cooling down
 
@@ -300,7 +316,7 @@ class TestLadderProxyRotation:
     async def test_no_pool_preserves_previous_behaviour(
         self, fake_curl: type[FakeCurlSession]
     ) -> None:
-        fake_curl.STATUS_FOR_PROFILE = {"chrome146": 200}
+        fake_curl.STATUS_FOR_PROFILE = {IMPERSONATE_LADDER[0]: 200}
         resp, _ = await request_with_ladder("GET", "https://example.test/p")
         assert resp.status_code == 200
         assert fake_curl.INSTANCES[0].proxy is None
