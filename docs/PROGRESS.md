@@ -24,7 +24,7 @@ Also merged from `main` (separate session): the unit-suite hermeticity fixes,
 a hard-E1-failure handoff to E2, and a raise when Crawl4AI reports a page that
 never loaded.
 
-**Verification state:** 1371 passing, coverage 87.84%, ruff / `ruff format` /
+**Verification state:** 1387 passing, coverage 87.88%, ruff / `ruff format` /
 mypy `--strict` clean, zero `docs/openapi/` drift, `pip-audit` clean.
 
 ---
@@ -46,7 +46,7 @@ visible in curl's own error) and only the response is withheld.
 Remaining argument for leaving it off is volume, not correctness — one host, one
 target pair. Flipping it is a one-line change in `_urlguard.strict_redirects_enabled`.
 
-### 3. A page where every tier fails is still reported `ok`
+### 2. A page where every tier fails is still reported `ok`
 
 `CrawlPage.ok` is `error is None and skipped_reason is None`, and the cascade
 returns an error-envelope payload rather than raising when every tier fails. So a
@@ -77,6 +77,9 @@ in a numbered increment rather than a drive-by fix.
 Where it is open, the request *is issued* and only the body is withheld. That is
 not a safe residual: a state-changing GET has already happened, and the distinct
 error codes and timings make a serviceable internal port scanner.
+
+`SCRAPPER_TOOL_URL_GUARD_STRICT=1` closes every open row by refusing to run the
+tiers in them — see below for what that costs.
 
 ### `SCRAPPER_TOOL_URL_GUARD_STRICT` — now built
 
@@ -152,7 +155,7 @@ silently defeated the `<2` cap once already.
 
 ## Housekeeping
 
-- Seven commits on `feat/url-guard`, **nothing pushed**.
+- 10 commits on `feat/url-guard`, **nothing pushed**.
 - `backup/url-guard-pre-rebase` still exists; safe to delete now the rebase is
   validated.
 - `C:\Users\kobiv\.env` was UTF-16 and crashed `python-dotenv` at import, which
