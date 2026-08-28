@@ -13,8 +13,10 @@ from typing import Any
 
 import pytest
 
+# Guard on the top-level package only, so that an SDK whose API has
+# moved fails loudly instead of skipping. See tests/unit/test_mcp.py.
 pytest.importorskip(
-    "mcp.server.fastmcp",
+    "mcp",
     reason="MCP tests require the [agent] extra (pip install scrapper-tool[agent]).",
 )
 

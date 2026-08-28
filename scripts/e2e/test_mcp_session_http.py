@@ -25,9 +25,26 @@ import os
 from typing import Any
 
 from mcp import ClientSession
-from mcp.client.streamable_http import streamablehttp_client
+from mcp.client.streamable_http import streamable_http_client
 
 URL = os.environ.get("SCRAPPER_TOOL_MCP_URL", "http://localhost:8765/mcp")
+
+
+# The full tool surface, asserted exactly. This used to name six tools
+# and check only for missing ones, so it passed against a server that
+# had gained or lost tools. docs/mcp-tools.json is the CI-enforced
+# source of truth for the same list.
+EXPECTED_TOOLS = {
+    "agent_browse",
+    "agent_extract",
+    "auto_scrape",
+    "canary",
+    "crawl_site",
+    "extract_microdata_price",
+    "extract_product",
+    "fetch_with_ladder",
+    "map_site",
+}
 
 
 def _payload(result: Any) -> dict[str, Any] | list[Any] | str:
@@ -45,24 +62,21 @@ async def main() -> None:  # noqa: PLR0915 - sequential narrative
     print(f"=== MCP-over-HTTP E2E (server: {URL}) ===")
     print()
 
-    async with streamablehttp_client(URL) as (read, write, _meta):
+    # SDK 2.x renamed this from `streamablehttp_client` and dropped the
+    # third yielded value (the get-session-id callback), so the old
+    # 3-tuple unpack is now a ValueError at runtime.
+    async with streamable_http_client(URL) as (read, write):
         async with ClientSession(read, write) as session:
             await session.initialize()
 
             tools = await session.list_tools()
             tool_names = sorted(t.name for t in tools.tools)
             print(f"[5.0] tools advertised: {tool_names}")
-            expected = {
-                "fetch_with_ladder",
-                "extract_product",
-                "extract_microdata_price",
-                "canary",
-                "agent_extract",
-                "agent_browse",
-            }
-            missing = expected - set(tool_names)
-            assert not missing, f"missing tools: {missing}"
-            print(f"[5.0] [OK] all {len(expected)} tools present")
+            missing = EXPECTED_TOOLS - set(tool_names)
+            unexpected = set(tool_names) - EXPECTED_TOOLS
+            assert not missing, f"missing tools: {sorted(missing)}"
+            assert not unexpected, f"unexpected tools: {sorted(unexpected)}"
+            print(f"[5.0] [OK] exactly the {len(EXPECTED_TOOLS)} expected tools")
             print()
 
             # 5.A canary

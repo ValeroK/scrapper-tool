@@ -9,6 +9,7 @@ HTML by default.
 
 from __future__ import annotations
 
+import importlib.util
 from typing import Any
 
 import pytest
@@ -441,10 +442,15 @@ class TestCrawlEndpoint:
 
 # --- MCP parity -------------------------------------------------------------
 
-pytest.importorskip(
-    "mcp.server.fastmcp",
-    reason="MCP parity tests require the [agent] extra.",
-)
+# Scoped to TestMcpParity deliberately, not applied at module level.
+# `pytest.importorskip` skips the whole *module*, and this call sits
+# below TestMapEndpoint and TestCrawlEndpoint — so when SDK 2.x made
+# the old `mcp.server.fastmcp` probe fail, it also silently skipped 13
+# REST tests that have nothing to do with the MCP SDK.
+#
+# Guard on the top-level package only; `_build_server` must fail loudly
+# if the SDK is present but its API moved. See tests/unit/test_mcp.py.
+_HAS_MCP_SDK = importlib.util.find_spec("mcp") is not None
 
 
 def _get_tool(server: object, name: str) -> Any:
@@ -452,6 +458,10 @@ def _get_tool(server: object, name: str) -> Any:
     return tools[name]
 
 
+@pytest.mark.skipif(
+    not _HAS_MCP_SDK,
+    reason="MCP parity tests require the [agent] extra.",
+)
 class TestMcpParity:
     @pytest.mark.asyncio
     async def test_map_site_tool(self, monkeypatch: pytest.MonkeyPatch) -> None:

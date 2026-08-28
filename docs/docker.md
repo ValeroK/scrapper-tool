@@ -47,7 +47,7 @@ by default. Override in `.env` or environment to point elsewhere — see the
 | Captcha Tier 0 (Camoufox auto-pass) | ✅ when `INSTALL_CAMOUFOX=1` |
 | Captcha Tier 1 (Theyka) | ✅ pre-installed |
 | Captcha Tier 2 (CapSolver / NopeCHA / 2Captcha) | ✅ via env key |
-| MCP server (stdio JSON-RPC) | ✅ default entrypoint |
+| MCP server (stdio JSON-RPC) | ✅ via the `scrapper-tool` compose service (which sets `entrypoint: ["scrapper-tool-mcp"]`) |
 | Canary CLI (`scrapper-tool`) | ✅ |
 
 #### Why this works — the `[full]` extra and the lxml override
@@ -119,9 +119,18 @@ maps it natively).
 
 ### Run as MCP server in Docker
 
-The image's default entrypoint is `scrapper-tool-mcp` (stdio MCP server). Wire
+The image's default entrypoint is `scrapper-tool-serve` (the REST sidecar) since
+v1.1.2, so MCP mode is selected by the compose service rather than inherited:
+the `scrapper-tool` service declares `entrypoint: ["scrapper-tool-mcp"]`. Wire
 your MCP client to invoke `docker compose run --rm -T scrapper-tool` and you're
 done — see the JSON example above. The `-T` flag keeps stdio attached cleanly.
+
+If you run the image directly rather than through compose, pass the entrypoint
+yourself:
+
+```bash
+docker run --rm -i --entrypoint scrapper-tool-mcp scrapper-tool:latest
+```
 
 ### Live integration tests inside Docker
 

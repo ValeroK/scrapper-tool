@@ -35,14 +35,24 @@ from unittest.mock import MagicMock
 
 import pytest
 
-# The MCP server requires the `[agent]` optional extra. When it's not
-# installed (the default `extras=dev` CI matrix entry), skip this whole
-# module — the tests can't construct the FastMCP server. The
-# `extras=dev,hostile` entry doesn't pull mcp either; only the matrix
-# row that adds `agent` has the SDK. CI runs both, so this skip
-# correctly differentiates them.
+# The MCP server requires the `[agent]` optional extra, so skip this
+# module when the SDK is absent entirely.
+#
+# Guard on the top-level `mcp` package only, never on the module that
+# holds the server class. Those were the same question until SDK 2.x
+# renamed `mcp.server.fastmcp` to `mcp.server.mcpserver`, at which point
+# the old guard started answering "the extra is missing" to what was
+# really "the API moved", and every test here skipped green against a
+# server that could not start. A wrong module path must now fail loudly
+# via the import below, not skip.
+#
+# Note this guard can no longer fire in CI at all: the matrix rows it
+# was written for (`extras=dev`, `extras=dev,hostile`) no longer exist,
+# and the single remaining `extras` value `dev,full,agent,http` always
+# installs the SDK. It is kept for local runs that install a bare
+# `[dev]`, where it can only be a true negative.
 pytest.importorskip(
-    "mcp.server.fastmcp",
+    "mcp",
     reason="MCP tests require the [agent] extra (pip install scrapper-tool[agent]).",
 )
 
@@ -1125,17 +1135,16 @@ class TestMain:
         monkeypatch: pytest.MonkeyPatch,
         capsys: pytest.CaptureFixture[str],
     ) -> None:
-        # Force _build_server to raise ImportError as if [agent] missing.
-        def _missing(*_args: object, **_kwargs: object) -> None:
-            msg = "scrapper-tool MCP server requires the [agent] extra"
-            raise ImportError(msg)
-
-        monkeypatch.setattr(mcp_module, "_build_server", _missing)
+        # Drives the REAL _build_server with the package made
+        # unimportable, rather than raising a hand-written ImportError.
+        # The old version invented its own message, so the actual string
+        # in mcp.py was pinned by nothing and was free to drift.
+        TestBuildServerImportErrors._break_import(monkeypatch, "mcp")
         monkeypatch.setattr("sys.argv", ["scrapper-tool-mcp"])
         exit_code = mcp_module.main()
         assert exit_code == 1
         captured = capsys.readouterr()
-        assert "[agent] extra" in captured.err
+        assert "requires the [agent] extra" in captured.err
 
 
 class TestParseArgs:
@@ -1236,22 +1245,52 @@ class TestParseArgs:
 
 
 class TestMainTransportPlumbing:
-    """End-to-end main() with the new --transport flag wired into server.run."""
+    """main() wiring for --transport / --host / --port.
 
-    def test_streamable_http_transport_calls_run_with_correct_kwargs(
-        self,
-        monkeypatch: pytest.MonkeyPatch,
-        capsys: pytest.CaptureFixture[str],
-    ) -> None:
+    These tests used to replace `_build_server` with a bare MagicMock,
+    which meant the only coverage of the bind-address path never built a
+    real server — and would have passed against an SDK whose
+    constructor rejected the arguments being passed to it. That is
+    precisely what happened with SDK 2.x. They now drive the real
+    `_build_server`, mocking out only `run()`, which blocks forever.
+    """
+
+    @staticmethod
+    def _real_server_with_mocked_run(monkeypatch: pytest.MonkeyPatch) -> dict[str, Any]:
+        """Let main() construct a genuine server; intercept only run().
+
+        Deliberately takes no host/port parameters: if main() ever goes
+        back to passing them to `_build_server`, this raises TypeError
+        rather than silently accepting them.
+        """
+        captured: dict[str, Any] = {}
+        real_build = mcp_module._build_server
+
+        def _spy() -> Any:
+            server = real_build()
+            server.run = MagicMock()
+            captured["server"] = server
+            return server
+
+        monkeypatch.setattr(mcp_module, "_build_server", _spy)
+        return captured
+
+    @staticmethod
+    def _clear_env(monkeypatch: pytest.MonkeyPatch) -> None:
         for k in (
             "SCRAPPER_TOOL_MCP_TRANSPORT",
             "SCRAPPER_TOOL_MCP_HOST",
             "SCRAPPER_TOOL_MCP_PORT",
         ):
             monkeypatch.delenv(k, raising=False)
-        fake_server = MagicMock()
-        build_mock = MagicMock(return_value=fake_server)
-        monkeypatch.setattr(mcp_module, "_build_server", build_mock)
+
+    def test_streamable_http_transport_calls_run_with_host_and_port(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        capsys: pytest.CaptureFixture[str],
+    ) -> None:
+        self._clear_env(monkeypatch)
+        captured = self._real_server_with_mocked_run(monkeypatch)
         monkeypatch.setattr(
             "sys.argv",
             [
@@ -1266,15 +1305,138 @@ class TestMainTransportPlumbing:
         )
         exit_code = mcp_module.main()
         assert exit_code == 0
-        # _build_server gets host/port so SSE/HTTP knows where to bind.
-        build_mock.assert_called_once_with(host="0.0.0.0", port=8765)
-        # server.run() gets the transport name.
-        fake_server.run.assert_called_once_with(transport="streamable-http")
+        # SDK 2.x moved host/port off the constructor and onto the HTTP
+        # runners, reached through run(**kwargs).
+        captured["server"].run.assert_called_once_with(
+            transport="streamable-http",
+            host="0.0.0.0",
+            port=8765,
+        )
         # Listening banner went to stderr (so stdio JSON-RPC consumers
-        # never see it on stdin).
-        captured = capsys.readouterr()
-        assert "streamable-http" in captured.err
-        assert "0.0.0.0:8765" in captured.err
+        # never see it on stdout).
+        err = capsys.readouterr().err
+        assert "streamable-http" in err
+        assert "0.0.0.0:8765" in err
+
+    def test_sse_transport_calls_run_with_host_and_port(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        self._clear_env(monkeypatch)
+        captured = self._real_server_with_mocked_run(monkeypatch)
+        monkeypatch.setattr(
+            "sys.argv",
+            ["scrapper-tool-mcp", "--transport", "sse", "--host", "0.0.0.0", "--port", "9001"],
+        )
+        assert mcp_module.main() == 0
+        captured["server"].run.assert_called_once_with(
+            transport="sse",
+            host="0.0.0.0",
+            port=9001,
+        )
+
+    def test_stdio_transport_gets_no_host_or_port(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        capsys: pytest.CaptureFixture[str],
+    ) -> None:
+        """stdio has nothing to bind, so it must be called bare.
+
+        run(transport="stdio") discards **kwargs silently in SDK 2.x, so
+        this cannot be caught at runtime — only by asserting on the call.
+        """
+        self._clear_env(monkeypatch)
+        captured = self._real_server_with_mocked_run(monkeypatch)
+        monkeypatch.setattr(
+            "sys.argv",
+            ["scrapper-tool-mcp", "--host", "0.0.0.0", "--port", "8765"],
+        )
+        assert mcp_module.main() == 0
+        captured["server"].run.assert_called_once_with(transport="stdio")
+        # No listening banner for stdio: it would be noise, and the
+        # transport carries no address.
+        assert capsys.readouterr().err == ""
+
+    def test_real_server_runners_accept_host_and_port(self) -> None:
+        """Pin the SDK contract that main()'s kwargs depend on.
+
+        The tests above mock `run`, so they prove main() *passes*
+        host/port but not that the SDK *accepts* them. This checks the
+        real runner signatures, and is the assertion that would have
+        caught the 2.x constructor change.
+        """
+        import inspect
+
+        server = mcp_module._build_server()
+        for runner_name in ("run_sse_async", "run_streamable_http_async"):
+            params = inspect.signature(getattr(server, runner_name)).parameters
+            assert "host" in params, runner_name
+            assert "port" in params, runner_name
+        # ...and that they are *not* on the constructor any more, which
+        # is what makes passing them to run() necessary rather than
+        # merely acceptable.
+        assert "host" not in inspect.signature(type(server).__init__).parameters
+
+
+class TestBuildServerImportErrors:
+    """`_build_server` must tell a missing extra apart from a moved API.
+
+    Both arrive as ImportError (ModuleNotFoundError is a subclass), and
+    collapsing them into "install the [agent] extra" is exactly how the
+    2.x rename shipped disguised as a packaging problem: main() exited 1
+    with install instructions for a package that was already installed,
+    and no traceback.
+    """
+
+    @staticmethod
+    def _break_import(monkeypatch: pytest.MonkeyPatch, missing: str) -> None:
+        """Make `from mcp.server.mcpserver import MCPServer` fail.
+
+        `missing` is what ModuleNotFoundError.name reports — "mcp" when
+        the package is absent outright, the submodule when the SDK is
+        installed but its API moved.
+        """
+        import builtins
+
+        real_import = builtins.__import__
+
+        def _fake_import(name: str, *args: Any, **kwargs: Any) -> Any:
+            if name == "mcp.server.mcpserver":
+                raise ModuleNotFoundError(f"No module named {missing!r}", name=missing)
+            return real_import(name, *args, **kwargs)
+
+        monkeypatch.setattr(builtins, "__import__", _fake_import)
+
+    def test_absent_package_reports_missing_extra(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        self._break_import(monkeypatch, "mcp")
+        with pytest.raises(ImportError) as excinfo:
+            mcp_module._build_server()
+        msg = str(excinfo.value)
+        assert "requires the [agent] extra" in msg
+        assert "pip install scrapper-tool[agent]" in msg
+
+    def test_moved_api_reports_mismatch_not_missing_extra(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # The exact 2.x failure: SDK installed, module path gone.
+        self._break_import(monkeypatch, "mcp.server.mcpserver")
+        with pytest.raises(ImportError) as excinfo:
+            mcp_module._build_server()
+        msg = str(excinfo.value)
+        assert "SDK API mismatch" in msg
+        assert "mcp.server.mcpserver" in msg
+        # Must NOT send the reader off to install something they have.
+        assert "requires the [agent] extra" not in msg
+
+    def test_main_surfaces_mismatch_and_exits_1(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        capsys: pytest.CaptureFixture[str],
+    ) -> None:
+        self._break_import(monkeypatch, "mcp.server.mcpserver")
+        monkeypatch.setattr("sys.argv", ["scrapper-tool-mcp"])
+        assert mcp_module.main() == 1
+        assert "SDK API mismatch" in capsys.readouterr().err
 
 
 # ---- Module surface -------------------------------------------------------
@@ -1295,10 +1457,10 @@ class TestModuleSurface:
         assert callable(mcp_module.main)
 
 
-# Note: the "_build_server raises ImportError when [agent] not installed"
-# scenario is covered by the module-level `pytest.importorskip(...)` at
-# the top of this file: when mcp.server.fastmcp can't be imported, the
-# whole test module is skipped — exactly the behaviour the lib promises.
+# The "_build_server cannot import the SDK" scenarios are covered
+# explicitly by TestBuildServerImportErrors above. They used to be left
+# to the module-level `pytest.importorskip(...)`, which is what allowed
+# the real error message to drift unnoticed.
 
 
 # ---- v1.2.0: hostile_only fast-path ---------------------------------------

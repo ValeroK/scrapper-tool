@@ -1027,38 +1027,50 @@ def _agent_result_payload(result: Any) -> dict[str, Any]:
     }
 
 
-def _build_server(  # noqa: PLR0915 — single-place tool registration
-    *, host: str = "127.0.0.1", port: int = 8000
-) -> Any:
-    """Lazy-construct the FastMCP server.
+def _build_server() -> Any:  # noqa: PLR0915 — single-place tool registration
+    """Lazy-construct the MCP server.
 
     Lazy because the ``mcp`` SDK is an optional extra
     (``pip install scrapper-tool[agent]``); importing at module top
     would break ``import scrapper_tool.mcp`` for consumers without the
-    extra. The unit tests mock this function to avoid a real SDK
-    dependency in the default test profile.
+    extra. ``tests/conftest.py`` imports this module from an *autouse*
+    fixture, so it has to stay importable with no SDK installed at all.
 
-    Parameters
-    ----------
-    host
-        Network bind address used by the SSE / streamable-HTTP
-        transports. Default ``127.0.0.1`` (localhost-only). Set to
-        ``0.0.0.0`` to expose the server on a published Docker port or
-        to a LAN.
-    port
-        TCP port for SSE / streamable-HTTP. Default 8000. Ignored for
-        the stdio transport.
+    Takes no ``host`` / ``port``. SDK 2.x removed them from the server
+    constructor and made them keyword arguments of the HTTP transports'
+    runners, reachable through ``run(**kwargs)`` — see :func:`main`.
     """
     try:
-        from mcp.server.fastmcp import FastMCP  # noqa: PLC0415
+        from mcp.server.mcpserver import MCPServer  # noqa: PLC0415
     except ImportError as exc:
-        msg = (
-            "scrapper-tool MCP server requires the [agent] extra.\n"
-            "Install with: pip install scrapper-tool[agent]"
-        )
+        # Two very different failures arrive here as the same exception
+        # type, and conflating them is how the 2.x rename first reached
+        # us wearing a "the extra is not installed" disguise: the module
+        # path was wrong, the SDK was installed the whole time, and
+        # main() turned that into a clean exit 1 printing install
+        # instructions for a package that was already present. The
+        # .name attribute tells them apart — it is "mcp" when the
+        # package is genuinely absent, and the specific submodule when
+        # the SDK is installed but shaped differently than we target.
+        missing = getattr(exc, "name", None)
+        if missing == "mcp":
+            msg = (
+                "scrapper-tool MCP server requires the [agent] extra.\n"
+                "Install with: pip install scrapper-tool[agent]"
+            )
+        else:
+            msg = (
+                "scrapper-tool MCP server could not import "
+                "mcp.server.mcpserver.MCPServer from the installed mcp SDK "
+                f"(failed on {missing!r}: {exc}).\n"
+                "This is an SDK API mismatch, not a missing extra: "
+                "scrapper-tool targets mcp>=2,<3, where FastMCP was renamed "
+                "to MCPServer. Check the installed version against the "
+                "[agent] extra's bounds."
+            )
         raise ImportError(msg) from exc
 
-    server = FastMCP(
+    server = MCPServer(
         name="scrapper-tool",
         instructions=(
             "Reusable web-scraping toolkit. RECOMMENDED first tool: "
@@ -1068,11 +1080,11 @@ def _build_server(  # noqa: PLR0915 — single-place tool registration
             "extract_product for schema.org Product+Offer parsing on "
             "raw HTML, extract_microdata_price for <meta itemprop='price'> "
             "anchors, agent_extract / agent_browse for Pattern E direct, "
+            "map_site to enumerate a site's URLs and crawl_site to fetch "
+            "many pages under one origin, "
             "canary for fingerprint-health probes. "
             "See https://github.com/ValeroK/scrapper-tool"
         ),
-        host=host,
-        port=port,
     )
 
     # ---- Tool: fetch_with_ladder ------------------------------------------
@@ -1713,8 +1725,9 @@ def main() -> int:
     transports (used when the server runs as a long-lived service in
     Docker and external clients connect via URL).
 
-    Exits with code 0 on clean shutdown, 1 on the ``[agent]`` extra not
-    installed, 2 on argv error.
+    Exits with code 0 on clean shutdown, 1 when the ``mcp`` SDK cannot
+    be imported (extra not installed, or installed at an incompatible
+    version), 2 on argv error.
     """
     parsed = _parse_args(sys.argv[1:])
     if isinstance(parsed, int):
@@ -1722,14 +1735,21 @@ def main() -> int:
     transport, host, port = parsed
 
     try:
-        server = _build_server(host=host, port=port)
+        server = _build_server()
     except ImportError as exc:
         sys.stderr.write(f"{exc}\n")
         return 1
 
+    # host / port belong to the HTTP transports' runners now, not to the
+    # server object. run(transport="stdio") silently discards **kwargs,
+    # so passing them unconditionally would also "work" — but it would
+    # hide the intent and break the day the SDK starts validating them.
+    run_kwargs: dict[str, Any] = {}
     if transport != "stdio":
+        run_kwargs["host"] = host
+        run_kwargs["port"] = port
         sys.stderr.write(f"scrapper-tool-mcp listening on {transport} at {host}:{port}\n")
-    server.run(transport=transport)
+    server.run(transport=transport, **run_kwargs)
     return 0
 
 

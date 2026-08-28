@@ -40,21 +40,21 @@ dependencies = [
 # transitively so ``scrapling.fetchers.StealthyFetcher`` actually loads.
 hostile = ["scrapling[fetchers]>=0.3"]
 # M13: filled. Provides scrapper-tool-mcp console script (stdio MCP server)
-# exposing fetch_with_ladder / extract_product / extract_microdata_price /
-# canary tools for LLM agents (Claude Desktop, Claude Code, OpenClaw,
-# Hermes Agent, AutoGen, LangChain via mcp-use).
-# Capped below 2.0: mcp 2.x renamed ``FastMCP`` to ``MCPServer`` and moved it to
-# ``mcp.server.mcpserver``, so ``_build_server``'s import fails outright. The SDK
-# says so itself — importing ``mcp.server.fastmcp`` under 2.x raises a
-# ModuleNotFoundError whose message recommends pinning ``mcp<2`` to keep v1 code
-# running. Migrating is real work (the rename is not the only API change) and does
-# not belong in a routine dependency bump.
+# exposing the nine tools listed in docs/mcp.md for LLM agents (Claude Desktop,
+# Claude Code, OpenClaw, Hermes Agent, AutoGen, LangChain via mcp-use).
 #
-# Watch out when lifting this cap: every MCP test guards on
-# ``pytest.importorskip("mcp.server.fastmcp")``, so under 2.x they SKIP rather
-# than fail, and the suite goes green against a server that cannot start. That is
-# how this nearly shipped unnoticed.
-agent = ["mcp>=1.2,<2"]
+# Floor at 2.0: this is the SDK generation ``_build_server`` targets. 2.x renamed
+# ``FastMCP`` to ``MCPServer``, moved it from ``mcp.server.fastmcp`` to
+# ``mcp.server.mcpserver``, and dropped ``host`` / ``port`` from the constructor
+# in favour of keyword arguments on the HTTP transports' runners. There is no
+# compatibility shim in either direction, so 1.x is genuinely incompatible and
+# the floor is a hard one. 2.1.1 is the version the migration was verified
+# against; it also carries the fixes for PYSEC-2026-3481/2/3, which set the old
+# 1.x floor of 1.28.1.
+#
+# The mirror of this bound in [tool.uv] override-dependencies has to move with
+# it — see the note there.
+agent = ["mcp>=2.1.1,<3"]
 # M14 (v1.0.0): Pattern E — LLM-driven scraping for any protected site.
 # Bundles the default stack: Camoufox (0% headless detection), Patchright
 # (fast-mode alternative), Browserforge per-session fingerprints,
@@ -65,6 +65,14 @@ agent = ["mcp>=1.2,<2"]
 llm-agent = [
     "crawl4ai>=0.9",
     "browser-use>=0.13,<0.14",
+    # browser-use imports ``pydantic_settings`` in its config module but
+    # never declares it. Until 3.1 that went unnoticed because the mcp
+    # 1.x SDK happened to depend on pydantic-settings and dragged it in
+    # for us; mcp 2.x dropped that dependency, and ``import browser_use``
+    # started failing with ModuleNotFoundError — which surfaced only as
+    # three tests quietly switching from passed to skipped. Declared here
+    # so the stack does not depend on an unrelated package's transitives.
+    "pydantic-settings>=2.15",
     # Camoufox v0.4+ refuses to launch without ``geoip2`` because its
     # locale-matching layer queries a MaxMind GeoLite2 db at start.
     # The ``[geoip]`` extra pulls ``geoip2`` + ``maxminddb``. Bare
@@ -234,12 +242,13 @@ override-dependencies = [
     # click>=8.3.0 and mcp>=1.27.0), and mcp is our own direct dep, so bumping
     # it forward is squarely intended.
     "click>=8.3.3",
-    # NB the upper bound is repeated here on purpose. ``override-dependencies``
+    # NB the bounds are repeated here on purpose. ``override-dependencies``
     # *replaces* a package's requirements outright rather than intersecting with
-    # them, so a bare ``mcp>=1.28.1`` here silently defeated the ``<2`` cap on the
-    # ``[agent]`` extra and resolved mcp 2.x — which cannot import FastMCP. Any
-    # bound that matters has to appear in both places.
-    "mcp>=1.28.1,<2",
+    # them, so a bare ``mcp>=1.28.1`` here once silently defeated the ``<2`` cap
+    # on the ``[agent]`` extra and resolved mcp 2.x into a build that could not
+    # import FastMCP. Any bound that matters has to appear in both places, and
+    # they have to be changed together.
+    "mcp>=2.1.1,<3",
     # ...and aiohttp: browser-use pins ``aiohttp==3.13.4`` (PYSEC-2026-2105..2108);
     # 3.14.1 fixes all four and stays under the <4.0 cap every other consumer sets.
     "aiohttp>=3.14.1",

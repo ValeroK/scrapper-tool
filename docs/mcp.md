@@ -23,6 +23,8 @@ LangChain) can call.
 | `fetch_with_ladder(url, method, use_curl_cffi, extract_structured)` | HTTP fetch through the TLS-impersonation ladder. With `extract_structured=True` (v1.1.0+) also runs Pattern B + C. |
 | `extract_product(html, base_url)` | Pattern B — schema.org Product+Offer parser. |
 | `extract_microdata_price(html)` | Pattern C — `<meta itemprop="price">` parser. |
+| `map_site(url, include_sitemap, fetch_seed, same_domain, max_urls, timeout_s)` | Discover a site's URLs from sitemaps + seed-page links. No browser, no LLM. Run before `crawl_site` to size the job; truncation is always reported. |
+| `crawl_site(url, schema_json, depth, max_pages, concurrency, same_domain, respect_robots, interactive, timeout_s)` | Breadth-first crawl running the full `auto_scrape` cascade per page, so recipe replay / render tier / proxy rotation all apply. Honours robots.txt incl. Crawl-delay. Page HTML omitted by default. |
 | `canary(url, profiles)` | Walk the impersonation ladder and report which profile won. |
 | `agent_extract(url, schema_json, instruction, model, browser, headful, timeout_s)` | **Pattern E1** — render with a stealth browser, 1 LLM call to extract structured JSON. Requires `[llm-agent]` extra. |
 | `agent_browse(url, instruction, schema_json, model, browser, max_steps, headful, timeout_s)` | **Pattern E2** — multi-step browser-use agent loop for interactive tasks. Requires `[llm-agent]` extra. |
@@ -110,7 +112,10 @@ If your client only supports the spawn-a-binary pattern:
 ```
 
 Or spawn the Docker container per call (Pattern E works on Windows hosts this
-way because the agent runs Linux-side):
+way because the agent runs Linux-side). This relies on the `scrapper-tool`
+compose service declaring `entrypoint: ["scrapper-tool-mcp"]` — the image's
+own ENTRYPOINT is the REST sidecar, so without that key the spawn attaches to
+the wrong process and never speaks MCP:
 
 ```json
 {

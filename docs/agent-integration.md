@@ -24,6 +24,8 @@ This is a stdio MCP server compatible with **Claude Desktop**, **Claude Code**, 
 | `fetch_with_ladder` | `url, method?, use_curl_cffi?, extract_structured?` | `{status, body, winning_profile, blocked, error, product?, microdata_price?}` | Agent needs to fetch a URL that may TLS-fingerprint. With `extract_structured=True` (v1.1.0+) also runs Pattern B + C — eliminates the two-tool fetch+extract pattern. |
 | `extract_product` | `html, base_url?` | `ProductOffer` dict or `null` | Agent already has HTML and wants schema.org Product+Offer fields |
 | `extract_microdata_price` | `html` | `{price, currency}` or `null` | Agent has HTML with `<meta itemprop="price">` anchors |
+| `map_site` *(v2.0.0+)* | `url, include_sitemap?, fetch_seed?, same_domain?, max_urls?, timeout_s?` | `{urls, truncated, ...}` | Enumerate a site's URLs from sitemaps (via robots.txt `Sitemap:`, falling back to `/sitemap.xml`) plus seed-page links. Cheap — no browser, no LLM. Use before `crawl_site` to size the job. |
+| `crawl_site` *(v2.0.0+)* | `url, schema_json?, depth?, max_pages?, concurrency?, same_domain?, respect_robots?, interactive?, timeout_s?` | `{pages, unvisited, ...}` | Breadth-first crawl that runs the full `auto_scrape` cascade per page, so recipe replay, the render tier and proxy rotation all apply, and the recipe learned on page one makes the rest cheap. Honours robots.txt including Crawl-delay. Page HTML omitted by default. |
 | `canary` | `url, profiles?` | Per-profile probe results | Agent diagnosing which TLS fingerprint a site rejects |
 | `agent_extract` *(v1.0.0+)* | `url, schema_json?, instruction?, model?, browser?, headful?, timeout_s?` | `AgentResult` dict | Render with stealth browser + 1 LLM call to extract structured JSON. Use directly when `auto_scrape` is too coarse. Requires `[llm-agent]` extra. |
 | `agent_browse` *(v1.0.0+)* | `url, instruction, schema_json?, model?, browser?, max_steps?, headful?, timeout_s?` | `AgentResult` dict | Multi-step LLM-driven agent loop for interactive tasks (login, paginate, dynamic forms). Requires `[llm-agent]` extra. |
@@ -48,7 +50,8 @@ Add to your `.mcp.json`:
 }
 ```
 
-Restart the client. The six tools appear in the tool palette. Example chat:
+Restart the client. All nine tools appear in the tool palette
+(`docs/mcp-tools.json` is the CI-enforced list). Example chat:
 
 > *"Fetch https://example.com and tell me if any schema.org Product data is present."*
 

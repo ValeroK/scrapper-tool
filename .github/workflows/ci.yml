@@ -51,9 +51,9 @@ jobs:
       - name: Install dependencies
         run: uv sync --extra dev
       - name: Ruff lint
-        run: uv run ruff check src/ tests/
+        run: uv run ruff check src/ tests/ scripts/
       - name: Ruff format check
-        run: uv run ruff format --check src/ tests/
+        run: uv run ruff format --check src/ tests/ scripts/
       - name: Mypy --strict
         run: uv run mypy src/
 
@@ -191,6 +191,29 @@ jobs:
         # "package not found on PyPI" cases, which is what we want.
         run: uv run pip-audit --skip-editable
         continue-on-error: false   # fail the build on any new CVE
+
+  mcp-tool-surface-check:
+    name: MCP tool surface is up-to-date
+    needs: [lint-and-type]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: astral-sh/setup-uv@v8.1.0
+      - run: uv python install 3.13
+      - run: uv sync --extra dev --extra agent --extra full --extra http
+      # The MCP counterpart of openapi-spec-check. Regenerate the tool
+      # snapshot; if it differs from what's committed, the working tree
+      # is dirty and `git diff --exit-code` fails. Without this, tools
+      # could be added or removed while the docs, the instructions=
+      # string, and the e2e scripts all stayed behind - which is exactly
+      # what happened to map_site and crawl_site.
+      - run: uv run python scripts/dump_mcp_tools.py
+      - name: Fail if tool surface drifted
+        run: |
+          if ! git diff --exit-code docs/mcp-tools.json; then
+            echo "::error::MCP tool surface drifted. Run: uv run python scripts/dump_mcp_tools.py and commit docs/mcp-tools.json."
+            exit 1
+          fi
 
   openapi-spec-check:
     name: OpenAPI spec is up-to-date

@@ -1,0 +1,475 @@
+{
+  "tool_count": 9,
+  "tools": [
+    {
+      "description": "Pattern E2 \u2014 multi-step LLM-driven agent loop for interactive tasks (login, multi-step navigation, dynamic forms, 'click load more' pagination). Higher latency than agent_extract \u2014 use only when the page requires interaction. Requires the [llm-agent] extra and a local LLM. Returns {data, blocked, error, final_url, screenshots (base64 PNG), actions, duration_s, steps_used}.",
+      "name": "agent_browse",
+      "parameters": {
+        "properties": {
+          "browser": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Browser"
+          },
+          "headful": {
+            "default": false,
+            "title": "Headful",
+            "type": "boolean"
+          },
+          "instruction": {
+            "title": "Instruction",
+            "type": "string"
+          },
+          "max_steps": {
+            "default": 50,
+            "title": "Max Steps",
+            "type": "integer"
+          },
+          "model": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Model"
+          },
+          "schema_json": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Schema Json"
+          },
+          "timeout_s": {
+            "default": 180.0,
+            "title": "Timeout S",
+            "type": "number"
+          },
+          "url": {
+            "title": "Url",
+            "type": "string"
+          }
+        },
+        "required": [
+          "url",
+          "instruction"
+        ],
+        "title": "agent_browseArguments",
+        "type": "object"
+      }
+    },
+    {
+      "description": "Pattern E1 \u2014 render a page with a stealth browser (Camoufox by default) and run a SINGLE local-LLM call to extract structured JSON matching the supplied schema. Fast path for protected sites \u2014 escalate here only when the TLS-impersonation ladder AND Pattern D have failed. Requires the [llm-agent] extra and a running local LLM server (Ollama by default; set SCRAPPER_TOOL_AGENT_LLM and SCRAPPER_TOOL_AGENT_MODEL to configure). Returns {data, blocked, error, final_url, rendered_markdown, actions, duration_s, steps_used}.",
+      "name": "agent_extract",
+      "parameters": {
+        "properties": {
+          "browser": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Browser"
+          },
+          "headful": {
+            "default": false,
+            "title": "Headful",
+            "type": "boolean"
+          },
+          "instruction": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Instruction"
+          },
+          "model": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Model"
+          },
+          "schema_json": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Schema Json"
+          },
+          "timeout_s": {
+            "default": 120.0,
+            "title": "Timeout S",
+            "type": "number"
+          },
+          "url": {
+            "title": "Url",
+            "type": "string"
+          }
+        },
+        "required": [
+          "url"
+        ],
+        "title": "agent_extractArguments",
+        "type": "object"
+      }
+    },
+    {
+      "description": "PRIMARY scraping tool (v1.1.0+; cascade fixed v1.1.3; v1.2.0 adds hostile_only + is_structured). Auto-escalating ladder: tries Pattern A/B/C (TLS impersonation + JSON-LD/microdata extraction) first; if blocked or schema not satisfied, tries Pattern D (Scrapling, when [hostile] extra installed) for hostile vendors; then a stealth-browser render with the same deterministic extractors and NO LLM (v1.6.0); if that still yields nothing, escalates to Pattern E1 (Crawl4AI + LLM). Pattern E2 (browser-use multi-step agent) runs only with interactive=True \u2014 it is the priciest tier and earns its cost on login / pagination / dynamic forms, not on a page that is simply walled. Set hostile_only=True to skip the A/B/C ladder for vendors recon-classified as hostile \u2014 saves ~2-3s per call. Returns pattern_used + pattern_attempts + challenge_detected (the bot vendor that walled us, or null) + is_structured (sidecar's success verdict) + hostile_skipped (true when [hostile] extra missing).",
+      "name": "auto_scrape",
+      "parameters": {
+        "properties": {
+          "browser": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Browser"
+          },
+          "hostile_fallback": {
+            "default": true,
+            "title": "Hostile Fallback",
+            "type": "boolean"
+          },
+          "hostile_only": {
+            "default": false,
+            "title": "Hostile Only",
+            "type": "boolean"
+          },
+          "instruction": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Instruction"
+          },
+          "interactive": {
+            "default": false,
+            "title": "Interactive",
+            "type": "boolean"
+          },
+          "model": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Model"
+          },
+          "pattern_d_network_idle": {
+            "default": false,
+            "title": "Pattern D Network Idle",
+            "type": "boolean"
+          },
+          "persist_browser_profile_dir": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Persist Browser Profile Dir"
+          },
+          "schema_json": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Schema Json"
+          },
+          "timeout_s": {
+            "default": 120.0,
+            "title": "Timeout S",
+            "type": "number"
+          },
+          "url": {
+            "title": "Url",
+            "type": "string"
+          }
+        },
+        "required": [
+          "url"
+        ],
+        "title": "auto_scrapeArguments",
+        "type": "object"
+      }
+    },
+    {
+      "description": "Walk the impersonation ladder against url and report which profile won (or all-blocked). Same as the scrapper-tool canary CLI but accessible to LLM agents. Useful for diagnosing which TLS fingerprint a vendor is rejecting.",
+      "name": "canary",
+      "parameters": {
+        "properties": {
+          "profiles": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Profiles"
+          },
+          "url": {
+            "title": "Url",
+            "type": "string"
+          }
+        },
+        "required": [
+          "url"
+        ],
+        "title": "canary_toolArguments",
+        "type": "object"
+      }
+    },
+    {
+      "description": "Crawl a site breadth-first, running the full auto_scrape cascade on each page \u2014 so every page benefits from recipe replay, the render tier, and proxy rotation, and the recipe learned on page one makes the rest cheap. robots.txt is honoured by default, including Crawl-delay. Bounded by depth / max_pages / concurrency, and the response reports what the bounds left unvisited. Page HTML is omitted by default: a 50-page crawl of rendered pages is tens of MB and would swamp the agent's context.",
+      "name": "crawl_site",
+      "parameters": {
+        "properties": {
+          "concurrency": {
+            "default": 4,
+            "title": "Concurrency",
+            "type": "integer"
+          },
+          "depth": {
+            "default": 2,
+            "title": "Depth",
+            "type": "integer"
+          },
+          "interactive": {
+            "default": false,
+            "title": "Interactive",
+            "type": "boolean"
+          },
+          "max_pages": {
+            "default": 25,
+            "title": "Max Pages",
+            "type": "integer"
+          },
+          "respect_robots": {
+            "default": true,
+            "title": "Respect Robots",
+            "type": "boolean"
+          },
+          "same_domain": {
+            "default": true,
+            "title": "Same Domain",
+            "type": "boolean"
+          },
+          "schema_json": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Schema Json"
+          },
+          "timeout_s": {
+            "default": 120.0,
+            "title": "Timeout S",
+            "type": "number"
+          },
+          "url": {
+            "title": "Url",
+            "type": "string"
+          }
+        },
+        "required": [
+          "url"
+        ],
+        "title": "crawl_site_toolArguments",
+        "type": "object"
+      }
+    },
+    {
+      "description": "Parse <meta itemprop='price'> + <meta itemprop='priceCurrency'> schema.org microdata anchors from HTML (Pattern C). Returns {price, currency} or null if either anchor is absent.",
+      "name": "extract_microdata_price",
+      "parameters": {
+        "properties": {
+          "html": {
+            "title": "Html",
+            "type": "string"
+          }
+        },
+        "required": [
+          "html"
+        ],
+        "title": "extract_microdata_priceArguments",
+        "type": "object"
+      }
+    },
+    {
+      "description": "Parse a schema.org Product+Offer block from HTML. Handles JSON-LD, microdata, and RDFa via extruct. Returns a ProductOffer dict (name, sku, mpn, gtin, brand, description, image, price, currency, availability, url) or null if no Product block is present.",
+      "name": "extract_product",
+      "parameters": {
+        "properties": {
+          "base_url": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Base Url"
+          },
+          "html": {
+            "title": "Html",
+            "type": "string"
+          }
+        },
+        "required": [
+          "html"
+        ],
+        "title": "extract_productArguments",
+        "type": "object"
+      }
+    },
+    {
+      "description": "Issue an HTTP request through the four-profile TLS-impersonation ladder (chrome150 -> chrome146 -> safari2601 -> firefox147 -> chrome133a) until a profile returns non-403/503. Returns status, body (truncated to 64 KB), and which profile won. Use for sites that fingerprint the default httpx stack.",
+      "name": "fetch_with_ladder",
+      "parameters": {
+        "properties": {
+          "extract_structured": {
+            "default": false,
+            "title": "Extract Structured",
+            "type": "boolean"
+          },
+          "method": {
+            "default": "GET",
+            "title": "Method",
+            "type": "string"
+          },
+          "url": {
+            "title": "Url",
+            "type": "string"
+          },
+          "use_curl_cffi": {
+            "default": true,
+            "title": "Use Curl Cffi",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "url"
+        ],
+        "title": "fetch_with_ladderArguments",
+        "type": "object"
+      }
+    },
+    {
+      "description": "Discover URLs on a site. Combines sitemaps (found via robots.txt Sitemap: directives, falling back to /sitemap.xml) with links from the seed page. Cheap \u2014 no browser, no LLM. Use before crawl_site to see how big a job it is; truncation is reported, never silent.",
+      "name": "map_site",
+      "parameters": {
+        "properties": {
+          "fetch_seed": {
+            "default": true,
+            "title": "Fetch Seed",
+            "type": "boolean"
+          },
+          "include_sitemap": {
+            "default": true,
+            "title": "Include Sitemap",
+            "type": "boolean"
+          },
+          "max_urls": {
+            "default": 200,
+            "title": "Max Urls",
+            "type": "integer"
+          },
+          "same_domain": {
+            "default": true,
+            "title": "Same Domain",
+            "type": "boolean"
+          },
+          "timeout_s": {
+            "default": 30.0,
+            "title": "Timeout S",
+            "type": "number"
+          },
+          "url": {
+            "title": "Url",
+            "type": "string"
+          }
+        },
+        "required": [
+          "url"
+        ],
+        "title": "map_site_toolArguments",
+        "type": "object"
+      }
+    }
+  ]
+}

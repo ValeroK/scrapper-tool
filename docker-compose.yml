@@ -86,16 +86,27 @@ services:
       SCRAPPER_TOOL_CAPTCHA_SOLVER: "${SCRAPPER_TOOL_CAPTCHA_SOLVER:-auto}"
       SCRAPPER_TOOL_CAPTCHA_KEY: "${SCRAPPER_TOOL_CAPTCHA_KEY:-}"
       SCRAPPER_TOOL_CAPTCHA_PAID_FALLBACK: "${SCRAPPER_TOOL_CAPTCHA_PAID_FALLBACK:-capsolver}"
-    # Default entrypoint is `scrapper-tool-mcp` — the stdio MCP server.
+    # The image's ENTRYPOINT is `scrapper-tool-serve` (the REST sidecar),
+    # so the stdio MCP server has to be selected explicitly. Without this
+    # key the service silently ran the REST sidecar with stdin attached,
+    # and `docker compose run --rm -T scrapper-tool` never spoke MCP at
+    # all — despite the comment here claiming it was the default.
+    entrypoint: ["scrapper-tool-mcp"]
     # Pass `-T` to docker compose run to keep stdio attached cleanly.
     stdin_open: true
     tty: false
     # No ports exposed: the MCP server speaks over stdin/stdout.
+    # The image's HEALTHCHECK curls the REST sidecar on :5792, which this
+    # container does not run and does not publish. Inheriting it would
+    # mark every stdio run permanently unhealthy.
+    healthcheck:
+      disable: true
 
   # HTTP-based MCP service — long-running, listens on :8000 with the
   # streamable-HTTP transport. Wire any external MCP client (Claude Code,
   # Cursor, mcp-use) to ``http://localhost:8000/mcp`` and they get all
-  # six tools.
+  # nine tools. ``/mcp`` is the SDK's default streamable-HTTP mount path
+  # (``streamable_http_path``), unchanged in SDK 2.x.
   #
   # Start:
   #   docker compose --profile http up -d scrapper-tool-mcp-http
@@ -111,6 +122,12 @@ services:
     image: scrapper-tool:latest
     container_name: scrapper-tool-mcp-http
     restart: unless-stopped
+    # Required: the image defaults to the REST sidecar. Without this the
+    # SCRAPPER_TOOL_MCP_* variables below are read by nobody (only
+    # scrapper-tool-mcp's _parse_args consults them), the container binds
+    # the REST port 5792 instead of 8000, and the healthcheck below can
+    # never pass — the service was unhealthy by construction.
+    entrypoint: ["scrapper-tool-mcp"]
     extra_hosts:
       - "host.docker.internal:host-gateway"
     ports:

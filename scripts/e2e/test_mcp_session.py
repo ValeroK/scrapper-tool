@@ -32,7 +32,9 @@ from mcp import ClientSession, StdioServerParameters
 from mcp.client.stdio import stdio_client
 
 # All settings come from env. The Docker image has scrapper-tool-mcp on
-# PATH (default entrypoint is ``scrapper-tool-mcp``) so we just spawn it.
+# PATH so we just spawn it. (The image's ENTRYPOINT is the REST sidecar,
+# not this — compose selects the MCP server explicitly; see the
+# entrypoint key on the `scrapper-tool` service.)
 SERVER = StdioServerParameters(
     command="scrapper-tool-mcp",
     args=[],
@@ -42,8 +44,25 @@ SERVER = StdioServerParameters(
 )
 
 
+# The full tool surface, asserted exactly. This used to name six tools
+# and check only for missing ones, so it passed against a server that
+# had gained or lost tools. docs/mcp-tools.json is the CI-enforced
+# source of truth for the same list.
+EXPECTED_TOOLS = {
+    "agent_browse",
+    "agent_extract",
+    "auto_scrape",
+    "canary",
+    "crawl_site",
+    "extract_microdata_price",
+    "extract_product",
+    "fetch_with_ladder",
+    "map_site",
+}
+
+
 def _payload(result: Any) -> dict[str, Any] | list[Any] | str:
-    """FastMCP wraps tool results in a CallToolResult with content blocks.
+    """The server wraps tool results in a CallToolResult with content blocks.
 
     Each block has ``.type == 'text'`` and a ``.text`` field carrying
     the JSON the tool returned. Unwrap the first text block and parse.
@@ -73,17 +92,11 @@ async def main() -> None:  # noqa: PLR0915 - sequential narrative, intentional
             tools = await session.list_tools()
             tool_names = sorted(t.name for t in tools.tools)
             print(f"[5.0] tools advertised: {tool_names}")
-            expected = {
-                "fetch_with_ladder",
-                "extract_product",
-                "extract_microdata_price",
-                "canary",
-                "agent_extract",
-                "agent_browse",
-            }
-            missing = expected - set(tool_names)
-            assert not missing, f"missing tools: {missing}"
-            print(f"[5.0] [OK] all {len(expected)} tools present")
+            missing = EXPECTED_TOOLS - set(tool_names)
+            unexpected = set(tool_names) - EXPECTED_TOOLS
+            assert not missing, f"missing tools: {sorted(missing)}"
+            assert not unexpected, f"unexpected tools: {sorted(unexpected)}"
+            print(f"[5.0] [OK] exactly the {len(EXPECTED_TOOLS)} expected tools")
             print()
 
             # 5.A - canary

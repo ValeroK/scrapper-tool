@@ -20,7 +20,7 @@ Triggers for a new PR:
 - A new `curl_cffi` impersonation profile ships and is more recent than our current `chrome133a` primary → bump.
 - A new browser-fingerprint stealth tool surfaces and benchmarks better than Camoufox/Scrapling → propose addition (or "do not adopt" entry with rationale).
 - A vendor site we know about (or a community report) shows a new pattern variant the §A-D tree doesn't cover → extend the tree.
-- The MCP SDK ships a major version → migrate `mcp.py` and bump the `[agent]` extra version pin.
+- The MCP SDK ships a major version → migrate `mcp.py` and bump the `[agent]` extra version pin **and** the `mcp` bound in `[tool.uv] override-dependencies`. `override-dependencies` replaces a package's requirements rather than intersecting them, so a bound written in only one place does nothing.
 
 ## Quarterly review checklist
 
@@ -29,7 +29,7 @@ Every quarter (next: **2026-Q3**), the maintainer:
 1. **Re-runs `scrapper-tool canary`** against the URL set in [`tests/canary_targets.yaml`](tests/canary_targets.yaml). If the head-of-ladder profile (currently `chrome133a`) is showing >5 % 403 rate, promote whichever `curl_cffi` profile has stabilised since the last review.
 2. **Reads the latest dated landscape doc** in [`docs/research/`](docs/research/). If a successor (e.g. `2026-Q3-landscape.md`) hasn't been written yet, write one — don't edit the previous one in place. The diff between successive landscape docs is the audit trail.
 3. **Audits the [`do-not-adopt.md`](docs/research/do-not-adopt.md) list** for items that became viable again. Overturning a reject requires a *new* dated entry, never editing the old one.
-4. **Bumps `mcp` SDK pin** in the `[agent]` extra (M13) if a new minor version shipped. Run `tests/unit/test_mcp.py` to catch breaking changes.
+4. **Bumps `mcp` SDK pin** in the `[agent]` extra (M13) if a new minor version shipped. Run `tests/unit/test_mcp.py` to catch breaking changes — and check the run reports **no skips**. Those tests guard on `importorskip("mcp")`, the package, deliberately: guarding on the module that holds the server class is what once turned an SDK API break into a silent module-wide skip, so the suite went green against a server that could not start. A green run with skips is not a pass.
 
 ## Development setup
 

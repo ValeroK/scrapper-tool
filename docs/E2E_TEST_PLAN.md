@@ -661,11 +661,15 @@ Put one of the two stanzas below in your `.mcp.json` (project) or
 }
 ```
 
-Restart Claude Code. The six tools should appear in the tool palette:
+Restart Claude Code. All nine tools should appear in the tool palette
+(`docs/mcp-tools.json` is the CI-enforced list):
 
+- `auto_scrape`
 - `fetch_with_ladder`
 - `extract_product`
 - `extract_microdata_price`
+- `map_site`
+- `crawl_site`
 - `canary`
 - `agent_extract`
 - `agent_browse`
