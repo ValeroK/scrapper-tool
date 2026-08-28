@@ -146,6 +146,11 @@ reason then blames a missing `[agent]` extra that is in fact installed. This is
 why `mcp` is capped `<2` until the migration lands — and why the migration has to
 change those guards too, or it cannot be verified.
 
+**The migration is planned in full**, with every file:line anchor verified
+against the 3.0.0 release commit:
+[`research/2026-08-28-mcp-2x-migration-plan.md`](research/2026-08-28-mcp-2x-migration-plan.md).
+Twelve work items, shipping as 3.1. Start there rather than re-deriving it.
+
 Note also that `[tool.uv] override-dependencies` **replaces** a package's
 requirements rather than intersecting with them, so a bound that matters must be
 written in both the extra and the override. A bare `mcp>=1.28.1` in the override
