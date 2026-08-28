@@ -111,6 +111,10 @@ jobs:
         run: |
           uv run camoufox sync
           uv run camoufox set "official/stable/$CAMOUFOX_BUILD"
+          # `set` only records the pin - it prints "(not fetched)" and leaves
+          # the download to launch time. Without this the cache step above has
+          # nothing to cache and every job still pulls ~490 MB mid-test.
+          uv run camoufox fetch
           active=$(uv run camoufox active)
           echo "active browser build: $active"
           case "$active" in

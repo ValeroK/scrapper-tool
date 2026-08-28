@@ -21,8 +21,12 @@ All notable changes to `scrapper-tool` are recorded here. Format follows [Keep a
   runs, so the triple comes back empty and the falsy filter in
   `_detect_challenge_detail` drops it. An early guess that browser
   `152.0.4-beta.29` (released 2026-08-20) caused it does **not** hold up: a
-  fresh install resolves to `beta.28`, so CI was most likely on `beta.28` the
-  whole time. The cause is unidentified. Whether it is a `set_content` timing
+  fresh install resolves to `beta.28`, and CI has now run the test against a
+  *verified* `beta.28` pin and reproduced the failure exactly — so the browser
+  build is not the cause. The cause is unidentified; the leading hypothesis is
+  a latent race in the test between `set_content` running the inline
+  `gokuProps` script and the detection JS being evaluated, which would make it
+  flaky rather than broken and explains a green-then-red with no input change. Whether it is a `set_content` timing
   artefact in the test or a real detection regression that would also affect
   production scraping of AWS WAF sites is the open question, and it should be
   answered before anyone trusts AWS WAF detection.
