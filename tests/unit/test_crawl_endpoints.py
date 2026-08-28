@@ -80,6 +80,46 @@ def _serve_site(monkeypatch: pytest.MonkeyPatch, site: dict[str, str] | None = N
     return calls
 
 
+def _pin_out_io_tiers(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Keep the tiers that can open a real socket out of a crawl test.
+
+    A URL the fixture site doesn't serve comes back 404, which is the whole
+    point of the failing-page test — but a 404 doesn't stop the cascade, it
+    escalates it. Left alone the crawl then runs Pattern D (Scrapling drives a
+    real Chromium) and E1 (Crawl4AI does the same), and both resolve
+    ``site.test`` against real DNS. ``tests/unit`` is meant to be hermetic, so
+    which of those happens to be installed must not decide the outcome.
+
+    It decided it twice over. On a bare install both tiers raised at import and
+    the page failed for the wrong reason; with ``[full]`` installed D burns ~5 s
+    of DNS retries and E1 then reports ``net::ERR_NAME_NOT_RESOLVED`` as a
+    *non-blocked* result — which the cascade counts as an E1 win, so the page
+    came back ``ok`` and the crawl reported zero failures.
+
+    The stealth-render tier sitting between them is already off: see
+    ``_disable_render_tier`` in ``tests/conftest.py``.
+    """
+    import sys
+    from unittest.mock import AsyncMock, MagicMock
+
+    from scrapper_tool.errors import AgentBlockedError
+
+    # Pattern D — skipped without a fetch, exactly as on an install without
+    # the [hostile] extra.
+    monkeypatch.setattr(http_server, "_hostile_available", lambda: False)
+
+    # E1/E2 — a stand-in module, so the cascade exhausts on a blocked agent
+    # instead of on whether Crawl4AI happens to be importable.
+    agent_module = MagicMock()
+    agent_module.AgentConfig = MagicMock()
+    agent_module.AgentConfig.from_env = MagicMock(
+        return_value=MagicMock(merged=lambda **_: MagicMock())
+    )
+    agent_module.agent_extract = AsyncMock(side_effect=AgentBlockedError("e1 blocked"))
+    agent_module.agent_browse = AsyncMock(side_effect=AgentBlockedError("e2 blocked"))
+    monkeypatch.setitem(sys.modules, "scrapper_tool.agent", agent_module)
+
+
 # --- /map -------------------------------------------------------------------
 
 
@@ -236,6 +276,9 @@ class TestCrawlEndpoint:
             "https://site.test/a": _PRODUCT_HTML,
         }
         _serve_site(monkeypatch, site)
+        # /missing is the only page here that escalates past A/B/C, so it is the
+        # only one that can reach a tier with a real browser behind it.
+        _pin_out_io_tiers(monkeypatch)
 
         async with _client(app_no_auth) as client:
             resp = await client.post("/crawl", json={"url": "https://site.test/", "depth": 1})
@@ -244,7 +287,9 @@ class TestCrawlEndpoint:
         body = resp.json()
         failed = [p for p in body["pages"] if not p["ok"]]
         assert len(failed) == 1
+        assert failed[0]["url"] == "https://site.test/missing"
         assert body["stats"]["failed"] == 1
+        assert body["stats"]["visited"] == 3, "the other two pages still got crawled"
 
     @pytest.mark.asyncio
     async def test_a_crawl_learns_a_recipe_once_and_replays_it(

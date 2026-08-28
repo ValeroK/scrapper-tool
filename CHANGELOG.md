@@ -2,6 +2,59 @@
 
 All notable changes to `scrapper-tool` are recorded here. Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning follows [SemVer](https://semver.org/).
 
+## [Unreleased]
+
+### Changed
+
+- **`tests/unit/` now defends its own hermeticity instead of documenting it.**
+  Two additions to `tests/conftest.py`:
+
+  Pattern D is pinned off by default, the sibling `_disable_render_tier` was
+  missing. D launches Scrapling's Playwright browser, so any test escalating
+  past A/B/C was hermetic only while the `[hostile]` extra went uninstalled —
+  green on a bare `--extra dev` sync, reaching the internet on the `[full]` CI
+  row. The call sites had already voted: 37 unit tests turned the flag off by
+  hand and 7 turned it on. The 7 opt-ins are unaffected.
+
+  A tier probe, off by default and armed by `SCRAPPER_TOOL_TIER_PROBE=1` in the
+  new `hermeticity` CI job, replaces the Pattern D / render / E1 / E2 entry
+  points so any test that *reaches* one without faking it first fails the run
+  and is named in the terminal summary — even when all its assertions passed.
+
+  Blocking sockets in-process was considered and rejected: the lookups came
+  from a Chromium subprocess, so it would not have caught this while implying
+  it had.
+
+### Fixed
+
+- **Three `tests/unit/` tests reached the real internet, and one of them
+  passed only because of it.** `tests/conftest.py` states that `tests/unit/` is "fast,
+  hermetic, no network". Three tests did not honour that, and the outcome of one
+  of them was decided by which optional extras happened to be installed.
+
+  `test_a_failing_page_does_not_fail_the_crawl` crawls a fixture site and asks
+  for `https://site.test/missing`, which the stand-in ladder answers with a 404.
+  A 404 does not stop the cascade, it escalates it — so the page went on to
+  Pattern D (Scrapling drives a real Chromium) and then E1 (Crawl4AI does the
+  same), both of which resolved `site.test` against real DNS. On a bare install
+  both tiers raised at import and the page failed for the wrong reason. With
+  `[full]` installed, D spent ~5 s on DNS retries and E1 then reported
+  `net::ERR_NAME_NOT_RESOLVED` as a *non-blocked* result — which the cascade
+  counts as an E1 win — so the page came back `ok`, the crawl reported zero
+  failures, and the test failed. Both tiers are now pinned out of the test, so
+  the failing page fails on the cascade exhausting rather than on the
+  environment, and the assertion it exists for ("one bad page must not fail the
+  crawl") is unchanged and now names the page that failed.
+
+  `TestUnauthenticatedCookieGate`'s two non-403 cases drove the whole `/scrape`
+  cascade with no stand-in ladder at all: a real curl-cffi fetch of
+  `example.com`, which did not satisfy the classifier, followed by escalation
+  into the browser tiers. Their assertion (`status_code != 403`) is loose enough
+  that every one of those outcomes passed, so the leak was silent. They now
+  serve a fixture page that A/B/C accepts, and never leave the first tier.
+
+  No production code changed — this is a test-hermeticity fix.
+
 ## [2.2.0] - 2026-08-15
 
 Findings from the first live validation of 2.1.0 against real sites. PRs #25 and

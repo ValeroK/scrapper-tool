@@ -316,6 +316,37 @@ class TestNoLeakIntoTheApiSurface:
 # ---------------------------------------------------------------------------
 
 
+_PRODUCT_HTML = (
+    '<html><head><script type="application/ld+json">'
+    '{"@context":"https://schema.org","@type":"Product","name":"Widget",'
+    '"offers":{"@type":"Offer","price":"9.99","priceCurrency":"USD"}}'
+    "</script></head><body><p>ok</p></body></html>"
+)
+
+
+def _serve_a_page(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Let A/B/C win so the gate tests never escalate into a browser tier.
+
+    These tests are about the 403 gate, not about scraping, but they drive the
+    whole ``/scrape`` cascade to reach it. Without a stand-in ladder that means a
+    real curl-cffi fetch of ``example.com`` and — when the fetch doesn't satisfy
+    the classifier — a real browser in Pattern D or E1. ``tests/unit`` is
+    hermetic by contract (see ``tests/conftest.py``), and the assertions here
+    (``status_code != 403``) are loose enough that the leak was invisible.
+    """
+    from unittest.mock import MagicMock
+
+    async def fake_ladder(method: str, url: str, **_kwargs: Any) -> Any:
+        response = MagicMock()
+        response.status_code = 200
+        response.text = _PRODUCT_HTML
+        response.url = url
+        response.headers = {"content-type": "text/html"}
+        return response, "chrome146"
+
+    monkeypatch.setattr("scrapper_tool.ladder.request_with_ladder", fake_ladder)
+
+
 class TestUnauthenticatedCookieGate:
     """`/scrape` is open by default. That must stop being true for credentials."""
 
@@ -365,6 +396,7 @@ class TestUnauthenticatedCookieGate:
 
         monkeypatch.setenv("SCRAPPER_TOOL_HTTP_ALLOW_UNAUTH_COOKIES", "1")
         monkeypatch.setattr(http_server, "_hostile_available", lambda: False)
+        _serve_a_page(monkeypatch)
         app = http_server._build_app(api_key=None, cors_origins=["*"])
         async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
             resp = await client.post("/scrape", json=self._body())
@@ -381,6 +413,7 @@ class TestUnauthenticatedCookieGate:
 
         monkeypatch.delenv("SCRAPPER_TOOL_HTTP_ALLOW_UNAUTH_COOKIES", raising=False)
         monkeypatch.setattr(http_server, "_hostile_available", lambda: False)
+        _serve_a_page(monkeypatch)
         app = http_server._build_app(api_key=None, cors_origins=["*"])
         async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
             resp = await client.post("/scrape", json={"url": "https://example.com"})

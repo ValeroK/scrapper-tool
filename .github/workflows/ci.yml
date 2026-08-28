@@ -80,6 +80,31 @@ jobs:
         with:
           fail_ci_if_error: false
 
+  hermeticity:
+    name: Hermeticity (tests/unit reach no network tier)
+    needs: [lint-and-type]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: astral-sh/setup-uv@v8.1.0
+        with:
+          enable-cache: true
+      - run: uv python install 3.13
+      # Deliberately a light sync. The probe replaces the tier entry points
+      # themselves, so it does not need Scrapling or Crawl4AI installed to
+      # prove nothing reaches them — which is the point, since the leak it
+      # guards against was a test whose hermeticity depended on exactly that.
+      - run: uv sync --extra dev --extra agent --extra http
+      # tests/unit is "fast, hermetic, no network" per tests/conftest.py. This
+      # job is what makes that a claim the suite can fail rather than a comment.
+      # A test that reaches Pattern D, the render tier, E1, or E2 without
+      # faking it first fails the run and is named in the summary, even if
+      # every assertion in it passed.
+      - name: Unit suite with the tier probe armed
+        env:
+          SCRAPPER_TOOL_TIER_PROBE: "1"
+        run: uv run pytest tests/unit -q
+
   pip-audit:
     name: Dependency audit
     needs: [lint-and-type]
