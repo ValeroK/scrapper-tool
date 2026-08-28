@@ -15,8 +15,10 @@ A reusable Python web-scraping toolkit. See the [README](../README.md) for the e
   - [HTTP client](reference/http.md)
   - [Anti-bot ladder](reference/ladder.md)
   - [Test helpers](reference/testing.md)
+- **[Progress and open points](PROGRESS.md)** — what has shipped, what is knowingly unfinished, and the decisions waiting on a human. Edited in place, unlike the dated research snapshots.
 - **Research**:
   - [2026-04-30 landscape snapshot](research/2026-04-30-landscape.md) — why these tools, sourced.
+  - [2026-08-26 DonSeTch concept audit](research/2026-08-26-donsetch-concepts.md) — a competitor's architecture, ranked adopt / candidate / reject.
   - [Tool catalog](research/tool-catalog.md) — adopted / candidate / rejected matrix.
   - [Do-not-adopt list](research/do-not-adopt.md) — append-only rejects with dates + reasons.
 - **[HTTP REST sidecar](http-sidecar.md)** — call scrapper-tool from any service over plain HTTP (v1.1.0+). OpenAPI spec at [`openapi/openapi.yaml`](openapi/openapi.yaml).
