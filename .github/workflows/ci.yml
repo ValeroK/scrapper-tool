@@ -112,9 +112,15 @@ jobs:
           uv run camoufox sync
           uv run camoufox set "official/stable/$CAMOUFOX_BUILD"
           # `set` only records the pin - it prints "(not fetched)" and leaves
-          # the download to launch time. Without this the cache step above has
-          # nothing to cache and every job still pulls ~490 MB mid-test.
-          uv run camoufox fetch
+          # the download to launch time. Without a fetch the cache step above
+          # has nothing to cache and every job still pulls ~490 MB mid-test.
+          #
+          # The version is repeated on purpose. Bare `camoufox fetch` installs
+          # "the active version", but it re-resolves the `official/stable`
+          # channel to its newest build and makes THAT active - it overrode the
+          # pin one line above it and made beta.29 active. Naming the build
+          # here is what makes the pin hold.
+          uv run camoufox fetch "official/stable/$CAMOUFOX_BUILD"
           active=$(uv run camoufox active)
           echo "active browser build: $active"
           case "$active" in
