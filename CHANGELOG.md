@@ -159,11 +159,33 @@ that was a live security hole rather than a missed optimisation.
   Cookies are not reimplemented — every hop reuses the same session, so libcurl's
   own jar keeps applying its domain scoping.
 
-  **Off by default**, and not out of timidity. The redirect semantics are well
-  specified and covered by tests; what is not yet proven is that issuing the hops
-  ourselves leaves the TLS and header fingerprint byte-identical to libcurl's.
-  That fingerprint is the reason Pattern A/B/C exists, so it gets a canary run
-  against a redirecting target before it becomes the default.
+  **Still off by default**, but the fingerprint question it was gated on has now
+  been measured, against `tls.peet.ws` on `chrome146`:
+
+  | Signal | flag off | flag on |
+  |---|---|---|
+  | JA4 | `t13d1516h2_8daaf6152771_d8a2da3f94cd` | identical |
+  | peetprint hash | `1d4ffe9b0e34acac0bd883fa7f79d7b5` | identical |
+  | Akamai h2 hash | `52d84b11737d980aef856699f885ca86` | identical |
+  | h2 header order | `sec-ch-ua, sec-ch-ua-mobile, sec-ch-ua-platform, ...` | identical |
+
+  Measured on the **redirected hop itself**, not just a direct request — the hop
+  is the only code path that differs, so fingerprinting a direct request would
+  have proved nothing. JA3's hash varies run to run in *both* modes (3 distinct
+  values in 3 samples each): that is GREASE randomisation, which is what real
+  Chrome does, and establishing that baseline variance first is what makes the
+  rest of the comparison meaningful rather than a false alarm.
+
+  Behaviour also checked live: a single-hop and a 3-hop public chain both still
+  complete, and against a local redirector pointing at the metadata endpoint the
+  difference is stark — with the flag **off** libcurl connected to
+  `169.254.169.254` three times (once per retry attempt, visible in the curl
+  error), and with it **on** the hop was refused before being issued.
+
+  It remains opt-in only because this is one host, one target pair and one
+  impersonation profile; the loop is profile-agnostic (it reuses the session, so
+  the profile is whatever that session carries), but "measured once" is not
+  "soaked".
 
 ### Known limits
 
