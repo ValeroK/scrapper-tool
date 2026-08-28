@@ -221,9 +221,34 @@ A refusal is reported, never silent:
 | Path | Enforcement |
 |------|-------------|
 | httpx (A/B/C plain, sitemap, robots.txt) | **Per hop.** A redirect into private space is blocked before the connection. |
-| curl_cffi ladder | Pre-flight on the target, then post-flight on the final URL. libcurl follows redirects internally with no per-hop hook, so a redirected request *is issued* — we refuse to return the body. Closing this needs our own hop loop; tracked for a later increment. |
-| Pattern D (Scrapling), render, E1, E2 | Pre-flight on the target only. These tiers own their own navigation. |
+| curl_cffi ladder | Pre-flight, plus post-flight on the final URL. With `SCRAPPER_TOOL_URL_GUARD_STRICT_REDIRECTS=1` the chain is followed in Python instead and **every hop is vetted before it is issued**. Off by default pending a canary run — see below. |
+| render tier (Camoufox / Patchright) | **Page-initiated requests blocked** — `<img>`, `<iframe>`, `fetch()` at a refused host are aborted before they leave the browser. **Navigation redirect hops are not**: Playwright's `route` does not fire for them, so a `302` into private space is still issued and only the post-flight check refuses the body. |
+| Pattern D (Scrapling), E1, E2 | Pre-flight on the target only. These tiers own their own navigation. |
 | `obscura` subprocess (`batch_fetch`, `obscura_fetch`) | Pre-flight on every URL. An external binary exposes no hook. |
+
+### `SCRAPPER_TOOL_URL_GUARD_STRICT_REDIRECTS`
+
+| Env var | Default | Meaning |
+|---------|---------|---------|
+| `SCRAPPER_TOOL_URL_GUARD_STRICT_REDIRECTS` | **off** | `1` makes the curl_cffi ladder follow redirects in Python, vetting each hop before issuing it, instead of handing the chain to libcurl. |
+
+The loop reproduces what libcurl gives free — 301/302/303 downgrade a non-GET to
+GET and drop the body, 307/308 preserve both, and `Authorization` is stripped on
+a cross-origin hop. Cookies are *not* reimplemented: every hop reuses the same
+session, so libcurl's own jar keeps applying its domain scoping.
+
+It is off by default for one reason, and it is not timidity: the redirect
+semantics are well specified and tested, but what is **not** yet proven is that
+issuing the hops ourselves leaves the TLS and header fingerprint byte-identical
+to letting libcurl do it. That fingerprint is why Pattern A/B/C exists. Verify
+with `scrapper-tool canary` against a redirecting target before enabling it
+widely.
+
+**What remains blind.** With the flag off, and on the render/D/E tiers
+regardless, a redirect into private space *is issued* — we can only refuse to
+return the body. That is not a safe residual: a state-changing GET has already
+happened, and the distinct error codes and timings make a serviceable internal
+port scanner. It is a known gap, not a closed one.
 
 DNS pinning (resolve once, connect to the pinned address) would close the
 remaining resolve-then-connect race and is deliberately **not** done: it breaks

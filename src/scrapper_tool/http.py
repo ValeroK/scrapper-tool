@@ -46,6 +46,7 @@ import random
 import secrets
 from contextlib import asynccontextmanager
 from typing import TYPE_CHECKING, Any, Literal, cast
+from urllib.parse import urljoin, urlsplit
 
 import httpx
 from curl_cffi.requests import AsyncSession as _CurlCffiAsyncSession
@@ -54,7 +55,7 @@ from curl_cffi.requests.exceptions import (
 )
 
 from scrapper_tool._logging import get_logger
-from scrapper_tool._urlguard import assert_url_allowed_nodns
+from scrapper_tool._urlguard import assert_url_allowed_nodns, strict_redirects_enabled
 from scrapper_tool.errors import VendorHTTPError
 
 if TYPE_CHECKING:
@@ -133,6 +134,100 @@ class _GuardedTransport(httpx.AsyncBaseTransport):
 
     async def aclose(self) -> None:
         await self._inner.aclose()
+
+
+#: Redirect statuses we follow by hand under strict mode. Matches what libcurl
+#: follows, so turning the flag on does not change *which* chains complete.
+_REDIRECT_STATUSES: frozenset[int] = frozenset({301, 302, 303, 307, 308})
+
+#: Hop ceiling for the manual loop. libcurl's own default is 30; 20 is the same
+#: order of magnitude and no real chain approaches it.
+_MAX_REDIRECT_HOPS = 20
+
+#: Headers dropped when a redirect crosses to another origin. Sending a bearer
+#: token to whatever host a ``Location`` names is the credential-leak half of an
+#: open-redirect bug, and libcurl strips these for the same reason.
+_CROSS_ORIGIN_STRIP: frozenset[str] = frozenset({"authorization", "proxy-authorization", "cookie"})
+
+
+def _origin_of(url: str) -> tuple[str, str, int | None]:
+    parts = urlsplit(url)
+    return parts.scheme.lower(), (parts.hostname or "").lower(), parts.port
+
+
+async def _request_guarding_each_hop(
+    client: httpx.AsyncClient,
+    method: str,
+    url: str,
+    *,
+    headers: dict[str, str],
+    **kwargs: object,
+) -> httpx.Response:
+    """Follow redirects ourselves so every hop is vetted before it is issued.
+
+    curl_cffi hands redirect following to libcurl, which resolves the whole
+    chain inside one ``request()`` call and offers no per-hop hook. That leaves
+    only a post-flight check on the final URL — enough to refuse to *return* a
+    body from private space, but not to stop the request, so a state-changing
+    GET behind a redirect still happens. This closes that by driving the chain
+    from Python.
+
+    What libcurl gives free and this has to reproduce:
+
+    * **Method rewriting.** 301/302/303 downgrade a non-GET/HEAD to GET and drop
+      the body (303 always does); 307/308 exist precisely to preserve both.
+    * **Cross-origin credential stripping.** ``Authorization`` and friends do not
+      follow a redirect to another origin.
+    * **Cookie continuity.** Not reimplemented, and deliberately so: every hop
+      reuses the *same* session, so libcurl's own jar keeps applying its
+      domain-scoping rules across hops exactly as before.
+
+    The session's impersonation profile and connection pool are likewise per-
+    session, so header order and TLS reuse are unchanged by looping here — that
+    is the claim the soak flag exists to verify before this becomes the default.
+    """
+    current_url = url
+    current_method = method.upper()
+    hop_headers = dict(headers)
+    # Kept separate from the rest because a 301/302/303 to GET has to drop them.
+    body_kwargs: dict[str, Any] = {
+        key: kwargs.pop(key) for key in ("data", "json", "content", "files") if key in kwargs
+    }
+
+    for _hop in range(_MAX_REDIRECT_HOPS):
+        # ``allow_redirects`` is curl_cffi's spelling and is what turns libcurl's
+        # own following off so this loop can do it instead. Collapsed into one
+        # dict because a multi-line ``**splat`` puts mypy's complaint on a
+        # different line than the call it belongs to.
+        call_kwargs: dict[str, Any] = {
+            "headers": hop_headers,
+            "allow_redirects": False,
+            **body_kwargs,
+            **kwargs,
+        }
+        response = await client.request(current_method, current_url, **call_kwargs)
+        if response.status_code not in _REDIRECT_STATUSES:
+            return response
+        location = response.headers.get("location") or response.headers.get("Location")
+        if not location:
+            # A 3xx with nowhere to go is the server's problem, not a redirect.
+            return response
+
+        target = urljoin(current_url, location)
+        # The whole point: refuse before issuing, not after receiving.
+        assert_url_allowed_nodns(target)
+
+        if _origin_of(target) != _origin_of(current_url):
+            hop_headers = {
+                k: v for k, v in hop_headers.items() if k.lower() not in _CROSS_ORIGIN_STRIP
+            }
+        if response.status_code in {301, 302, 303} and current_method not in {"GET", "HEAD"}:
+            current_method = "GET"
+            body_kwargs = {}
+        current_url = target
+
+    msg = f"exceeded {_MAX_REDIRECT_HOPS} redirects starting at {url}"
+    raise VendorHTTPError(msg)
 
 
 def guard_client(client: httpx.AsyncClient) -> httpx.AsyncClient:
@@ -305,10 +400,20 @@ async def request_with_retry(
     )
     headers.setdefault("X-Request-ID", _make_request_id())
 
+    # The httpx path is already vetted per hop by ``guard_client``'s transport,
+    # underneath the redirect loop. curl_cffi has no such hook, so under strict
+    # mode we drive its chain ourselves; otherwise libcurl follows as before and
+    # the ladder's post-flight check is the (weaker) net.
+    hop_guarded = strict_redirects_enabled() and isinstance(client, _CurlCffiAsyncSession)
+
     last_exc: Exception | None = None
     for attempt in range(1, max_attempts + 1):
         try:
-            resp = await client.request(method, url, headers=headers, **kwargs)  # type: ignore[arg-type]
+            resp = (
+                await _request_guarding_each_hop(client, method, url, headers=headers, **kwargs)
+                if hop_guarded
+                else await client.request(method, url, headers=headers, **kwargs)  # type: ignore[arg-type]
+            )
         except _TRANSPORT_ERRORS as exc:
             last_exc = exc
             _logger.warning(

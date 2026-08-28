@@ -26,11 +26,13 @@ Usage::
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass, field, replace
 from typing import TYPE_CHECKING, Any
 
 from scrapper_tool._challenge import has_real_content
 from scrapper_tool._logging import get_logger
+from scrapper_tool._urlguard import check_url, url_guard_enabled
 from scrapper_tool.agent.backends.browser import (
     BrowserLaunchOptions,
     get_browser_backend,
@@ -52,6 +54,75 @@ _logger = get_logger(__name__)
 # late/lazy content arrive. This is what made a plain Camoufox navigation pass a
 # Radware wall where a bare fetch did not.
 _DEFAULT_SETTLE_S = 2.0
+
+# Anchored on the scheme rather than ``**/*`` on purpose. A catch-all pattern
+# also matches the internal ``about:blank`` navigation a context performs, and
+# aborting *that* strands the browser before it reaches the page — a mistake
+# already made and measured once in this repo (see the interception fix in
+# ``test_captcha_detection_dom``), where it turned an intermittent failure into
+# a deterministic 30s timeout.
+_GUARDED_SCHEMES = re.compile(r"^https?://")
+
+
+async def _install_url_guard(context: Any, url: str) -> bool:
+    """Abort page-initiated requests the guard refuses, before they are issued.
+
+    **What this closes.** A rendered page can make the browser fetch anything it
+    names — ``<img src>``, ``<iframe src>``, ``fetch()`` from its own scripts.
+    Without a route those all reach the network, which turns the render tier
+    into an SSRF primitive driven by whoever controls the page. Measured against
+    a real Camoufox: a page carrying an ``<img>`` at ``169.254.169.254``, an
+    ``<iframe>`` at ``10.0.0.1`` and a ``fetch()`` at ``127.0.0.53`` had all
+    three aborted here, and the page still rendered.
+
+    **What it does not close, verified rather than assumed.** Playwright's
+    ``route`` does *not* fire for redirect hops on a navigation — the browser's
+    network stack follows a ``302`` internally and the handler only ever sees
+    the original URL. Instrumented against a local redirector pointing at the
+    metadata endpoint: the handler saw the seed and nothing else, and the
+    browser went on to attempt the metadata connection itself. So navigation
+    redirects remain blind SSRF on this tier, caught only by the cascade's
+    post-flight check on the final URL. Closing that properly would mean
+    intercepting with ``route.fetch(max_redirects=0)`` and fulfilling each hop
+    by hand, which replaces a native browser fetch with a synthesised response —
+    not a trade to make blind on the tier whose entire purpose is stealth.
+
+    Deliberately does **not** exempt ``resource_type == "document"``. That
+    exemption reads like belt-and-braces and is worse than useless: an
+    ``<iframe src>`` *is* a document, so exempting documents waves through
+    exactly the third-party frames worth stopping. Same finding as the
+    detection-fixture fix.
+
+    Returns whether the route was installed; a backend that exposes no
+    ``route`` is reported rather than silently unguarded.
+    """
+    if not url_guard_enabled():
+        return False
+    route = getattr(context, "route", None)
+    if not callable(route):
+        _logger.warning(
+            "patterns.render.guard_unavailable",
+            url=url,
+            detail="browser context exposes no route(); this render is not hop-guarded",
+            remedy="the pre-flight and post-flight checks still apply, but a redirect "
+            "into private space would be issued by the browser",
+        )
+        return False
+
+    async def _handle(route_obj: Any, request: Any) -> None:
+        verdict = check_url(str(getattr(request, "url", "") or ""))
+        if verdict.allowed:
+            await route_obj.continue_()
+            return
+        _logger.warning(
+            "patterns.render.request_refused",
+            url=getattr(request, "url", None),
+            reason=verdict.reason,
+        )
+        await route_obj.abort()
+
+    await route(_GUARDED_SCHEMES, _handle)
+    return True
 
 
 @dataclass(frozen=True)
@@ -140,6 +211,11 @@ async def render_html(
             raise ImportError(msg)
 
         context = await resolve_context(pw_browser)
+
+        # Same rule as the cookie injection below, for the same reason: the
+        # navigation that goto() issues is the one that matters, so the route
+        # has to be registered before it rather than after.
+        await _install_url_guard(context, url)
 
         # Inject before the first navigation, never after. The request that
         # decides logged-in vs logged-out is the one goto() issues, so an

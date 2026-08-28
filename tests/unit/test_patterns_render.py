@@ -26,32 +26,66 @@ class _FakeResponse:
 
 
 class _FakePage:
-    def __init__(self, html: str = "<html><body>ok</body></html>") -> None:
+    def __init__(
+        self, html: str = "<html><body>ok</body></html>", order: list[str] | None = None
+    ) -> None:
         self.url = "https://final.example/landed"
         self._html = html
-        self.goto = AsyncMock(return_value=_FakeResponse())
+        self._order = order if order is not None else []
+
+        async def _goto(*_a: Any, **_k: Any) -> _FakeResponse:
+            self._order.append("goto")
+            return _FakeResponse()
+
+        self.goto = AsyncMock(side_effect=_goto)
         self.wait_for_timeout = AsyncMock()
 
     async def content(self) -> str:
         return self._html
 
 
+class _FakeRoute:
+    """Records whether a request was let through or aborted."""
+
+    def __init__(self) -> None:
+        self.outcome: str | None = None
+
+    async def continue_(self) -> None:
+        self.outcome = "continue"
+
+    async def abort(self) -> None:
+        self.outcome = "abort"
+
+
+class _FakeRequest:
+    def __init__(self, url: str, resource_type: str = "document") -> None:
+        self.url = url
+        self.resource_type = resource_type
+
+
 class _FakeContext:
-    def __init__(self, page: _FakePage) -> None:
+    def __init__(self, page: _FakePage, order: list[str] | None = None) -> None:
         self.pages = [page]
         self.cookies = AsyncMock(return_value=[{"name": "cf_clearance", "value": "abc"}])
+        self.routes: list[tuple[Any, Any]] = []
+        self._order = order if order is not None else []
+
+    async def route(self, pattern: Any, handler: Any) -> None:
+        self._order.append("route")
+        self.routes.append((pattern, handler))
 
 
 class _FakeBrowser:
-    def __init__(self, page: _FakePage) -> None:
-        self.contexts = [_FakeContext(page)]
+    def __init__(self, page: _FakePage, order: list[str] | None = None) -> None:
+        self.contexts = [_FakeContext(page, order)]
 
 
 @pytest.fixture
 def fake_render_backend(monkeypatch: pytest.MonkeyPatch) -> dict[str, Any]:
     """Patch the backend resolver so render_html drives a fake Playwright page."""
-    page = _FakePage()
-    browser = _FakeBrowser(page)
+    order: list[str] = []
+    page = _FakePage(order=order)
+    browser = _FakeBrowser(page, order)
     captured: dict[str, Any] = {}
 
     class _Backend:
@@ -70,7 +104,7 @@ def fake_render_backend(monkeypatch: pytest.MonkeyPatch) -> dict[str, Any]:
             )
 
     monkeypatch.setattr(render_mod, "get_browser_backend", lambda name, cdp_url=None: _Backend())
-    return {"page": page, "captured": captured}
+    return {"page": page, "captured": captured, "browser": browser, "order": order}
 
 
 async def test_render_html_returns_html_status_url(fake_render_backend: dict[str, Any]) -> None:
@@ -279,3 +313,138 @@ class TestResolveContext:
 
         ctx = _FakePersistentContext(_FakePage())
         assert await resolve_context(ctx) is ctx
+
+
+class TestRenderUrlGuard:
+    """The render tier aborts refused requests instead of merely hiding them.
+
+    A pre-flight check cannot see where a 302 sends the browser, and a
+    post-flight check on the final URL only lets us decline to return the body
+    -- by which point the request happened. Routing is the only hook that stops
+    it, and it has to be installed before the first navigation.
+    """
+
+    @pytest.mark.asyncio
+    async def test_route_is_registered_before_the_first_goto(
+        self, fake_render_backend: dict[str, Any]
+    ) -> None:
+        """The whole point: a route installed after goto misses the navigation."""
+        await render_mod.render_html("https://start.example", settle_s=0)
+        order = fake_render_backend["order"]
+        assert "route" in order, "no route was installed; the render is unguarded"
+        assert order.index("route") < order.index("goto"), f"route must precede goto, got {order}"
+
+    @pytest.mark.asyncio
+    async def test_pattern_is_scheme_anchored_not_catch_all(
+        self, fake_render_backend: dict[str, Any]
+    ) -> None:
+        """`**/*` also matches about:blank and strands the browser.
+
+        Learned the hard way in this repo once already: a catch-all pattern
+        aborted the internal navigation and turned an intermittent failure into
+        a deterministic 30s timeout.
+        """
+        await render_mod.render_html("https://start.example", settle_s=0)
+        pattern, _handler = fake_render_backend["browser"].contexts[0].routes[0]
+        assert pattern.search("https://example.com/x")
+        assert pattern.search("http://example.com/x")
+        assert not pattern.search("about:blank"), "internal navigation must not be routed"
+        assert not pattern.search("data:text/html,x")
+
+    @pytest.mark.asyncio
+    async def test_handler_aborts_a_private_target(
+        self, fake_render_backend: dict[str, Any]
+    ) -> None:
+        await render_mod.render_html("https://start.example", settle_s=0)
+        _pattern, handler = fake_render_backend["browser"].contexts[0].routes[0]
+
+        route = _FakeRoute()
+        await handler(route, _FakeRequest("http://169.254.169.254/latest/meta-data/"))
+        assert route.outcome == "abort"
+
+    @pytest.mark.asyncio
+    async def test_handler_allows_a_public_target(
+        self, fake_render_backend: dict[str, Any]
+    ) -> None:
+        await render_mod.render_html("https://start.example", settle_s=0)
+        _pattern, handler = fake_render_backend["browser"].contexts[0].routes[0]
+
+        route = _FakeRoute()
+        await handler(route, _FakeRequest("https://example.com/page"))
+        assert route.outcome == "continue"
+
+    @pytest.mark.asyncio
+    async def test_page_initiated_subresources_are_the_surface_this_closes(
+        self, fake_render_backend: dict[str, Any]
+    ) -> None:
+        """A page can aim the browser at anything it names; that is the SSRF here.
+
+        Confirmed against a real Camoufox: an <img> at the metadata endpoint, an
+        <iframe> at 10.0.0.1 and a fetch() at 127.0.0.53 were all aborted, and
+        the page still rendered.
+        """
+        await render_mod.render_html("https://start.example", settle_s=0)
+        _pattern, handler = fake_render_backend["browser"].contexts[0].routes[0]
+
+        for url, kind in (
+            ("http://169.254.169.254/latest/meta-data/", "image"),
+            ("http://10.0.0.1/admin", "document"),
+            ("http://127.0.0.53/internal", "xhr"),
+        ):
+            route = _FakeRoute()
+            await handler(route, _FakeRequest(url, kind))
+            assert route.outcome == "abort", f"{kind} at {url} was let through"
+
+    def test_navigation_redirect_hops_are_a_known_gap(self) -> None:
+        """Playwright's route does NOT fire for redirect targets.
+
+        Encoded as a test rather than left in prose because it is the kind of
+        limitation that quietly gets forgotten and then over-claimed. Measured:
+        with a local redirector pointing at the metadata endpoint, the handler
+        saw only the seed URL and the browser attempted the metadata connection
+        itself. Navigation redirects stay blind SSRF on this tier, caught by the
+        cascade's post-flight check on the final URL and nothing earlier.
+
+        If a future change makes ``route`` see redirect hops -- a Playwright
+        behaviour change, or a switch to ``route.fetch(max_redirects=0)`` --
+        this test should be replaced by one asserting the hop is aborted, and
+        the docstrings and SETTINGS matrix updated to match.
+        """
+        source = render_mod._install_url_guard.__doc__ or ""
+        assert "does not close" in source.lower(), (
+            "the redirect-hop limitation must stay documented where the code is"
+        )
+
+    @pytest.mark.asyncio
+    async def test_documents_are_not_exempt(self, fake_render_backend: dict[str, Any]) -> None:
+        """An <iframe src> IS a document, so exempting documents waves through
+        exactly the third-party frames worth stopping."""
+        await render_mod.render_html("https://start.example", settle_s=0)
+        _pattern, handler = fake_render_backend["browser"].contexts[0].routes[0]
+
+        for resource_type in ("document", "xhr", "script", "image"):
+            route = _FakeRoute()
+            await handler(route, _FakeRequest("http://10.0.0.1/x", resource_type))
+            assert route.outcome == "abort", f"{resource_type} was let through"
+
+    @pytest.mark.asyncio
+    async def test_no_route_installed_when_the_guard_is_off(
+        self, fake_render_backend: dict[str, Any], monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setenv("SCRAPPER_TOOL_URL_GUARD", "0")
+        await render_mod.render_html("https://start.example", settle_s=0)
+        assert fake_render_backend["browser"].contexts[0].routes == []
+
+    @pytest.mark.asyncio
+    async def test_a_context_without_route_is_reported_not_silently_unguarded(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """A backend that cannot be hooked must say so, not pretend it was."""
+
+        class _NoRouteContext:
+            """Stands in for a backend whose context exposes no route()."""
+
+        with caplog.at_level("WARNING"):
+            installed = await render_mod._install_url_guard(_NoRouteContext(), "https://x.example")
+        assert installed is False
+        assert any("guard_unavailable" in r.getMessage() for r in caplog.records)

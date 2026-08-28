@@ -264,3 +264,142 @@ class TestGuardedTransport:
             resp = await request_with_retry(client, "GET", "https://example.test/old")
         assert resp.status_code == 200
         assert resp.text == "arrived"
+
+
+class TestStrictRedirectHopLoop:
+    """curl_cffi has no per-hop hook, so under strict mode we drive the chain.
+
+    The point is *prevention*: a redirect into private space must not be issued
+    at all. Post-flight refusal only withholds the body, by which time a
+    state-changing GET has already happened.
+    """
+
+    class _FakeCurlSession:
+        """Records every request and replays a scripted redirect chain."""
+
+        def __init__(self, script: dict[str, tuple[int, str | None]]) -> None:
+            self.script = script
+            self.calls: list[tuple[str, str, dict[str, str]]] = []
+
+        async def request(
+            self, method: str, url: str, *, headers: dict[str, str], **kwargs: object
+        ) -> httpx.Response:
+            assert kwargs.get("allow_redirects") is False, (
+                "the loop must turn libcurl's own following off, or hops stay invisible"
+            )
+            self.calls.append((method, url, dict(headers)))
+            status, location = self.script.get(url, (200, None))
+            hdrs = {"Location": location} if location else {}
+            return httpx.Response(status, headers=hdrs, request=httpx.Request(method, url))
+
+    @pytest.fixture(autouse=True)
+    def _strict(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setenv("SCRAPPER_TOOL_URL_GUARD_STRICT_REDIRECTS", "1")
+        monkeypatch.delenv("SCRAPPER_TOOL_URL_GUARD", raising=False)
+        monkeypatch.delenv("SCRAPPER_TOOL_URL_GUARD_ALLOW", raising=False)
+
+    @pytest.mark.asyncio
+    async def test_private_hop_is_never_issued(self) -> None:
+        from scrapper_tool.errors import UrlNotAllowed
+        from scrapper_tool.http import _request_guarding_each_hop
+
+        session = self._FakeCurlSession(
+            {"https://example.test/r": (302, "http://169.254.169.254/latest/meta-data/")}
+        )
+        with pytest.raises(UrlNotAllowed):
+            await _request_guarding_each_hop(session, "GET", "https://example.test/r", headers={})
+        assert [c[1] for c in session.calls] == ["https://example.test/r"], (
+            "the metadata hop was issued -- that is blind SSRF, not prevention"
+        )
+
+    @pytest.mark.asyncio
+    async def test_ordinary_chain_still_completes(self) -> None:
+        from scrapper_tool.http import _request_guarding_each_hop
+
+        session = self._FakeCurlSession(
+            {
+                "https://example.test/a": (301, "https://example.test/b"),
+                "https://example.test/b": (302, "https://example.test/c"),
+            }
+        )
+        resp = await _request_guarding_each_hop(
+            session, "GET", "https://example.test/a", headers={}
+        )
+        assert resp.status_code == 200
+        assert [c[1] for c in session.calls][-1] == "https://example.test/c"
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(("status", "expected"), [(301, "GET"), (302, "GET"), (303, "GET")])
+    async def test_post_downgrades_to_get(self, status: int, expected: str) -> None:
+        from scrapper_tool.http import _request_guarding_each_hop
+
+        session = self._FakeCurlSession(
+            {"https://example.test/a": (status, "https://example.test/b")}
+        )
+        await _request_guarding_each_hop(
+            session, "POST", "https://example.test/a", headers={}, json={"x": 1}
+        )
+        assert session.calls[-1][0] == expected
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("status", [307, 308])
+    async def test_307_and_308_preserve_the_method(self, status: int) -> None:
+        """These two statuses exist precisely to preserve method and body."""
+        from scrapper_tool.http import _request_guarding_each_hop
+
+        session = self._FakeCurlSession(
+            {"https://example.test/a": (status, "https://example.test/b")}
+        )
+        await _request_guarding_each_hop(
+            session, "POST", "https://example.test/a", headers={}, json={"x": 1}
+        )
+        assert session.calls[-1][0] == "POST"
+
+    @pytest.mark.asyncio
+    async def test_authorization_is_stripped_cross_origin(self) -> None:
+        from scrapper_tool.http import _request_guarding_each_hop
+
+        session = self._FakeCurlSession({"https://a.test/x": (302, "https://b.test/y")})
+        await _request_guarding_each_hop(
+            session, "GET", "https://a.test/x", headers={"Authorization": "Bearer secret"}
+        )
+        assert "Authorization" in session.calls[0][2]
+        assert "Authorization" not in session.calls[1][2], (
+            "a bearer token must not follow a redirect to another origin"
+        )
+
+    @pytest.mark.asyncio
+    async def test_authorization_survives_same_origin(self) -> None:
+        from scrapper_tool.http import _request_guarding_each_hop
+
+        session = self._FakeCurlSession({"https://a.test/x": (302, "https://a.test/y")})
+        await _request_guarding_each_hop(
+            session, "GET", "https://a.test/x", headers={"Authorization": "Bearer secret"}
+        )
+        assert session.calls[1][2].get("Authorization") == "Bearer secret"
+
+    @pytest.mark.asyncio
+    async def test_a_redirect_loop_is_capped(self) -> None:
+        from scrapper_tool.errors import VendorHTTPError
+        from scrapper_tool.http import _MAX_REDIRECT_HOPS, _request_guarding_each_hop
+
+        session = self._FakeCurlSession({"https://a.test/x": (302, "https://a.test/x")})
+        with pytest.raises(VendorHTTPError, match="redirects"):
+            await _request_guarding_each_hop(session, "GET", "https://a.test/x", headers={})
+        assert len(session.calls) == _MAX_REDIRECT_HOPS
+
+    @pytest.mark.asyncio
+    async def test_a_3xx_without_a_location_is_returned_not_followed(self) -> None:
+        from scrapper_tool.http import _request_guarding_each_hop
+
+        session = self._FakeCurlSession({"https://a.test/x": (302, None)})
+        resp = await _request_guarding_each_hop(session, "GET", "https://a.test/x", headers={})
+        assert resp.status_code == 302
+        assert len(session.calls) == 1
+
+    def test_the_flag_is_off_by_default(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """It stays off until a canary proves the loop keeps the fingerprint."""
+        from scrapper_tool._urlguard import strict_redirects_enabled
+
+        monkeypatch.delenv("SCRAPPER_TOOL_URL_GUARD_STRICT_REDIRECTS", raising=False)
+        assert strict_redirects_enabled() is False

@@ -261,6 +261,28 @@ def url_guard_enabled() -> bool:
     return raw.strip().lower() in _TRUTHY
 
 
+def strict_redirects_enabled() -> bool:
+    """Whether to follow curl_cffi redirects by hand so each hop can be vetted.
+
+    Off by default, which is the honest position rather than a timid one. The
+    redirect semantics this replaces (method rewriting, cross-origin credential
+    stripping, cookie continuity) are well specified and testable; what is *not*
+    yet proven is that issuing the hops ourselves leaves the TLS and header
+    fingerprint byte-identical to letting libcurl do it. That fingerprint is the
+    reason Pattern A/B/C exists, so it gets a soak and a canary run before this
+    flips on — a security control that quietly degrades the product it protects
+    would be a bad trade made silently.
+
+    Until then the ladder keeps libcurl's own redirect following plus a
+    post-flight check on the final URL, which refuses to *return* a body from
+    private space but cannot stop the request being issued.
+    """
+    raw = os.environ.get("SCRAPPER_TOOL_URL_GUARD_STRICT_REDIRECTS")
+    if raw is None or not raw.strip():
+        return False
+    return raw.strip().lower() in _TRUTHY
+
+
 def _dns_enabled() -> bool:
     raw = os.environ.get("SCRAPPER_TOOL_URL_GUARD_DNS")
     if raw is None or not raw.strip():
@@ -647,5 +669,6 @@ __all__ = [
     "guard_policy",
     "raise_if_refused",
     "resolve_and_check",
+    "strict_redirects_enabled",
     "url_guard_enabled",
 ]

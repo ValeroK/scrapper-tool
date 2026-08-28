@@ -130,9 +130,58 @@ that was a live security hole rather than a missed optimisation.
   number since. The 2.2.0 text is left as written (released entries are not
   edited); this is the correction.
 
+### Added (closing the blind-SSRF window)
+
+- **The render tier aborts page-initiated requests to refused hosts.** A rendered
+  page can aim the browser at anything it names, so without a route an
+  `<img src>`, `<iframe src>` or in-page `fetch()` at an internal address goes
+  straight out — the render tier as an SSRF primitive driven by whoever controls
+  the page. A `context.route` is now registered **before the first navigation**,
+  for the same reason the cookie injection already is: the request that matters
+  is the one `goto()` issues.
+
+  Verified against a real Camoufox, not a mock: a page carrying an `<img>` at
+  `169.254.169.254`, an `<iframe>` at `10.0.0.1` and a `fetch()` at `127.0.0.53`
+  had all three aborted, and the page still rendered.
+
+  The pattern is anchored on `^https?://` rather than `**/*`, because a
+  catch-all also matches the internal `about:blank` navigation and aborting that
+  strands the browser — a mistake this repo already made and measured once. And
+  `resource_type == "document"` is deliberately **not** exempt: an `<iframe src>`
+  *is* a document, so exempting documents waves through exactly the third-party
+  frames worth stopping.
+
+- **`SCRAPPER_TOOL_URL_GUARD_STRICT_REDIRECTS=1`** makes the curl_cffi ladder
+  follow redirects in Python, vetting each hop **before** it is issued, instead
+  of handing the chain to libcurl. Reproduces what libcurl gives free: 301/302/303
+  downgrade a non-GET to GET and drop the body, 307/308 preserve both,
+  `Authorization` is stripped cross-origin, and a hop ceiling replaces libcurl's.
+  Cookies are not reimplemented — every hop reuses the same session, so libcurl's
+  own jar keeps applying its domain scoping.
+
+  **Off by default**, and not out of timidity. The redirect semantics are well
+  specified and covered by tests; what is not yet proven is that issuing the hops
+  ourselves leaves the TLS and header fingerprint byte-identical to libcurl's.
+  That fingerprint is the reason Pattern A/B/C exists, so it gets a canary run
+  against a redirecting target before it becomes the default.
+
 ### Known limits
 
-- **The curl_cffi ladder and the browser tiers are pre-flight and post-flight
+- **Playwright's `route` does not fire for navigation redirect hops** — measured,
+  not assumed. Instrumented against a local redirector pointing at the metadata
+  endpoint, the route handler saw the seed URL and nothing else, and the browser
+  went on to attempt the metadata connection itself. So the render tier closes
+  page-initiated SSRF but **not** redirect-based navigation SSRF; that is still
+  caught only by the post-flight check on the final URL.
+
+  Closing it would mean intercepting with `route.fetch(max_redirects=0)` and
+  fulfilling each hop by hand, replacing a native browser fetch with a
+  synthesised response — not a trade to make blind on the tier whose whole
+  purpose is stealth. The limitation is asserted by a test so it cannot be
+  quietly over-claimed later.
+
+- **With `..._STRICT_REDIRECTS` off, and on Pattern D / E1 / E2 regardless, the
+  ladder and the browser tiers are pre-flight and post-flight
   only.** libcurl follows redirects inside one `request()` call and exposes no
   per-hop hook, and the browser tiers own their own navigation, so a redirect
   into private space on those paths *does issue the request* — we can only
