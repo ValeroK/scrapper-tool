@@ -125,6 +125,12 @@ _TIER_PROBE_EXEMPT = (
     "tests/unit/test_patterns_render.py",
     "tests/unit/test_cookies_tiers.py::TestDTier",
     "tests/unit/test_cookies_threading.py::TestRenderTier",
+    # Asserts that SCRAPPER_TOOL_URL_GUARD_STRICT makes each tier entry point
+    # *refuse*, so it has to call them — and the refusal happens before any
+    # browser launches or socket opens, which is the property under test. The
+    # probe cannot tell "called it and it refused" from "called it and it dialled
+    # out", so it needs telling.
+    "tests/unit/test_urlguard.py::TestStrictModeAtTheTierEntryPoints",
 )
 
 _TIER_PROBE_HITS: list[str] = []
