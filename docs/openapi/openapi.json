@@ -105,7 +105,7 @@
           "scraping"
         ],
         "summary": "Pattern A/B/C \u2014 TLS-impersonation ladder fetch",
-        "description": "Walks the impersonation ladder (chrome146 / chrome142 / safari260 / firefox147 / chrome133a) until a profile returns non-403/503. With extract_structured=true (default), also runs Pattern B (extruct JSON-LD / microdata) and Pattern C (microdata price).",
+        "description": "Walks the impersonation ladder (chrome150 / chrome146 / safari2601 / firefox147 / chrome133a) until a profile returns non-403/503. With extract_structured=true (default), also runs Pattern B (extruct JSON-LD / microdata) and Pattern C (microdata price).",
         "operationId": "fetch",
         "requestBody": {
           "content": {
