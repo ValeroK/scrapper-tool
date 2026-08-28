@@ -219,6 +219,14 @@ async def _abort(route: Any) -> None:
 
 
 async def test_detection_js_against_real_markup() -> None:
+    # Lives in tests/integration/, not tests/unit/, because it launches a real
+    # browser. tests/unit is "fast, hermetic, no network" per tests/conftest.py,
+    # and while this test does block the network it still depends on a ~490 MB
+    # third-party Firefox build resolved outside uv.lock — which is exactly how
+    # a commit that was green on 2026-08-15 went red on 2026-08-28 with no code
+    # change. CI pins that build (see CAMOUFOX_BUILD in .github/workflows/ci.yml);
+    # this skips cleanly for anyone without the extra installed.
+    pytest.importorskip("camoufox", reason="needs the [llm-agent] extra")
     from camoufox.async_api import AsyncCamoufox
 
     failures: list[str] = []

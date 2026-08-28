@@ -6,6 +6,32 @@ All notable changes to `scrapper-tool` are recorded here. Format follows [Keep a
 
 ### Changed
 
+- **CI pins the Camoufox browser build.** `uv.lock` pins `camoufox==0.5.4` — the
+  1.3 MB Python package — while the ~490 MB patched Firefox it drives was
+  fetched at launch and resolved to whatever was newest. Build
+  `152.0.4-beta.29` landed 2026-08-20 and turned a commit that had been green
+  on 2026-08-15 red with no code change, which is the defining symptom of an
+  undeclared input. It is now pinned via `CAMOUFOX_BUILD` and cached, so moving
+  it is a reviewable edit. Production is unchanged: the Dockerfile still bakes
+  the current build at image-build time, where a fresh fingerprint is worth
+  more than a reproducible one.
+
+  **Known and deliberately not papered over:** under `beta.29`, `window.gokuProps`
+  is not visible to the AWS WAF detection JS by the time it runs, so the
+  `gokuProps` triple comes back empty. The pin is set to `beta.28` — the build
+  `docs/research/2026-camoufox-obscura-capabilities.md` records as validated —
+  which restores a known-good baseline but does **not** explain the difference.
+  Before bumping, establish whether that is a `set_content` timing artefact in
+  the test or a real detection regression that would also affect production
+  scraping of AWS WAF sites.
+
+- **`test_detection_js_against_real_markup` moved to `tests/integration/`.** It
+  launches a real browser, which `tests/unit/` ("fast, hermetic, no network")
+  does not promise. The tier probe never caught it because it constructs
+  `AsyncCamoufox` directly rather than going through a cascade tier. It now
+  skips cleanly without the `[llm-agent]` extra instead of failing on the
+  import.
+
 - **`tests/unit/` now defends its own hermeticity instead of documenting it.**
   Two additions to `tests/conftest.py`:
 
