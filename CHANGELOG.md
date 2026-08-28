@@ -2,12 +2,28 @@
 
 All notable changes to `scrapper-tool` are recorded here. Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning follows [SemVer](https://semver.org/).
 
-## [Unreleased]
+## [3.0.0] - 2026-08-27
 
-First increment of the concept-adoption series planned in
+The concept-adoption series planned in
 `docs/research/2026-08-26-donsetch-concepts.md`, which audited a competing tool
-against this one and ranked what was worth rebuilding. This one closes the item
-that was a live security hole rather than a missed optimisation.
+against this one and ranked what was worth rebuilding. It began with the item
+that was a live security hole rather than a missed optimisation, and grew to
+take in the dependency tree, the impersonation ladder and the docs.
+
+**A major bump because the wire behaviour and the defaults both changed.** The
+work was developed as 2.2.x increments and that was the wrong framing: SemVer
+says a changed default is not a patch, and five of these are.
+
+| Change | What breaks |
+|---|---|
+| The target URL guard is **on by default** | Targets that previously fetched are now refused — private, loopback, link-local, cloud metadata, `file://`, and hostnames that *resolve* into private space. Allowlist with `SCRAPPER_TOOL_URL_GUARD_ALLOW`; do not disable the guard. |
+| `captcha_vision_model` defaults to a model, not `None` | The grid tier no longer inherits the extraction model. Set the env var to empty to restore the old behaviour. |
+| The ladder leads with `chrome150`, not `chrome146` | A different TLS fingerprint on every A/B/C request. Recipes and per-domain tier memory are unaffected; anything asserting on `winning_profile` is not. |
+| The impersonated `User-Agent` is no longer overridden | Different bytes on the wire. Every impersonating request previously advertised `scrapper-tool/0.1` beside a Chrome handshake — see the ladder section for why that was a defect, not a feature. |
+| `mcp` is capped `<2` | 2.x renamed `FastMCP` to `MCPServer`; consumers who resolved 2.x now get 1.x. The migration is planned as 3.1. |
+
+Upgrading with none of those relevant to you should be a no-op: no public
+signature was removed, and every new parameter is optional.
 
 ### Added (target URL guard)
 

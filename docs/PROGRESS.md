@@ -5,17 +5,17 @@ Living status for the concept-adoption series planned in
 Unlike the dated `research/` snapshots, this file is **edited in place** — it
 describes the current state, not a moment in the past.
 
-Last updated: 2026-08-27. Branch: `feat/url-guard` (unpushed).
+Last updated: 2026-08-27. Released as **v3.0.0**; next increment is 3.1 (MCP 2.x SDK).
 
 ---
 
-## Shipped
+## Shipped — v3.0.0
 
 | Increment | What landed |
 |---|---|
-| **2.2.1** | Target URL guard — four enforcement layers, `UrlNotAllowed`, doctor row, REST 403 / MCP envelope |
-| **2.2.2** | Captcha grid tier gets its own vision model (`qwen3.8-27b-apex`) + a doctor probe for it |
-| **2.2.3** | Render tier aborts page-initiated SSRF; opt-in per-hop redirect vetting for curl_cffi |
+| guard | Target URL guard — four enforcement layers, `UrlNotAllowed`, doctor row, REST 403 / MCP envelope |
+| captcha | Captcha grid tier gets its own vision model (`qwen3.8-27b-apex`) + a doctor probe for it |
+| SSRF | Render tier aborts page-initiated SSRF; opt-in per-hop redirect vetting for curl_cffi |
 | — | Dependency tree upgraded; `mcp` capped `<2` |
 | — | Ladder refreshed to `chrome150 → chrome146 → safari2601 → firefox147 → chrome133a`, and the impersonated User-Agent is no longer overwritten |
 | — | `SCRAPPER_TOOL_URL_GUARD_STRICT` — opt-in refusal of tiers whose requests cannot be vetted |
@@ -24,7 +24,7 @@ Also merged from `main` (separate session): the unit-suite hermeticity fixes,
 a hard-E1-failure handoff to E2, and a raise when Crawl4AI reports a page that
 never loaded.
 
-**Verification state:** 1387 passing, coverage 87.88%, ruff / `ruff format` /
+**Verification state:** 1388 passing, coverage 87.88%, ruff / `ruff format` /
 mypy `--strict` clean, zero `docs/openapi/` drift, `pip-audit` clean.
 
 ---
@@ -155,7 +155,8 @@ silently defeated the `<2` cap once already.
 
 ## Housekeeping
 
-- 10 commits on `feat/url-guard`, **nothing pushed**.
+- Released as v3.0.0. Developed as 2.2.x increments; SemVer made that the wrong
+  framing since five defaults changed, so they shipped together as a major bump.
 - `backup/url-guard-pre-rebase` still exists; safe to delete now the rebase is
   validated.
 - `C:\Users\kobiv\.env` was UTF-16 and crashed `python-dotenv` at import, which

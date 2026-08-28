@@ -25,9 +25,11 @@ Built from the scraping core behind [PartsPilot](https://github.com/ValeroK/affi
 
 ---
 
-> **Status (2026-08-15):** stable (`v2.2.0`). The public Python API and MCP tool surface are SemVer-stable.
+> **Status (2026-08-27):** stable (`v3.0.0`). The public Python API and MCP tool surface are SemVer-stable.
 >
-> **`v2.2.0`** is the first release validated against real, hostile sites rather than fixtures — 2.1.0 was built in a container with no egress, so none of its anti-bot code had ever met a live host. That run found and fixed bugs in both directions of the wall/content classifier, and added a five-tier captcha cascade (three of them free) plus clearance-cookie reuse. Every number in the docs is measured, including the ones that did not work. See [`docs/TESTING.md`](docs/TESTING.md) and the [changelog](CHANGELOG.md).
+> **`v3.0.0`** adds a target URL guard that vets every URL before a request is issued — private, loopback and cloud-metadata targets are refused, and that is **on by default**, which is the breaking part. It also gives the captcha grid tier its own vision model, blocks page-initiated SSRF in the render tier, promotes the impersonation ladder to `chrome150`, and stops overriding the impersonated `User-Agent` (which had been advertising `scrapper-tool/0.1` beside a Chrome TLS handshake — a self-identifying mismatch).
+>
+> Read the [breaking-change table](CHANGELOG.md) before upgrading. Every number in the docs is measured, including the ones that did not work; see [`docs/TESTING.md`](docs/TESTING.md).
 
 ## What it does
 

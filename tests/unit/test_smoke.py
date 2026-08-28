@@ -16,6 +16,27 @@ def test_version_is_set() -> None:
     assert scrapper_tool.__version__
 
 
+def test_version_matches_pyproject() -> None:
+    """The version is declared twice and nothing kept the two in step.
+
+    ``pyproject.toml`` feeds the sdist/wheel and PyPI; ``__version__`` feeds
+    ``/version``, ``/ready``, the OpenAPI spec's ``info.version`` and doctor's
+    banner. A bump that touches one and not the other publishes a package whose
+    own API reports a different number, and every existing assertion compares
+    a surface to ``__version__`` rather than to the packaging metadata, so all
+    of them would still pass.
+    """
+    import tomllib
+    from pathlib import Path
+
+    pyproject = Path(__file__).resolve().parents[2] / "pyproject.toml"
+    declared = tomllib.loads(pyproject.read_text(encoding="utf-8"))["project"]["version"]
+    assert declared == scrapper_tool.__version__, (
+        f"pyproject.toml says {declared!r} but __version__ is "
+        f"{scrapper_tool.__version__!r} — bump both"
+    )
+
+
 def test_patterns_subpackage_importable() -> None:
     """The ``patterns`` subpackage imports without error.
 
