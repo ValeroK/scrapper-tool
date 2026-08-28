@@ -1444,9 +1444,10 @@ class TestBuildServerImportErrors:
 
 class TestModuleSurface:
     def test_module_docstring_present(self) -> None:
-        # Even with the importorskip in place at module top, when the
-        # [agent] extra IS installed (this matrix entry), the docstring
-        # should be readable and explain the MCP server.
+        # The module must stay importable and self-describing whether or
+        # not the SDK is present: tests/conftest.py imports it from an
+        # autouse fixture, so a top-level SDK import here would take the
+        # entire unit suite down, not just the MCP tests.
         assert mcp_module.__doc__ is not None
         assert "MCP server" in mcp_module.__doc__
 

@@ -5,7 +5,8 @@ Living status for the concept-adoption series planned in
 Unlike the dated `research/` snapshots, this file is **edited in place** — it
 describes the current state, not a moment in the past.
 
-Last updated: 2026-08-27. Released as **v3.0.0**; next increment is 3.1 (MCP 2.x SDK).
+Last updated: 2026-08-29. Released as **v3.0.0**. The 3.1 MCP 2.x SDK migration
+is **landed on `main` and unreleased** — not yet tagged.
 
 ---
 
@@ -26,6 +27,74 @@ never loaded.
 
 **Verification state:** 1388 passing, coverage 87.88%, ruff / `ruff format` /
 mypy `--strict` clean, zero `docs/openapi/` drift, `pip-audit` clean.
+
+---
+
+## Landed on `main`, not yet released — 3.1 (MCP 2.x SDK)
+
+Plan: [`research/2026-08-28-mcp-2x-migration-plan.md`](research/2026-08-28-mcp-2x-migration-plan.md).
+All twelve work items done.
+
+| Item | What landed |
+|---|---|
+| 1-3 | `_build_server` builds `MCPServer` from `mcp.server.mcpserver`; `host`/`port` moved to `run()` for the HTTP transports only; the import error now distinguishes "extra missing" from "SDK API moved" instead of reporting both as the former |
+| 4-5 | Test guards ask `importorskip("mcp")` — the package — so a moved API fails loudly; the `test_crawl_endpoints.py` guard is now class-scoped and no longer takes 13 unrelated REST tests with it |
+| 6 | `TestMainTransportPlumbing` drives the real `_build_server` and mocks only the blocking `run()`; new tests pin the real import-error messages and the SDK contract `main()` depends on |
+| 7 | Both docker-compose MCP services declare `entrypoint: ["scrapper-tool-mcp"]`; stdio disables the inherited REST healthcheck |
+| 8 | e2e clients updated for `streamable_http_client` (renamed, and now a 2-tuple); `scripts/` added to the lint scope so they cannot rot silently again |
+| 9 | `mcp>=2.1.1,<3` in **both** the `[agent]` extra and `[tool.uv] override-dependencies` |
+| 10 | `docs/mcp-tools.json` + generator + drift test + `mcp-tool-surface-check` CI job, mirroring `openapi-spec-check` |
+| 11 | Tool tables, the `instructions=` string, `docs/docker.md`, `docs/E2E_TEST_PLAN.md` and `CONTRIBUTING.md` corrected to nine tools and to the real entrypoint |
+| 12 | Coverage claim reproduced and corrected — see below |
+
+**Verification state:** 1398 passing, **1 skipped** (`rookiepy`, the `[cookies]`
+extra, unrelated), coverage 87.91%, ruff / `ruff format` / mypy `--strict` clean,
+zero `docs/openapi/` or `docs/mcp-tools.json` drift, `pip-audit` clean.
+
+The decisive check is that the MCP tests **run**: `test_mcp.py`,
+`test_agent_mcp.py` and `test_crawl_endpoints.py` collect 90 and skip **zero**.
+A green run *with* skips is the failure this work existed to prevent.
+
+Two breaks found by checking rather than assuming, neither in the plan:
+
+- **`browser-use` imports `pydantic_settings` without declaring it.** It had
+  been riding on mcp 1.x's dependency on that package; 2.x drops it, so
+  `import browser_use` started failing. This surfaced *only* as three tests
+  going from passed to skipped — the same disguise as the SDK break itself.
+  Now declared explicitly in `[llm-agent]`.
+- **The client SDK moved too.** `streamablehttp_client` is now
+  `streamable_http_client` and yields a 2-tuple rather than 3. Only
+  `scripts/e2e/` speaks the wire protocol, and it is neither collected by
+  pytest nor (until now) linted.
+
+**Wire protocol verified by hand on 2026-08-29**, since nothing in CI covers the
+JSON-RPC handshake:
+
+| Check | Result |
+|---|---|
+| `scripts/e2e/test_mcp_session.py` (stdio) | all steps pass, 9 tools, incl. E1 + E2 against the local LLM |
+| `scrapper-tool-mcp --transport streamable-http` + `test_mcp_session_http.py` | all steps pass, 9 tools |
+| `docker compose run --rm -T scrapper-tool` | speaks MCP for the first time; `tools/list` returns 9 |
+| `docker compose --profile http up -d scrapper-tool-mcp-http` | reports **healthy**, was unhealthy by construction before |
+| `test_mcp_session_http.py` against the container on `:8000` | all steps pass, 9 tools |
+
+Two things worth knowing before re-running those:
+
+- `agent_browse` (E2) needs a CDP-capable backend. The default is Camoufox,
+  which is Firefox and has no CDP, so E2 raises a deliberate `ConfigurationError`
+  rather than silently downgrading stealth. Set
+  `SCRAPPER_TOOL_AGENT_BROWSER=patchright` **on the server process**, not the
+  client script.
+- `docker-compose.yml` substitutes `SCRAPPER_TOOL_AGENT_OLLAMA_URL` from the
+  host shell. A host-local `127.0.0.1:PORT` becomes the *container* inside the
+  container; use `host.docker.internal`.
+
+Also fixed while there: `scripts/e2e/test_mcp_session.py` asserted
+`winning_profile == "chrome146"`. 3.0.0 moved the head of the ladder to
+`chrome150` and nothing reported it, because that file is neither collected nor
+(until now) linted. It now asserts against `IMPERSONATE_LADDER[0]`.
+
+Still unreleased — **not tagged**. Tagging publishes to PyPI and GHCR.
 
 ---
 
@@ -118,7 +187,8 @@ learned clearance TTL), a per-host pacing governor, page fingerprints and delta
 crawls, a whole-cascade deadline with MCP timing, and property tests on the
 parsers.
 
-In flight: migrating the MCP server to the 2.x SDK (`FastMCP` → `MCPServer`).
+The MCP 2.x SDK migration is no longer in flight — it is landed and awaiting
+a release tag; see the 3.1 section above.
 
 ---
 
@@ -138,23 +208,48 @@ doing live DNS and network, and the suite's result depended on which extras
 happened to be installed. The 7 tests that exercise D turn it back on; 40
 D-related tests still pass.
 
-### The MCP tests "skipped" during the dependency upgrade
+### The MCP tests "skipped" during the dependency upgrade — resolved in 3.1
 
-Under `mcp` 2.x all 68 skip rather than fail, because they guard on
+Fixed. Recorded here because the *shape* of the failure is worth keeping.
+
+Under `mcp` 2.x the MCP tests skipped rather than failed, because they guarded on
 `pytest.importorskip("mcp.server.fastmcp")` and 2.x renamed that module. The skip
-reason then blames a missing `[agent]` extra that is in fact installed. This is
-why `mcp` is capped `<2` until the migration lands — and why the migration has to
-change those guards too, or it cannot be verified.
+reason then blamed a missing `[agent]` extra that was installed the whole time.
+The guards now ask for the `mcp` package and let the server-class import fail
+loudly. Measured at `8441e11` with 2.x installed: three modules, `3 skipped`, no
+failures.
 
-**The migration is planned in full**, with every file:line anchor verified
-against the 3.0.0 release commit:
-[`research/2026-08-28-mcp-2x-migration-plan.md`](research/2026-08-28-mcp-2x-migration-plan.md).
-Twelve work items, shipping as 3.1. Start there rather than re-deriving it.
+**Two counts in the earlier version of this note were wrong**, which is its own
+small lesson about numbers written from memory. It said "all 68 skip"; the plan
+then corrected that to 80. Both were guesses. `importorskip` skips at *module*
+scope, so the number was never a count of MCP tests — it included 13 REST
+`/map` and `/crawl` tests that share a module with the MCP parity class and have
+nothing to do with the SDK. Post-migration the three modules collect **90** and
+skip **zero**.
+
+**The coverage claim was also wrong, in the reassuring direction.** This file
+recorded that the suite went green under 2.x despite the skips, which should not
+have been possible with `--cov-fail-under=85` enforced and no `omit`. Reproduced
+on 2026-08-29 by reverting `src/` and `tests/` to 3.0.0 while keeping mcp 2.x
+installed:
+
+```
+src\scrapper_tool\mcp.py    517   468   146     0     7%
+TOTAL                       6857  1108  2070   259    82%
+FAIL Required test coverage of 85% not reached. Total coverage: 81.89%
+```
+
+So the floor **does** catch it, exactly as designed — `mcp.py` collapses to 7%
+and the total falls 3 points below the gate. The floor was never the problem;
+the "green" run simply never included `--cov`. Nothing to fix here, but the
+correction matters: the previous wording implied the coverage gate could not be
+trusted to catch a large block of skipped tests, and it can.
 
 Note also that `[tool.uv] override-dependencies` **replaces** a package's
 requirements rather than intersecting with them, so a bound that matters must be
 written in both the extra and the override. A bare `mcp>=1.28.1` in the override
-silently defeated the `<2` cap once already.
+silently defeated the `<2` cap once already. `CONTRIBUTING.md` now says so at
+both places that would need it.
 
 ---
 

@@ -31,6 +31,8 @@ from typing import Any
 from mcp import ClientSession, StdioServerParameters
 from mcp.client.stdio import stdio_client
 
+from scrapper_tool.ladder import IMPERSONATE_LADDER
+
 # All settings come from env. The Docker image has scrapper-tool-mcp on
 # PATH so we just spawn it. (The image's ENTRYPOINT is the REST sidecar,
 # not this — compose selects the MCP server explicitly; see the
@@ -104,7 +106,12 @@ async def main() -> None:  # noqa: PLR0915 - sequential narrative, intentional
             r = await session.call_tool("canary", {"url": "https://example.com"})
             data = _payload(r)
             assert isinstance(data, dict), data
-            assert data.get("winning_profile") == "chrome146", data
+            # Assert against the live ladder, not a copy of it. This line
+            # said "chrome146" until 3.1; 3.0.0 had moved the head of the
+            # ladder to chrome150 months earlier and nothing reported it,
+            # because scripts/e2e is neither collected by pytest nor
+            # linted — the same blind spot that hid the SDK break.
+            assert data.get("winning_profile") == IMPERSONATE_LADDER[0], data
             assert data.get("exit_code") == 0, data
             print(f"[5.A] [OK] winning_profile={data['winning_profile']}")
             print()
