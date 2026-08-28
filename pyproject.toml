@@ -43,7 +43,18 @@ hostile = ["scrapling[fetchers]>=0.3"]
 # exposing fetch_with_ladder / extract_product / extract_microdata_price /
 # canary tools for LLM agents (Claude Desktop, Claude Code, OpenClaw,
 # Hermes Agent, AutoGen, LangChain via mcp-use).
-agent = ["mcp>=1.2"]
+# Capped below 2.0: mcp 2.x renamed ``FastMCP`` to ``MCPServer`` and moved it to
+# ``mcp.server.mcpserver``, so ``_build_server``'s import fails outright. The SDK
+# says so itself — importing ``mcp.server.fastmcp`` under 2.x raises a
+# ModuleNotFoundError whose message recommends pinning ``mcp<2`` to keep v1 code
+# running. Migrating is real work (the rename is not the only API change) and does
+# not belong in a routine dependency bump.
+#
+# Watch out when lifting this cap: every MCP test guards on
+# ``pytest.importorskip("mcp.server.fastmcp")``, so under 2.x they SKIP rather
+# than fail, and the suite goes green against a server that cannot start. That is
+# how this nearly shipped unnoticed.
+agent = ["mcp>=1.2,<2"]
 # M14 (v1.0.0): Pattern E — LLM-driven scraping for any protected site.
 # Bundles the default stack: Camoufox (0% headless detection), Patchright
 # (fast-mode alternative), Browserforge per-session fingerprints,
@@ -223,7 +234,12 @@ override-dependencies = [
     # click>=8.3.0 and mcp>=1.27.0), and mcp is our own direct dep, so bumping
     # it forward is squarely intended.
     "click>=8.3.3",
-    "mcp>=1.28.1",
+    # NB the upper bound is repeated here on purpose. ``override-dependencies``
+    # *replaces* a package's requirements outright rather than intersecting with
+    # them, so a bare ``mcp>=1.28.1`` here silently defeated the ``<2`` cap on the
+    # ``[agent]`` extra and resolved mcp 2.x — which cannot import FastMCP. Any
+    # bound that matters has to appear in both places.
+    "mcp>=1.28.1,<2",
     # ...and aiohttp: browser-use pins ``aiohttp==3.13.4`` (PYSEC-2026-2105..2108);
     # 3.14.1 fixes all four and stays under the <4.0 cap every other consumer sets.
     "aiohttp>=3.14.1",
@@ -274,6 +290,11 @@ select = [
 ignore = [
     "S101",  # asserts in tests are fine
     "PLR0913",  # too-many-arguments — config functions need them
+    # Positional sibling of PLR0913, added to the PL set by ruff 0.16. Every hit
+    # is an MCP tool signature, where the parameter list *is* the published
+    # schema an LLM calls — FastMCP invokes them by keyword, and shortening them
+    # would mean shrinking the tool surface. Same reason PLR0913 is ignored.
+    "PLR0917",  # too-many-positional-arguments
 ]
 
 [tool.ruff.lint.per-file-ignores]
