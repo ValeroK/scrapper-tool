@@ -2,7 +2,7 @@
 
 All notable changes to `scrapper-tool` are recorded here. Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning follows [SemVer](https://semver.org/).
 
-## [Unreleased]
+## [3.2.0] - 2026-08-29
 
 Driven by a heavy consumer's field report after a ~180k-row harvest across five
 vendors. The theme of that report was that **the ladder already knows more than

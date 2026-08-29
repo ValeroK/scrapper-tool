@@ -6,7 +6,7 @@ info:
     \ E1 \u2192 E2 auto-escalation ladder server-side so callers don't need per-pattern\
     \ logic. Pattern D (Scrapling) is invoked when the [hostile] extra is installed;\
     \ skipped otherwise (cascade falls through to E1)."
-  version: 3.1.1
+  version: 3.2.0
 paths:
   /health:
     get:
