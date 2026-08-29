@@ -55,6 +55,20 @@ Lifts the `mcp<2` cap deferred from 3.0.0. Planned in
   server grew `map_site` and `crawl_site` while the docs, the `instructions=`
   string the LLM reads, and both e2e scripts stayed at seven tools or fewer.
 - `scripts/` is now covered by `ruff check` and `ruff format --check`.
+- **The tool-surface guard also checks the hand-written copies of the list**:
+  the four docs that enumerate the surface, and both e2e scripts'
+  `EXPECTED_TOOLS` sets. Snapshot-matches-code alone was not enough —
+  measured by adding a tenth tool and regenerating the snapshot, which is what
+  CI tells you to do: every test then passed with four stale lists in the tree.
+
+### Fixed (CI)
+
+- **Coverage is uploaded to Codecov again.** Two independent faults: the step
+  was gated on `matrix.extras == 'dev,agent,http'`, a value the matrix stopped
+  producing when it was trimmed, so the condition was never true; and the
+  coverage run emitted only `term-missing`, so even when it did run there was
+  no report file to upload. Now gated on the Python version alone and emitting
+  `coverage.xml`.
 
 ---
 

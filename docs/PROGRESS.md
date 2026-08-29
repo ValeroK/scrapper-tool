@@ -47,6 +47,23 @@ All twelve work items done.
 | 11 | Tool tables, the `instructions=` string, `docs/docker.md`, `docs/E2E_TEST_PLAN.md` and `CONTRIBUTING.md` corrected to nine tools and to the real entrypoint |
 | 12 | Coverage claim reproduced and corrected — see below |
 
+Two follow-ups landed after the plan, both found by testing the new guard
+rather than trusting it:
+
+- **The drift guard only proved the snapshot matched the code**, which is not
+  the same as the surface being documented. Adding a tenth tool and
+  regenerating the snapshot left the four docs that enumerate the surface and
+  both e2e `EXPECTED_TOOLS` sets stale, with every test green. The guard now
+  checks those six copies by name; re-ran the same simulation afterwards and
+  all six fail, each naming its own file.
+- **The Codecov upload was dead twice over** (it was on the plan's
+  out-of-scope list as a single fault). The step was gated on
+  `matrix.extras == 'dev,agent,http'`, which the matrix stopped producing, and
+  the coverage run emitted only `term-missing`, so there was no file to upload
+  even if the gate had fired. Fixed both; a gate that names a matrix value
+  breaks the next time that value is edited, so it now keys on the Python
+  version alone.
+
 **Verification state:** 1398 passing, **1 skipped** (`rookiepy`, the `[cookies]`
 extra, unrelated), coverage 87.91%, ruff / `ruff format` / mypy `--strict` clean,
 zero `docs/openapi/` or `docs/mcp-tools.json` drift, `pip-audit` clean.

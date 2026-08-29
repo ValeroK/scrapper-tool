@@ -128,11 +128,24 @@ jobs:
             *) echo "::error::pin did not take: wanted $CAMOUFOX_BUILD, active is $active"; exit 1 ;;
           esac
       - name: Run tests with coverage
-        run: uv run pytest --cov --cov-report=term-missing --cov-fail-under=85
+        # xml alongside term-missing: the Codecov step below uploads a report
+        # file, and term-missing writes only to the log. Without this there is
+        # nothing on disk for it to find, so the upload silently no-ops even
+        # when it runs.
+        run: uv run pytest --cov --cov-report=term-missing --cov-report=xml --cov-fail-under=85
       - name: Upload coverage to Codecov (informational)
-        if: matrix.python-version == '3.13' && matrix.extras == 'dev,agent,http'
+        # Keyed on the Python version alone, deliberately. This used to also
+        # require `matrix.extras == 'dev,agent,http'`, a value the matrix
+        # stopped producing when it was trimmed to `dev,full,agent,http` -- so
+        # the condition was never true and coverage was never uploaded, quietly,
+        # for as long as it took someone to read the file. A gate that names a
+        # matrix value breaks the next time that value is edited; there is one
+        # extras row now, and if a second is ever added this should pick the
+        # row explicitly rather than resurrect the same trap.
+        if: matrix.python-version == '3.13'
         uses: codecov/codecov-action@v6
         with:
+          files: ./coverage.xml
           fail_ci_if_error: false
 
   hermeticity:
