@@ -356,7 +356,7 @@ def _history_to_agent_result(
 
     final_result = _final_result(history)
     final_url = _final_url(history) or url
-    blocked = bool(getattr(history, "blocked", False)) or _detect_block(history_items)
+    blocked = _detect_block(history)
 
     data, error = _coerce_final(final_result, schema=schema)
     if not data and not error:
@@ -371,7 +371,7 @@ def _history_to_agent_result(
         rendered_markdown=None,
         screenshots=screenshots,
         actions=actions,
-        tokens_used=int(getattr(history, "total_input_tokens", 0) or 0),
+        tokens_used=_tokens_used(history),
         blocked=blocked,
         error=error,
         duration_s=duration_s,
@@ -442,16 +442,88 @@ def _final_url(history: Any) -> str | None:
     return None
 
 
-def _detect_block(items: list[Any]) -> bool:
-    for item in items:
-        for attr in ("error", "result_text", "extracted_content"):
-            v = getattr(item, attr, None)
-            if isinstance(v, str) and any(
-                needle in v.lower()
-                for needle in ("blocked", "captcha", "cloudflare", "access denied")
-            ):
-                return True
-    return False
+def _step_errors(history: Any) -> list[str]:
+    """Every step error browser-use recorded, as strings.
+
+    ``AgentHistoryList.errors()`` is the authoritative source and returns one
+    entry per step (``None`` where the step was fine). The manual walk below is
+    the fallback for history shapes that predate it, and reads ``.error`` only —
+    never a result's content.
+    """
+    fn = getattr(history, "errors", None)
+    if callable(fn):
+        try:
+            return [str(e) for e in fn() if e]
+        except Exception as exc:
+            _logger.debug("agent.browse.errors_unreadable", error=str(exc)[:160])
+    out: list[str] = []
+    for item in list(getattr(history, "history", []) or []):
+        for result in list(getattr(item, "result", []) or []):
+            err = getattr(result, "error", None)
+            if err:
+                out.append(str(err))
+        err = getattr(item, "error", None)
+        if err:
+            out.append(str(err))
+    return out
+
+
+def _detect_block(history: Any) -> bool:
+    """Whether E2 was walled — judged on step ERRORS, never on page content.
+
+    This used to substring-scan ``extracted_content`` and ``result_text`` for
+    "blocked" / "captcha" / "cloudflare" / "access denied" — that is, the text the
+    agent had just *successfully extracted*. Any page carrying a standard
+    reCAPTCHA footer notice ("This site is protected by reCAPTCHA...") matched on
+    ``captcha``, and any Cloudflare-fronted site with a "Performance & security
+    by Cloudflare" footer matched on ``cloudflare``. Both are ordinary furniture
+    on perfectly good pages.
+
+    The consequence was silent data corruption in the worst direction: a
+    successful extraction carrying correct data was returned with
+    ``blocked=True``. A consumer that honours the flag threw good data away, and
+    one that ignores it would parse a real challenge page. It cost a downstream
+    integration a two-day investigation into an anti-bot wall that did not exist.
+
+    Compounding it, the other half of the old expression —
+    ``getattr(history, "blocked", False)`` — read an attribute browser-use has
+    never had, so it was permanently ``False`` and the content scan was the
+    *only* signal. ``errors()`` was there the whole time and was never consulted.
+
+    A navigation error is the right place to look precisely because it frequently
+    carries the wall's own hostname (``validate.perfdrive.com``,
+    ``geo.captcha-delivery.com``), which is what
+    :func:`~scrapper_tool._challenge.looks_like_block_message` matches on — the
+    same detector E1 already uses.
+    """
+    return any(looks_like_block_message(msg) for msg in _step_errors(history))
+
+
+def _tokens_used(history: Any) -> int:
+    """Total tokens the agent spent, or 0 when the run genuinely reported none.
+
+    Read from ``history.usage.total_tokens``. The previous
+    ``getattr(history, "total_input_tokens", 0)`` named an attribute that does
+    not exist on browser-use 0.13's ``AgentHistoryList``, so the default fired
+    every time and **every E2 run reported 0 tokens regardless of model**. That
+    was read downstream as evidence that local inference is unmetered, when the
+    field was simply never populated — which matters the moment E2 is
+    cost-budgeted.
+    """
+    usage = getattr(history, "usage", None)
+    total = getattr(usage, "total_tokens", None)
+    if isinstance(total, int):
+        return total
+    for attr in ("total_tokens", "total_input_tokens"):
+        value = getattr(history, attr, None)
+        if callable(value):
+            try:
+                value = value()
+            except Exception:
+                value = None
+        if isinstance(value, int):
+            return value
+    return 0
 
 
 def _coerce_final(

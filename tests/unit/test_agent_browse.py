@@ -51,17 +51,36 @@ class _FakeHistoryItem:
         self.selector = fields.get("selector")
         self.screenshot = fields.get("screenshot")
         self.extracted_content = fields.get("extracted_content")
+        self.error = fields.get("error")
+
+
+class _FakeUsage:
+    """browser-use reports token spend on ``history.usage``, not on the list."""
+
+    def __init__(self, total_tokens: int) -> None:
+        self.total_tokens = total_tokens
 
 
 class _FakeAgentHistoryList:
+    """Shaped after the real ``AgentHistoryList``.
+
+    ``errors()`` and ``usage`` are here because the adapter reads exactly those.
+    An earlier version of this fake carried ``total_input_tokens``, an attribute
+    browser-use has never had — which is precisely how the adapter came to read
+    it and report 0 tokens on every real run while the tests stayed green.
+    """
+
     def __init__(self, payload: dict[str, Any]) -> None:
         self.history = [_FakeHistoryItem(**h) for h in payload["history"]]
         self.url = payload.get("final_url")
         self._final = payload.get("final_result")
-        self.total_input_tokens = payload.get("total_input_tokens", 0)
+        self.usage = _FakeUsage(payload.get("total_tokens", 0))
 
     def final_result(self) -> Any:
         return self._final
+
+    def errors(self) -> list[str | None]:
+        return [item.error for item in self.history]
 
 
 @pytest.fixture
@@ -399,7 +418,8 @@ class TestHistoryConversion:
         assert result.error == "no-match"
         assert result.data is None
 
-    def test_blocked_detected_in_history_text(self) -> None:
+    def test_a_block_is_detected_from_a_step_error(self) -> None:
+        """A navigation error carries the wall, often by its own hostname."""
         from scrapper_tool.agent.browse import _history_to_agent_result
 
         history = _FakeAgentHistoryList(
@@ -407,9 +427,9 @@ class TestHistoryConversion:
                 "history": [
                     {
                         "step": 1,
-                        "model_action": "extract",
+                        "model_action": "goto",
                         "url": "https://e.com",
-                        "extracted_content": "Cloudflare blocked the request",
+                        "error": "navigation failed: geo.captcha-delivery.com",
                     }
                 ],
                 "final_url": "https://e.com",
@@ -418,6 +438,84 @@ class TestHistoryConversion:
         )
         result = _history_to_agent_result(history, url="https://e.com", duration_s=0.1, schema=None)
         assert result.blocked is True
+
+    def test_page_content_mentioning_a_vendor_is_not_a_block(self) -> None:
+        """The regression that cost a downstream integration two days.
+
+        ``blocked`` used to substring-scan ``extracted_content`` — the text the
+        agent had just *successfully extracted* — for "captcha" / "cloudflare".
+        A standard reCAPTCHA footer notice matches on ``captcha`` (it is a
+        substring of "reCAPTCHA"), and a "Performance & security by Cloudflare"
+        footer matches on ``cloudflare``. Both are ordinary furniture on
+        perfectly good pages, so a successful extraction carrying correct data
+        came back ``blocked=True``.
+        """
+        from scrapper_tool.agent.browse import _history_to_agent_result
+
+        history = _FakeAgentHistoryList(
+            {
+                "history": [
+                    {
+                        "step": 1,
+                        "model_action": "extract",
+                        "url": "https://shop.example",
+                        "extracted_content": (
+                            "Part 68001234AA, $149.99, in stock. This site is "
+                            "protected by reCAPTCHA. Performance & security by "
+                            "Cloudflare."
+                        ),
+                    }
+                ],
+                "final_url": "https://shop.example",
+                "final_result": "Part 68001234AA, $149.99",
+            }
+        )
+        result = _history_to_agent_result(
+            history, url="https://shop.example", duration_s=0.1, schema=None
+        )
+        assert result.blocked is False
+        assert result.data is not None
+
+    def test_a_clean_run_is_not_blocked(self) -> None:
+        from scrapper_tool.agent.browse import _history_to_agent_result
+
+        history = _FakeAgentHistoryList(
+            {
+                "history": [{"step": 1, "model_action": "extract", "url": "https://e.com"}],
+                "final_url": "https://e.com",
+                "final_result": "ok",
+            }
+        )
+        result = _history_to_agent_result(history, url="https://e.com", duration_s=0.1, schema=None)
+        assert result.blocked is False
+
+    def test_tokens_are_read_from_usage(self) -> None:
+        """Every E2 run reported 0 tokens because the old attribute never existed.
+
+        That was read downstream as evidence local inference is unmetered, when
+        the field was simply never populated.
+        """
+        from scrapper_tool.agent.browse import _history_to_agent_result
+
+        history = _FakeAgentHistoryList(
+            {
+                "history": [{"step": 1, "model_action": "extract", "url": "https://e.com"}],
+                "final_url": "https://e.com",
+                "final_result": "ok",
+                "total_tokens": 4321,
+            }
+        )
+        result = _history_to_agent_result(history, url="https://e.com", duration_s=0.1, schema=None)
+        assert result.tokens_used == 4321
+
+    def test_tokens_fall_back_to_zero_without_usage(self) -> None:
+        """A history shape with no accounting must not raise."""
+        from scrapper_tool.agent.browse import _tokens_used
+
+        class _Bare:
+            pass
+
+        assert _tokens_used(_Bare()) == 0
 
     def test_screenshots_downsampled_and_capped(self, monkeypatch: pytest.MonkeyPatch) -> None:
         # Inject a fake PIL.Image to make downsample run deterministically.

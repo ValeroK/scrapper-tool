@@ -28,5 +28,5 @@
   ],
   "final_url": "https://example.com/more",
   "final_result": "{\"title\": \"More Information...\"}",
-  "total_input_tokens": 4321
+  "total_tokens": 4321
 }
