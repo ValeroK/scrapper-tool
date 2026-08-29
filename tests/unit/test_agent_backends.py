@@ -1300,17 +1300,50 @@ class TestVisionBackendResolution:
     resolve its own.
     """
 
-    @staticmethod
-    def _serve(monkeypatch: pytest.MonkeyPatch, vlm_models: set[str]) -> None:
-        class _Resp:
-            status_code = 200
+    @pytest.fixture(autouse=True)
+    def _clear_cache(self) -> Any:
+        """Vision resolution is memoised process-wide; tests must not share it."""
+        llm_mod.reset_vision_cache()
+        yield
+        llm_mod.reset_vision_cache()
 
-            @staticmethod
-            def json() -> Any:
+    @staticmethod
+    def _serve(
+        monkeypatch: pytest.MonkeyPatch,
+        vlm_models: set[str],
+        *,
+        loadable: set[str] | None = None,
+        catalogue: tuple[str, ...] = ("google/gemma-4-e4b", "qwen/qwen3.8-27b"),
+        loaded: set[str] | None = None,
+    ) -> None:
+        """Fake an LM Studio.
+
+        ``vlm_models`` is what the catalogue *advertises* as vision-capable;
+        ``loadable`` is what actually answers an inference call. They differ on a
+        real server — measured live, ``google/gemma-4-e4b`` is catalogued as
+        ``vlm`` and returns HTTP 400 ``Failed to load model`` on every request —
+        which is precisely what the verification probe exists to catch. Defaults
+        to ``vlm_models`` so the honest-server case stays the simple one.
+        """
+        can_load = vlm_models if loadable is None else loadable
+        is_loaded = loaded or set()
+
+        class _Resp:
+            def __init__(self, status: int = 200, payload: Any = None) -> None:
+                self.status_code = status
+                self._payload = payload
+
+            def json(self) -> Any:
+                if self._payload is not None:
+                    return self._payload
                 return {
                     "data": [
-                        {"id": m, "type": "vlm" if m in vlm_models else "llm"}
-                        for m in ("google/gemma-4-e4b", "qwen/qwen3.8-27b")
+                        {
+                            "id": m,
+                            "type": "vlm" if m in vlm_models else "llm",
+                            "state": "loaded" if m in is_loaded else "not-loaded",
+                        }
+                        for m in catalogue
                     ]
                 }
 
@@ -1325,7 +1358,91 @@ class TestVisionBackendResolution:
             async def get(self, url: str) -> _Resp:
                 return _Resp()
 
+            async def post(self, url: str, **kwargs: Any) -> _Resp:
+                model = (kwargs.get("json") or {}).get("model")
+                if model not in can_load:
+                    return _Resp(400, {"error": {"message": "Failed to load model"}})
+                return _Resp(200, {"choices": [{"message": {"content": "ok"}}]})
+
         monkeypatch.setattr(llm_mod.httpx, "AsyncClient", _Client)
+
+    @pytest.mark.asyncio
+    async def test_a_catalogued_model_that_will_not_load_is_skipped(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The catalogue is a claim, not a guarantee.
+
+        Verified against a live LM Studio: ``google/gemma-4-e4b`` is advertised
+        as ``type=vlm`` and every request for it returns HTTP 400 ``Failed to
+        load model``. Trusting the claim handed back a backend whose every call
+        failed, and the grid solver's honest ``False`` was indistinguishable
+        from "this captcha was too hard" — so the tier looked broken, not absent.
+        """
+        self._serve(
+            monkeypatch,
+            {"google/gemma-4-e4b", "qwen/qwen3.8-27b"},
+            loadable={"qwen/qwen3.8-27b"},
+        )
+        cfg = AgentConfig(
+            llm="openai_compat",
+            model="google/gemma-4-e4b",
+            captcha_vision_model="google/gemma-4-e4b",
+            ollama_url="http://lm.test",
+        )
+        backend = await llm_mod.get_vision_backend(cfg)
+        assert backend is not None
+        assert backend.model == "qwen/qwen3.8-27b"
+
+    @pytest.mark.asyncio
+    async def test_loaded_models_are_tried_before_cold_ones(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """An already-resident model costs nothing to try; a cold one may not load."""
+        self._serve(
+            monkeypatch,
+            {"google/gemma-4-e4b", "qwen/qwen3.8-27b"},
+            loaded={"qwen/qwen3.8-27b"},
+        )
+        cfg = AgentConfig(
+            llm="openai_compat",
+            model="text-only",
+            captcha_vision_model="text-only",
+            ollama_url="http://lm.test",
+        )
+        candidates = await llm_mod._vision_candidates(cfg)
+        assert candidates[0] == "text-only"  # the configured choice still leads
+        assert candidates[1] == "qwen/qwen3.8-27b"  # then the LOADED vlm
+
+    @pytest.mark.asyncio
+    async def test_a_negative_verdict_expires_sooner_than_a_positive_one(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Model availability is time-varying, so "nothing can see" must not stick.
+
+        Measured minutes apart against one live LM Studio: the loaded 27B failed
+        an image probe while a cold model passed, and shortly before that the
+        reverse held — models load, evict and thrash under memory pressure.
+        Caching a negative for the full TTL would leave the grid tier off long
+        after it recovered.
+        """
+        assert llm_mod._VISION_NEGATIVE_TTL_S < llm_mod._VISION_RESOLUTION_TTL_S
+
+        self._serve(monkeypatch, set(), catalogue=("text-only",))
+        cfg = AgentConfig(
+            llm="openai_compat",
+            model="text-only",
+            captcha_vision_model="text-only",
+            ollama_url="http://lm.test",
+        )
+        assert await llm_mod.resolve_vision_model(cfg) is None
+
+        # Server recovers; within the negative TTL the memo still holds.
+        self._serve(monkeypatch, {"text-only"}, catalogue=("text-only",))
+        assert await llm_mod.resolve_vision_model(cfg) is None
+
+        # Past it, the tier comes back on its own.
+        monkeypatch.setattr(llm_mod.time, "monotonic", lambda: 10_000.0)
+        assert await llm_mod.resolve_vision_model(cfg) == "text-only"
 
     @pytest.mark.asyncio
     async def test_captcha_model_overrides_the_extraction_model(

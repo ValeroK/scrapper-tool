@@ -16,6 +16,8 @@ HTTP probe logic; only the framework adapter shapes differ.
 
 from __future__ import annotations
 
+import time
+from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Protocol
 from urllib.parse import urljoin
 
@@ -398,65 +400,225 @@ def is_vision_model(model: str) -> bool:
     return any(tag in needle for tag in _VISION_NAME_TAGS)
 
 
-async def supports_vision(model: str, base_url: str | None = None) -> bool:
-    """Whether ``model`` accepts image input, asking the server when possible.
+# A 32x32 red square. Used only to ask a server "will you accept an image on
+# this model?" - the answer's content is irrelevant, so this stays tiny.
+_VISION_PROBE_PNG_B64 = (
+    "iVBORw0KGgoAAAANSUhEUgAAACAAAAAgCAIAAAD8GO2jAAAAPklEQVR42mP8//8/Ay0BEwONwagF"
+    "oxZQDlhwyjAykmwYtiw1GgejFoxaMGrBqAWjFuCvcKjUIBuNg1ELKAcAihUHP/EsREAAAAAASUVO"
+    "RK5CYII="
+)
+# The probe accepts any non-empty reply, including partial reasoning, so it does
+# not need room for a full answer - only enough that the server commits to
+# generating. ``_extract_message_text`` surfaces ``reasoning_content`` when
+# content is empty, which is what makes this budget sufficient for reasoning
+# models (measured: qwen3.8-27b-apex spends ~240 tokens thinking before it
+# answers, so a probe demanding a complete answer would need 10x this).
+_VISION_PROBE_MAX_TOKENS = 192
+# Vision resolution is stable for the life of a model server and the probe costs
+# a real inference call, so it is cached. Short enough that loading a model in
+# LM Studio takes effect without restarting this process.
+_VISION_RESOLUTION_TTL_S = 300.0
+# A *negative* verdict expires far sooner than a positive one, because model
+# availability is time-varying in a way the catalogue does not express. Measured
+# against a live LM Studio minutes apart: the loaded 27B failed an image probe
+# while a cold model passed, and shortly before that the reverse held — models
+# load, evict and thrash under memory pressure. Caching "nothing can see" for
+# five minutes would leave the grid tier off long after it recovered.
+_VISION_NEGATIVE_TTL_S = 60.0
+_vision_resolution_cache: dict[tuple[str, str], tuple[str | None, float]] = {}
 
-    LM Studio's ``/api/v0/models`` reports an explicit ``type`` per model
-    (``vlm`` / ``llm`` / ``embeddings``), which is authoritative and costs one
-    local request. Anything else — endpoint absent (plain llama.cpp, vLLM, Ollama),
-    unreachable, or the model simply not listed — falls back to
-    :func:`is_vision_model`, so this is never worse than the old behaviour.
+
+@dataclass(frozen=True)
+class ModelEntry:
+    """One row from a model server's catalogue."""
+
+    model_id: str
+    kind: str
+    state: str
+
+    @property
+    def is_vlm(self) -> bool:
+        return self.kind == "vlm"
+
+    @property
+    def is_loaded(self) -> bool:
+        return self.state == "loaded"
+
+
+async def list_models(base_url: str) -> tuple[ModelEntry, ...]:
+    """Catalogue from LM Studio's ``/api/v0/models``, or empty if unavailable.
+
+    Only LM Studio serves this endpoint; Ollama, vLLM and llama.cpp do not, and
+    an empty tuple is the honest answer for them rather than an error.
     """
-    if not base_url:
-        return is_vision_model(model)
     url = urljoin(base_url.rstrip("/") + "/", "api/v0/models")
     try:
         async with httpx.AsyncClient(timeout=3.0) as client:
             resp = await client.get(url)
-        if resp.status_code >= 400:  # noqa: PLR2004 — HTTP error threshold
-            return is_vision_model(model)
+        if resp.status_code >= 400:  # noqa: PLR2004 - HTTP error threshold
+            return ()
         entries = resp.json().get("data", [])
     except (httpx.HTTPError, ValueError, AttributeError, TypeError) as exc:
-        _logger.debug("agent.llm.vision_probe_failed", model=model, error=str(exc))
-        return is_vision_model(model)
-
+        _logger.debug("agent.llm.model_list_failed", base_url=base_url, error=str(exc))
+        return ()
+    out: list[ModelEntry] = []
     for entry in entries:
         if not isinstance(entry, dict):
             continue
-        if entry.get("id") == model:
-            declared = str(entry.get("type", "")).lower()
-            if declared:
-                _logger.info("agent.llm.vision_probe_ok", model=model, declared_type=declared)
-                return declared == "vlm"
+        model_id = entry.get("id")
+        if not isinstance(model_id, str):
+            continue
+        out.append(
+            ModelEntry(
+                model_id=model_id,
+                kind=str(entry.get("type", "")).lower(),
+                state=str(entry.get("state", "")).lower(),
+            )
+        )
+    return tuple(out)
+
+
+async def supports_vision(model: str, base_url: str | None = None) -> bool:
+    """Whether ``model`` *claims* image input, asking the server when possible.
+
+    A claim, not a guarantee - see :func:`verify_vision`. LM Studio's catalogue
+    advertises models it cannot actually load, so this answers "is it worth
+    trying?" and the probe answers "does it work?".
+    """
+    if not base_url:
+        return is_vision_model(model)
+    entries = await list_models(base_url)
+    if not entries:
+        return is_vision_model(model)
+    for entry in entries:
+        if entry.model_id == model:
+            if entry.kind:
+                _logger.info(
+                    "agent.llm.vision_probe_ok",
+                    model=model,
+                    declared_type=entry.kind,
+                    state=entry.state,
+                )
+                return entry.is_vlm
             break
     return is_vision_model(model)
 
 
-async def get_vision_backend(config: AgentConfig) -> LLMBackend | None:
-    """The backend for the captcha image-grid tier, or ``None`` if it cannot see.
+async def verify_vision(backend: LLMBackend) -> bool:
+    """Actually send an image and see whether the server answers.
 
-    Honours ``captcha_vision_model`` when set, because extraction and captcha
-    solving want opposite things from a model — see the field's docstring. Falls
-    back to the main ``model``, and returns ``None`` when whichever model applies
-    has no vision, so the grid tier is skipped rather than handed an image it
-    cannot read.
+    A declared ``type=vlm`` is not evidence the model works: measured against a
+    live LM Studio, ``google/gemma-4-e4b`` is catalogued as ``vlm`` but every
+    request for it returns HTTP 400 ``Failed to load model``. The old code
+    trusted the catalogue, handed back a backend, and the grid solver then
+    reported an honest ``False`` that was indistinguishable from "this captcha
+    was too hard" - so the vision tier looked broken rather than absent.
+
+    Any non-empty reply counts, including partial reasoning: the question is
+    whether the server will process an image on this model, not whether the
+    model is clever.
+    """
+    try:
+        reply = await backend.complete_vision(
+            "Reply with the single word: ok",
+            [_VISION_PROBE_PNG_B64],
+            max_tokens=_VISION_PROBE_MAX_TOKENS,
+        )
+    except Exception as exc:
+        _logger.info("agent.llm.vision_verify_failed", model=backend.model, error=str(exc))
+        return False
+    ok = bool(reply.strip())
+    _logger.info("agent.llm.vision_verify", model=backend.model, usable=ok)
+    return ok
+
+
+async def _vision_candidates(config: AgentConfig) -> tuple[str, ...]:
+    """Vision models worth trying, best first.
+
+    The configured model leads, because an explicit choice must win when it
+    works. After that, catalogued VLMs - **loaded ones first**, because an
+    already-resident model costs nothing to try and a cold one may not load at
+    all. Reading ``state`` is the half the old probe ignored.
     """
     wanted = config.captcha_vision_model or config.model
-    if not await supports_vision(wanted, config.ollama_url):
+    ordered = [wanted]
+    entries = await list_models(config.ollama_url)
+    vlms = [e for e in entries if e.is_vlm and e.model_id != wanted]
+    ordered.extend(entry.model_id for entry in sorted(vlms, key=lambda e: not e.is_loaded))
+    return tuple(ordered)
+
+
+async def resolve_vision_model(config: AgentConfig) -> str | None:
+    """The first vision model that *demonstrably* works, or None.
+
+    Tries each candidate with a real image (:func:`verify_vision`) rather than
+    trusting a declared type, and caches the verdict for
+    ``_VISION_RESOLUTION_TTL_S`` because the probe costs an inference call.
+    """
+    key = (config.ollama_url, config.captcha_vision_model or config.model)
+    cached = _vision_resolution_cache.get(key)
+    now = time.monotonic()
+    if cached is not None:
+        ttl = _VISION_RESOLUTION_TTL_S if cached[0] is not None else _VISION_NEGATIVE_TTL_S
+        if now - cached[1] < ttl:
+            return cached[0]
+
+    wanted = config.captcha_vision_model or config.model
+    resolved: str | None = None
+    for candidate in await _vision_candidates(config):
+        if not await supports_vision(candidate, config.ollama_url):
+            _logger.debug("agent.llm.vision_candidate_not_vlm", model=candidate)
+            continue
+        backend = get_llm_backend(config.model_copy(update={"model": candidate}))
+        if await verify_vision(backend):
+            resolved = candidate
+            break
+    if resolved is None:
+        _logger.warning(
+            "agent.llm.vision_unavailable",
+            detail="no vision model answered an image probe; the captcha grid tier is OFF",
+            base_url=config.ollama_url,
+        )
+    elif resolved != wanted:
+        _logger.warning("agent.llm.vision_model_substituted", configured=wanted, using=resolved)
+    _vision_resolution_cache[key] = (resolved, now)
+    return resolved
+
+
+def reset_vision_cache() -> None:
+    """Drop memoised vision resolutions (tests, and after loading a new model)."""
+    _vision_resolution_cache.clear()
+
+
+async def get_vision_backend(config: AgentConfig) -> LLMBackend | None:
+    """The backend for the captcha image-grid tier, or ``None`` if none can see.
+
+    Returns a *verified* backend: the model behind it has answered a real image
+    probe. ``None`` now means "we tried every catalogued VLM and none worked",
+    which is logged loudly - the previous silent ``None`` was the single reason
+    the vision tier could be off for months without anyone noticing.
+    """
+    resolved = await resolve_vision_model(config)
+    if resolved is None:
         return None
-    if wanted == config.model:
+    if resolved == config.model:
         return get_llm_backend(config)
-    return get_llm_backend(config.model_copy(update={"model": wanted}))
+    return get_llm_backend(config.model_copy(update={"model": resolved}))
 
 
 __all__ = [
     "LLMBackend",
     "LlamaCppBackend",
+    "ModelEntry",
     "OllamaBackend",
     "OpenAICompatBackend",
     "VLLMBackend",
     "get_llm_backend",
     "get_vision_backend",
     "is_vision_model",
+    "list_models",
+    "reset_vision_cache",
+    "resolve_vision_model",
     "supports_vision",
+    "verify_vision",
 ]
