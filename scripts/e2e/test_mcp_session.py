@@ -37,6 +37,8 @@ from scrapper_tool.ladder import IMPERSONATE_LADDER
 # PATH so we just spawn it. (The image's ENTRYPOINT is the REST sidecar,
 # not this — compose selects the MCP server explicitly; see the
 # entrypoint key on the `scrapper-tool` service.)
+SITE = "https://quotes.toscrape.com/"
+
 SERVER = StdioServerParameters(
     command="scrapper-tool-mcp",
     args=[],
@@ -254,7 +256,59 @@ async def main() -> None:  # noqa: PLR0915 - sequential narrative, intentional
             )
             print()
 
-            print("=== MCP session E2E COMPLETE - all 7 tool checks passed ===")
+            # ---- Site-level + primary tools -----------------------------
+            # Added in 3.1. Until then these three were advertised in
+            # tools/list and never called by any e2e script, so "9 tools"
+            # meant nine were *listed*, not nine that work. map_site and
+            # crawl_site are the pair this migration found undocumented,
+            # and auto_scrape is the recommended first tool — the worst
+            # three to have been leaving unexercised.
+
+            # 5.G - map_site (cheap: no browser, no LLM)
+            print("[5.G] Prompt: 'Map the URLs on quotes.toscrape.com'")
+            r = await session.call_tool("map_site", {"url": SITE, "max_urls": 15})
+            data = _payload(r)
+            assert isinstance(data, dict), data
+            assert isinstance(data.get("urls"), list) and data["urls"], data
+            # Truncation must be reported, never silent.
+            assert "truncated" in data, data
+            print(f"[5.G] [OK] urls={len(data['urls'])} truncated={data['truncated']}")
+            print()
+
+            # 5.H - crawl_site (bounded hard: this runs the full cascade per page)
+            print("[5.H] Prompt: 'Crawl quotes.toscrape.com, depth 1, 2 pages max'")
+            r = await session.call_tool(
+                "crawl_site",
+                {
+                    "url": SITE,
+                    "depth": 1,
+                    "max_pages": 2,
+                    "concurrency": 2,
+                    "timeout_s": 240,
+                },
+            )
+            data = _payload(r)
+            assert isinstance(data, dict), data
+            assert isinstance(data.get("pages"), list) and data["pages"], data
+            assert len(data["pages"]) <= 2, f"max_pages not honoured: {len(data['pages'])}"
+            print(f"[5.H] [OK] pages={len(data['pages'])}")
+            print()
+
+            # 5.I - auto_scrape (the recommended first tool)
+            print("[5.I] Prompt: 'Auto-scrape quotes.toscrape.com'")
+            r = await session.call_tool("auto_scrape", {"url": SITE, "timeout_s": 240})
+            data = _payload(r)
+            assert isinstance(data, dict), data
+            assert data.get("pattern_used"), data
+            assert not data.get("blocked"), data
+            print(
+                f"[5.I] [OK] pattern_used={data['pattern_used']} "
+                f"is_structured={data.get('is_structured')} "
+                f"blocked={data['blocked']}"
+            )
+            print()
+
+            print("=== MCP session E2E COMPLETE - all 10 tool checks passed ===")
 
 
 if __name__ == "__main__":

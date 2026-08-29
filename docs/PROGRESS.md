@@ -94,6 +94,11 @@ JSON-RPC handshake:
 | `docker compose run --rm -T scrapper-tool` | speaks MCP for the first time; `tools/list` returns 9 |
 | `docker compose --profile http up -d scrapper-tool-mcp-http` | reports **healthy**, was unhealthy by construction before |
 | `test_mcp_session_http.py` against the container on `:8000` | all steps pass, 9 tools |
+| `--transport sse` | binds and serves `text/event-stream` (previously signature-checked only) |
+
+Re-verified on 2026-08-29 after adding the three missing tool calls: stdio,
+local streamable-http, and **the container** all report `all 10 tool checks
+passed`, with every one of the nine tools invoked rather than merely listed.
 
 Two things worth knowing before re-running those:
 

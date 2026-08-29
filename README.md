@@ -112,6 +112,97 @@ What is covered, what is not, and the fully-closed `..._STRICT` mode:
 | **REST sidecar** (any language, plain HTTP) | `scrapper-tool-serve` | [docs/http-sidecar.md](docs/http-sidecar.md) |
 | **Docker** (all five patterns in one image) | `docker compose up` | [docs/docker.md](docs/docker.md) |
 
+## Use it as an MCP server
+
+Exposes the whole toolkit to any MCP client — Claude Code, Claude Desktop,
+Cursor, mcp-use, AutoGen, LangChain. Needs the `[agent]` extra:
+
+```bash
+uv pip install "scrapper-tool[full,agent]"
+```
+
+### Wire it up
+
+Add to your client's MCP config (`.mcp.json` for Claude Code,
+`claude_desktop_config.json` for Claude Desktop):
+
+```json
+{
+  "mcpServers": {
+    "scrapper-tool": {
+      "command": "scrapper-tool-mcp",
+      "args": [],
+      "env": {}
+    }
+  }
+}
+```
+
+Restart the client and all nine tools appear. That is the whole setup for the
+default transport — stdio, which the client spawns and talks to over
+stdin/stdout.
+
+### The nine tools
+
+| Tool | Use it for |
+|---|---|
+| `auto_scrape` | **Start here.** Escalates A/B/C → D → E1 → E2 by itself and reports which tier won. |
+| `fetch_with_ladder` | One fetch through the TLS-impersonation ladder. `extract_structured=True` also parses JSON-LD. |
+| `extract_product` | schema.org Product+Offer out of HTML you already have. |
+| `extract_microdata_price` | `<meta itemprop="price">` anchors out of HTML you already have. |
+| `map_site` | List a site's URLs from sitemaps + page links. No browser, no LLM, so it is cheap. |
+| `crawl_site` | Breadth-first crawl running the full cascade per page. Honours robots.txt. |
+| `agent_extract` | Pattern E1 — stealth render plus one LLM call. Needs `[llm-agent]`. |
+| `agent_browse` | Pattern E2 — multi-step agent for logins, pagination, forms. Needs `[llm-agent]`. |
+| `canary` | Which TLS fingerprint a site accepts. Diagnostics. |
+
+`docs/mcp-tools.json` is the generated, CI-enforced copy of this list.
+
+### Over HTTP instead of stdio
+
+For a long-lived server that clients reach by URL:
+
+```bash
+scrapper-tool-mcp --transport streamable-http --host 0.0.0.0 --port 8000
+```
+
+Then point the client at `http://localhost:8000/mcp`. `--transport sse` is also
+supported. Each flag has an env var (`SCRAPPER_TOOL_MCP_TRANSPORT`, `_HOST`,
+`_PORT`).
+
+In Docker, use the bundled service rather than the bare image — the image's
+default entrypoint is the REST sidecar, and the compose service overrides it:
+
+```bash
+docker compose --profile http up -d scrapper-tool-mcp-http
+```
+
+For the stdio spawn pattern in Docker (`docker compose run --rm -T
+scrapper-tool`), see **[docs/mcp.md](docs/mcp.md)**.
+
+### Check it works
+
+```bash
+scrapper-tool doctor
+```
+
+Reports every tier as `ok` / `degraded` / `missing`. For a real end-to-end
+session that opens a JSON-RPC connection and calls all nine tools:
+
+```bash
+uv run python scripts/e2e/test_mcp_session.py
+```
+
+Two things that will otherwise cost you an hour: `agent_browse` needs a
+CDP-capable browser, so set `SCRAPPER_TOOL_AGENT_BROWSER=patchright` (the
+Camoufox default is Firefox, which has no CDP and fails deliberately rather
+than silently dropping stealth); and in Docker a host-local LLM URL must be
+`host.docker.internal`, not `127.0.0.1`, which inside the container means the
+container.
+
+Full reference: **[docs/mcp.md](docs/mcp.md)**. Framework-specific wiring:
+**[docs/agent-integration.md](docs/agent-integration.md)**.
+
 ## Settings
 
 Every knob is an env var, a constructor argument, or a per-call keyword — in that

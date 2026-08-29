@@ -99,6 +99,7 @@ def test_instructions_string_names_every_tool() -> None:
 # are worth more than the duplication costs.
 
 _DOCS_LISTING_EVERY_TOOL = (
+    "README.md",
     "docs/mcp.md",
     "docs/agent-integration.md",
     "docs/E2E_TEST_PLAN.md",
@@ -106,8 +107,12 @@ _DOCS_LISTING_EVERY_TOOL = (
 )
 """Files that enumerate the whole tool surface.
 
-Deliberately excludes README.md and docs/quickstart.md, which name a couple
-of tools in prose. Policing those would force them to become catalogues.
+README.md joined this list when it grew an MCP section with the full nine-tool
+table. A file that publishes the surface has to be policed like the rest, or
+the front door becomes the next stale copy.
+
+Deliberately excludes docs/quickstart.md, which names a couple of tools in
+prose. Policing that would force it to become a catalogue.
 """
 
 _E2E_SCRIPTS = (

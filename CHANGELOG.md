@@ -55,6 +55,14 @@ Lifts the `mcp<2` cap deferred from 3.0.0. Planned in
   server grew `map_site` and `crawl_site` while the docs, the `instructions=`
   string the LLM reads, and both e2e scripts stayed at seven tools or fewer.
 - `scripts/` is now covered by `ruff check` and `ruff format --check`.
+- **Both e2e scripts now invoke all nine tools.** `auto_scrape`, `map_site` and
+  `crawl_site` were advertised in `tools/list` and never called, so the
+  nine-tool check proved advertising rather than function — and those were
+  the worst three to miss: the two this migration found undocumented, plus the
+  recommended first tool.
+- **README has an "Use it as an MCP server" section**: install, client config,
+  the nine tools, the HTTP/Docker alternatives, and how to verify. It is
+  policed by the tool-surface guard like the other files that publish the list.
 - **The tool-surface guard also checks the hand-written copies of the list**:
   the four docs that enumerate the surface, and both e2e scripts'
   `EXPECTED_TOOLS` sets. Snapshot-matches-code alone was not enough —

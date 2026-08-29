@@ -28,6 +28,7 @@ from mcp import ClientSession
 from mcp.client.streamable_http import streamable_http_client
 
 URL = os.environ.get("SCRAPPER_TOOL_MCP_URL", "http://localhost:8765/mcp")
+SITE = "https://quotes.toscrape.com/"
 
 
 # The full tool surface, asserted exactly. This used to name six tools
@@ -186,7 +187,41 @@ async def main() -> None:  # noqa: PLR0915 - sequential narrative
             print(f"[5.F] [OK] agent_browse steps={data['steps_used']} data={data['data']}")
 
             print()
-            print("=== MCP-over-HTTP E2E COMPLETE - all 7 checks passed ===")
+
+            # ---- Site-level + primary tools (added in 3.1) ---------------
+            # See the stdio script: these three were listed by tools/list
+            # and never invoked, so the "9 tools" check proved advertising
+            # rather than function.
+
+            # 5.G map_site
+            r = await session.call_tool("map_site", {"url": SITE, "max_urls": 15})
+            data = _payload(r)
+            assert isinstance(data, dict), data
+            assert isinstance(data.get("urls"), list) and data["urls"], data
+            assert "truncated" in data, data
+            print(f"[5.G] [OK] map_site urls={len(data['urls'])} truncated={data['truncated']}")
+
+            # 5.H crawl_site
+            r = await session.call_tool(
+                "crawl_site",
+                {"url": SITE, "depth": 1, "max_pages": 2, "concurrency": 2, "timeout_s": 240},
+            )
+            data = _payload(r)
+            assert isinstance(data, dict), data
+            assert isinstance(data.get("pages"), list) and data["pages"], data
+            assert len(data["pages"]) <= 2, f"max_pages not honoured: {len(data['pages'])}"
+            print(f"[5.H] [OK] crawl_site pages={len(data['pages'])}")
+
+            # 5.I auto_scrape
+            r = await session.call_tool("auto_scrape", {"url": SITE, "timeout_s": 240})
+            data = _payload(r)
+            assert isinstance(data, dict), data
+            assert data.get("pattern_used"), data
+            assert not data.get("blocked"), data
+            print(f"[5.I] [OK] auto_scrape pattern_used={data['pattern_used']}")
+
+            print()
+            print("=== MCP-over-HTTP E2E COMPLETE - all 10 checks passed ===")
 
 
 if __name__ == "__main__":
