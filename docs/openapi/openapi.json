@@ -55,6 +55,50 @@
         }
       }
     },
+    "/capabilities": {
+      "get": {
+        "tags": [
+          "operational"
+        ],
+        "summary": "What this deployment can actually do",
+        "description": "Machine-readable capabilities: the valid browser backend names with their engine and CDP support, which cascade tiers are usable in this configuration, and the request flags that gate them. Intended for a client to check at startup \u2014 so 'E2 is configured but unreachable with this backend' surfaces then, rather than on the first hostile page months later.",
+        "operationId": "capabilities",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "type": "object",
+                  "title": "Response Capabilities"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/skill": {
+      "get": {
+        "tags": [
+          "operational"
+        ],
+        "summary": "The tool's own operating manual, as markdown",
+        "description": "Returns the bundled agent skill: what the cascade is, which entrypoint to call, which flags exist and when each earns its cost. Served so an LLM agent can learn to drive this sidecar without a repository checkout \u2014 previously the only way to get it. Returns 404 when the build does not carry a skill.",
+        "operationId": "skill",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          }
+        }
+      }
+    },
     "/ready": {
       "get": {
         "tags": [
@@ -615,10 +659,16 @@
             "default": true
           },
           "interactive": {
-            "type": "boolean",
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
             "title": "Interactive",
-            "description": "Allow per-page escalation to E2 (see /scrape's interactive)",
-            "default": false
+            "description": "Allow per-page escalation to E2 (see /scrape's interactive)"
           },
           "include_html": {
             "type": "boolean",
@@ -986,10 +1036,16 @@
             "default": false
           },
           "interactive": {
-            "type": "boolean",
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
             "title": "Interactive",
-            "description": "Whether this target needs a multi-step agent (NEW v1.6.0). E2 (browser-use) is the most expensive tier by a wide margin and only earns its cost on genuinely interactive flows \u2014 login, pagination, dynamic forms. With interactive=false (default) a blocked E1 stops and returns the blocked result rather than auto-escalating into an agent loop that will hit the same wall, slower. Set true when the page really does require interaction.",
-            "default": false
+            "description": "Whether this target needs a multi-step agent. Tri-state since v3.2.0: null (default) means AUTO \u2014 E2 runs when every cheaper tier has been exhausted, unless this domain has already failed E2 twice without ever winning, in which case the learned verdict skips it. true forces E2 to be reachable regardless of what was learned; false opts out entirely and is the old default. Auto exists because the previous default made the CALLER classify the page, which is the job the cascade exists to do \u2014 and a skipped tier looked identical to a normal ladder outcome in the log, so it went unnoticed for months."
           },
           "hostile_fallback": {
             "type": "boolean",

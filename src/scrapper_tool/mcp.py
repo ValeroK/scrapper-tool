@@ -1089,6 +1089,31 @@ def _build_server() -> Any:  # noqa: PLR0915 — single-place tool registration
 
     # ---- Tool: fetch_with_ladder ------------------------------------------
 
+    @server.resource(
+        "skill://scrapper-tool",
+        name="scrapper-tool skill",
+        description=(
+            "How to drive this tool: the cascade's tiers, the one entrypoint to "
+            "call, and which flags earn their cost. Read this before the tools."
+        ),
+        mime_type="text/markdown",
+    )
+    def _skill_resource() -> str:
+        """The bundled operating manual.
+
+        Registered as a resource rather than a tool because it is reference
+        material, not an action — an agent should be able to read it without
+        deciding to *do* anything, and MCP clients surface resources for exactly
+        that. Nine tools were previously the whole surface, so a client had no
+        way to learn what they were for.
+        """
+        from scrapper_tool.skill import skill_markdown  # noqa: PLC0415
+
+        return skill_markdown() or (
+            "This build of scrapper-tool does not bundle a skill. "
+            "Set SCRAPPER_TOOL_SKILL_PATH to serve one."
+        )
+
     @server.tool(
         name="fetch_with_ladder",
         description=(

@@ -2,6 +2,98 @@
 
 All notable changes to `scrapper-tool` are recorded here. Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning follows [SemVer](https://semver.org/).
 
+## [Unreleased]
+
+Driven by a heavy consumer's field report after a ~180k-row harvest across five
+vendors. The theme of that report was that **the ladder already knows more than
+the caller does, and should act on it instead of asking** — a caller who has to
+know what E2 is, or that Camoufox is Firefox, is a caller doing the tool's job.
+
+### Added
+
+- **Backend capabilities, and a second escalation axis.** Backends now declare
+  `engine` and `cdp`, and the render tier retries a *walled* page on a different
+  engine before the cascade pays for an LLM tier. Ordering is complementarity,
+  not strength: measured on one target Camoufox got a clean HTTP 200 where
+  Patchright earned a hard WAF block, and on another the reverse held. Capped by
+  `SCRAPPER_TOOL_RENDER_MAX_BACKENDS` (default 2), and the winning backend is
+  remembered per domain.
+- **The captcha stack now reaches the render tier.** Settle, checkbox, slider,
+  local vision and paid-token solving already existed but were reachable only
+  from E1 and E2 — the two priciest tiers — despite the render tier holding the
+  live Playwright page the solvers need. Gated on an already-detected challenge,
+  so a page with no wall on it pays nothing.
+- **`GET /skill` and the `skill://scrapper-tool` MCP resource.** The tool's own
+  operating manual is now served over the wire. It previously reached only
+  agents with the repository checked out, which is why one integration
+  reverse-engineered the request flags from `/openapi.json` by hand and learned
+  the valid browser backends from the text of an error message.
+- **`DomainPolicy.best_backend`, `e2_attempts` and `e2_wins`**, so E2's cost is
+  decided by what actually happened on a domain rather than by the caller.
+- **`GET /capabilities`.** The valid browser backend names with their engine and
+  CDP support, which cascade tiers are usable in this configuration, and the
+  request flags that gate them. A client can now warn at startup that a tier is
+  unreachable, rather than discovering it on the first hostile page. Those
+  backend names appeared in no documentation: they were previously discoverable
+  only from an enum embedded in an error message.
+
+### Changed
+
+- **`interactive` is tri-state and defaults to auto.** E2 now runs once the
+  cheaper tiers are exhausted, unless the domain has failed it twice without ever
+  winning. `true` forces it; `false` is the old default and still opts out. The
+  old default made the caller classify the page, and because a gated E2 logged as
+  an ordinary `skipped` step, a client that never forwarded the flag looked
+  exactly like one whose pages did not need E2.
+- **A declined tier logs `reason: "not_permitted"`**, distinct from the failure
+  reasons. "We declined to run this" and "the vendor beat us" were previously
+  indistinguishable in the escalation log, and only one is actionable.
+- **E2 selects a CDP-capable backend instead of refusing.** `interactive` plus
+  `SCRAPPER_TOOL_AGENT_BROWSER=camoufox` — two individually correct settings —
+  used to be a hard 503, because browser-use attaches over CDP and Firefox
+  dropped CDP. E2 now filters backends by capability, so the impossible
+  combination cannot be constructed. D and E1 keep Camoufox, which is where its
+  measured bypass advantage applies, and the substitution is reported in the
+  escalation log. An explicit per-request `browser` still wins.
+
+### Fixed
+
+- **E2 reported `blocked=True` on pages that contained the data.** ``blocked``
+  substring-scanned ``extracted_content`` and ``result_text`` — the text the
+  agent had just *successfully extracted* — for "blocked" / "captcha" /
+  "cloudflare" / "access denied". A standard reCAPTCHA footer notice matches on
+  ``captcha`` (it is a substring of "reCAPTCHA"), and a "Performance & security
+  by Cloudflare" footer matches on ``cloudflare``; both are ordinary furniture on
+  perfectly good pages. So a successful extraction carrying correct data came
+  back flagged as blocked — a consumer honouring the flag threw good data away.
+  It is now judged on ``AgentHistoryList.errors()``, via the same
+  ``looks_like_block_message`` detector E1 already used.
+
+  Compounding it, the other half of the old expression,
+  ``getattr(history, "blocked", False)``, read an attribute browser-use has never
+  had. It was permanently ``False``, so the content scan was the *only* signal,
+  while ``errors()`` sat unused the whole time.
+- **`tokens_used` was always 0 for E2.** It read
+  ``getattr(history, "total_input_tokens", 0)``, naming an attribute that does
+  not exist on browser-use 0.13's ``AgentHistoryList``, so the default fired on
+  every run regardless of model. That was read downstream as evidence that local
+  inference is unmetered. Now read from ``history.usage.total_tokens``. The test
+  fixture carried the same phantom field, which is how this stayed green.
+- **The captcha vision tier could be silently off.** `get_vision_backend`
+  trusted the model server's catalogue, and LM Studio advertises models it
+  cannot load: verified live, two of three catalogued VLMs returned HTTP 400
+  `Failed to load model` on every request. The resolver now reads each model's
+  `state`, prefers loaded ones, and **verifies with a real image probe** before
+  returning a backend, falling back to the next candidate and logging the
+  substitution. A `None` — meaning no model could see — is now logged loudly
+  rather than silently skipping the tier.
+- **`record_e2_attempt` never records a losing tier as the best one.** Otherwise
+  a single failed E2 would have made the next request on that domain skip every
+  cheaper tier on the strength of a tier that failed.
+- **`skills/` is now copied into the Docker image.** It was in the sdist but not
+  the image, so every containerised deployment served a sidecar that could not
+  explain itself.
+
 ## [3.1.1] - 2026-08-29
 
 CI and documentation only. **No functional source change**: diffing `src/`,

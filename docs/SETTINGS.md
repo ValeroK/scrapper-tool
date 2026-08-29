@@ -298,7 +298,7 @@ A/B/C  curl_cffi TLS impersonation
 D      Scrapling (hostile fetcher)
 render stealth browser + deterministic extractors   <- NO LLM
 E1     Crawl4AI + LLM
-E2     browser-use agent            -> priciest, interactive=true only
+E2     browser-use agent            -> priciest, reached automatically (see below)
 ```
 
 | Env var | Default | Purpose |
@@ -308,6 +308,57 @@ E2     browser-use agent            -> priciest, interactive=true only
 | `SCRAPPER_TOOL_RECIPE_DIR` | temp dir | Where learned recipes and domain policies are stored (one JSON file per domain). |
 | `SCRAPPER_TOOL_DOMAIN_POLICY` | `1` (on) | Per-domain tier memory (see below). Set `0` to always run the full cascade. |
 | `SCRAPPER_TOOL_COOKIE_DIR` | `~/.scrapper-tool/cookies` | Where `scrapper-tool cookies export` writes jars. Created `0700`; each jar is `0600`. |
+| `SCRAPPER_TOOL_RENDER_MAX_BACKENDS` | `2` | How many browser backends the render tier may try on one URL before giving up on the tier. A *wall* triggers the retry, and only a wall — see below. |
+| `SCRAPPER_TOOL_RENDER_SOLVE_CAPTCHA` | `1` (on) | Let the render tier clear a detected captcha in-page. Costs nothing on a page with no challenge on it. Set `0` to leave captchas to the LLM tiers. |
+| `SCRAPPER_TOOL_SKILL_PATH` | bundled | Path to the skill served at `GET /skill` and the `skill://scrapper-tool` MCP resource. Override to vendor house rules on top of the shipped manual. |
+
+### Asking what this deployment can do
+
+`GET /capabilities` reports the valid `browser` names with their engine and CDP
+support, which tiers are usable here, and the flags that gate them. `GET /skill`
+returns the tool's own operating manual as markdown; the same text is available
+over MCP as the `skill://scrapper-tool` resource.
+
+Check `/capabilities` at client startup. It is what turns "E2 is unreachable with
+this backend" from a discovery made on the first hostile page into a warning at
+boot.
+
+### Reaching E2 automatically
+
+`interactive` is tri-state as of 3.2.0 and defaults to **auto**:
+
+| Value | Behaviour |
+|-------|-----------|
+| *(unset / null)* | **Auto.** E2 runs once every cheaper tier is exhausted — unless this domain has already failed E2 twice without ever winning, in which case the learned verdict skips it. A single win re-enables the domain permanently, and the policy TTL re-opens even a written-off one. |
+| `true` | Force E2 to be reachable, overriding any learned verdict. |
+| `false` | Opt out of E2 entirely. This was the default before 3.2.0. |
+
+The old default made the *caller* classify the page, which is the job the cascade
+exists to do. Worse, a gated E2 logged as an ordinary `skipped` step, so a client
+that never forwarded the flag was indistinguishable from one whose pages did not
+need E2 — a real integration ran that way for months without noticing.
+
+A declined tier now logs `reason: "not_permitted"`, which is deliberately
+distinct from every other value: it means *we* declined, not that the tier or the
+vendor failed. A caller counting failures against a vendor's budget must not
+count it.
+
+### Trying more than one browser
+
+A bot wall is a verdict on the *browser*, not on the tier. Measured on one
+target, Camoufox got a clean HTTP 200 where Patchright earned a hard WAF block;
+on another the reverse held. Backends are complementary rather than ranked, so a
+walled render retries on a different **engine** before the cascade pays for an
+LLM tier, and the winning backend is remembered per domain.
+
+Only a wall triggers the retry. A timeout, a crash, or a page with no extractable
+signal are not backend-dependent verdicts, and retrying them would double the
+cost for a guaranteed identical answer.
+
+E2 additionally *filters* backends by capability rather than failing on them:
+browser-use attaches over CDP only, and Camoufox is Firefox, so E2 silently runs
+on a CDP-capable backend instead of returning the configuration error it used to.
+An explicit per-request `browser` always wins.
 
 ### Installing `[cookies]` without a Rust toolchain
 

@@ -9,6 +9,8 @@ Endpoints
 GET  /health       Liveness probe (always 200)
 GET  /ready        Readiness — probes Ollama, model availability, browser binary
 GET  /version      Version + capabilities (which extras are installed)
+GET  /skill        The tool's own operating manual (markdown, for agents)
+GET  /capabilities Valid backends, usable tiers, and the flags that gate them
 POST /scrape       **Primary endpoint** — auto-escalating ladder A/B/C → D → E1 → E2
 POST /fetch        Pattern A/B/C with optional Pattern B/C structured extraction
 POST /extract      Pattern E1 (Crawl4AI + LLM, single call)
@@ -156,16 +158,19 @@ class ScrapeRequest(BaseModel):
             "always-escalate behaviour."
         ),
     )
-    interactive: bool = Field(
-        False,
+    interactive: bool | None = Field(
+        None,
         description=(
-            "Whether this target needs a multi-step agent (NEW v1.6.0). E2 "
-            "(browser-use) is the most expensive tier by a wide margin and only "
-            "earns its cost on genuinely interactive flows — login, pagination, "
-            "dynamic forms. With interactive=false (default) a blocked E1 stops "
-            "and returns the blocked result rather than auto-escalating into an "
-            "agent loop that will hit the same wall, slower. Set true when the "
-            "page really does require interaction."
+            "Whether this target needs a multi-step agent. Tri-state since "
+            "v3.2.0: null (default) means AUTO — E2 runs when every cheaper tier "
+            "has been exhausted, unless this domain has already failed E2 twice "
+            "without ever winning, in which case the learned verdict skips it. "
+            "true forces E2 to be reachable regardless of what was learned; "
+            "false opts out entirely and is the old default. Auto exists because "
+            "the previous default made the CALLER classify the page, which is "
+            "the job the cascade exists to do — and a skipped tier looked "
+            "identical to a normal ladder outcome in the log, so it went "
+            "unnoticed for months."
         ),
     )
     hostile_fallback: bool = Field(
@@ -308,8 +313,8 @@ class CrawlRequest(BaseModel):
             "asked for, which is exactly what robots.txt governs."
         ),
     )
-    interactive: bool = Field(
-        False, description="Allow per-page escalation to E2 (see /scrape's interactive)"
+    interactive: bool | None = Field(
+        None, description="Allow per-page escalation to E2 (see /scrape's interactive)"
     )
     include_html: bool = Field(
         False,
@@ -408,7 +413,7 @@ def _user_data_dir_supported() -> bool:
 # ---------------------------------------------------------------------------
 
 
-def _build_app(
+def _build_app(  # noqa: PLR0915 - one statement per route; splitting hides the surface
     *,
     api_key: str | None = None,
     cors_origins: list[str] | None = None,
@@ -627,6 +632,87 @@ def _build_app(
             "agent_available": _agent_available(),
             "hostile_available": _hostile_available(),
         }
+
+    @app.get(
+        "/capabilities",
+        operation_id="capabilities",
+        tags=["operational"],
+        summary="What this deployment can actually do",
+        description=(
+            "Machine-readable capabilities: the valid browser backend names with "
+            "their engine and CDP support, which cascade tiers are usable in this "
+            "configuration, and the request flags that gate them. Intended for a "
+            "client to check at startup — so 'E2 is configured but unreachable "
+            "with this backend' surfaces then, rather than on the first hostile "
+            "page months later."
+        ),
+    )
+    async def capabilities() -> dict[str, Any]:
+        from scrapper_tool.agent.types import AgentConfig  # noqa: PLC0415
+
+        try:
+            configured_browser: str | None = AgentConfig.from_env().browser
+        except Exception:
+            configured_browser = None
+        return {
+            "version": __version__,
+            "extras": {
+                "llm-agent": _agent_available(),
+                "hostile": _hostile_available(),
+            },
+            "browsers": _backend_capabilities_payload(),
+            "configured_browser": configured_browser,
+            "tiers": _tier_capabilities_payload(),
+            "render_max_backends": _max_render_backends(),
+            "flags": {
+                "interactive": {
+                    "type": "boolean|null",
+                    "default": None,
+                    "description": (
+                        "null = auto (E2 runs once cheaper tiers are exhausted, "
+                        "unless this domain has failed it repeatedly); "
+                        "true = force; false = opt out"
+                    ),
+                },
+                "browser": {
+                    "type": "string|null",
+                    "choices": [b["name"] for b in _backend_capabilities_payload()],
+                    "description": "Per-request backend override; wins over every automatic choice",
+                },
+                "solve_cloudflare": {"type": "boolean", "default": False},
+                "cookies": {"type": "array|null"},
+            },
+        }
+
+    @app.get(
+        "/skill",
+        operation_id="skill",
+        tags=["operational"],
+        summary="The tool's own operating manual, as markdown",
+        description=(
+            "Returns the bundled agent skill: what the cascade is, which "
+            "entrypoint to call, which flags exist and when each earns its cost. "
+            "Served so an LLM agent can learn to drive this sidecar without a "
+            "repository checkout — previously the only way to get it. Returns "
+            "404 when the build does not carry a skill."
+        ),
+    )
+    async def skill():  # type: ignore[no-untyped-def]
+        # Return-type annotation intentionally omitted, for the same reason as
+        # ``metrics`` above: ``Response`` is imported inside _build_app.
+        from scrapper_tool.skill import skill_markdown  # noqa: PLC0415
+
+        markdown = skill_markdown()
+        if markdown is None:
+            return JSONResponse(
+                status_code=404,
+                content={
+                    "error": "skill_not_bundled",
+                    "detail": "this build carries no SKILL.md",
+                    "remedy": "set SCRAPPER_TOOL_SKILL_PATH to a skill file to serve one",
+                },
+            )
+        return Response(content=markdown, media_type="text/markdown; charset=utf-8")
 
     @app.get(
         "/ready",
@@ -1144,7 +1230,11 @@ def _build_log_entry(
       structured signal — the cascade escalates).
     * ``skipped`` — step couldn't run (extra missing, mode dispatch).
 
-    ``reason`` ∈ ``{ok, blocked, no_signal, extra_missing, exception}``.
+    ``reason`` ∈ ``{ok, blocked, no_signal, extra_missing, exception,
+    not_permitted}``. ``not_permitted`` is deliberately distinct from every
+    other value: it means *we* declined to run the step, not that the step or
+    the vendor failed. A caller counting failures against a vendor's budget must
+    not count this one.
     Cheap enum so consumers (PartsPilot's per-vendor breaker accounting
     in particular) can decide whether to count this against a vendor's
     failure budget.
@@ -1674,6 +1764,10 @@ def _policy_start_rank(req: Any) -> int:
         return 0
     rank = policy.start_tier_rank()
     req.__dict__["_policy_start_rank"] = rank
+    # Independent of the tier rank: the cascade can be unsure which tier wins
+    # here while still knowing which browser got through last time.
+    if policy.best_backend:
+        req.__dict__["_policy_best_backend"] = policy.best_backend
     if rank > 0:
         log: list[dict[str, Any]] = req.__dict__.setdefault("_escalation_log", [])
         log.append(
@@ -1697,6 +1791,81 @@ def _policy_start_rank(req: Any) -> int:
     return rank
 
 
+def _e2_backend_detail(req: Any) -> str | None:
+    """Escalation-log note when E2 ran on a substituted backend.
+
+    Reported rather than silent: a caller comparing E2's result against D/E1's
+    needs to know they did not run on the same browser.
+    """
+    swap = req.__dict__.get("_e2_backend_substituted")
+    if not swap:
+        return None
+    configured, using = swap
+    return f"backend {configured!r} cannot host E2 (no CDP); ran on {using!r}"
+
+
+def _e2_gate(req: Any) -> tuple[bool, str]:  # noqa: PLR0911 - one return per gate outcome
+    """Whether E2 may run for this request, and the reason either way.
+
+    Three inputs, in precedence order:
+
+    1. ``interactive=False`` — an explicit opt-out. The caller is capping cost
+       and that decision is final.
+    2. ``interactive=True`` — an explicit opt-in, which also overrides a learned
+       verdict. A caller who knows the page needs interaction outranks our
+       history of failing on it.
+    3. ``interactive=None`` (auto, the default) — ask the domain policy. A
+       domain never tried gets its chance; one that has failed E2 repeatedly
+       without a win stops being paid for. See
+       :meth:`~scrapper_tool.recipe.policy.DomainPolicy.should_try_e2`.
+
+    A policy lookup failure resolves to *allow*: the worst case is one expensive
+    tier we did not have to run, which is strictly better than silently
+    declining to try — the failure mode this whole change exists to remove.
+    """
+    interactive = getattr(req, "interactive", None)
+    if interactive is False:
+        return False, "interactive=false; caller opted out of E2"
+    if interactive is True:
+        return True, "interactive=true; explicit opt-in"
+    try:
+        from scrapper_tool.recipe.policy import (  # noqa: PLC0415
+            domain_policy_enabled,
+            get_policy_store,
+        )
+
+        if not domain_policy_enabled():
+            return True, "auto; domain policy disabled, so E2 is always reachable"
+        policy = get_policy_store().get(req.url)
+    except Exception as exc:  # a policy problem must never suppress a tier
+        _logger.debug("scrape.e2_gate.lookup_failed", url=req.url, error=str(exc)[:120])
+        return True, "auto; policy unavailable"
+    if policy is None:
+        return True, "auto; no history for this domain, so E2 gets its chance"
+    if policy.should_try_e2():
+        return True, f"auto; {policy.e2_attempts} prior E2 attempt(s), {policy.e2_wins} win(s)"
+    return False, policy.e2_skip_reason()
+
+
+def _record_e2_attempt(req: Any, *, won: bool) -> None:
+    """Remember that E2 actually ran here, and whether it worked.
+
+    Best-effort like every other policy write: learning is an optimisation for
+    next time and must never affect the result the caller already has.
+    """
+    try:
+        from scrapper_tool.recipe.policy import (  # noqa: PLC0415
+            domain_policy_enabled,
+            get_policy_store,
+        )
+
+        if not domain_policy_enabled():
+            return
+        get_policy_store().record_e2_attempt(req.url, won=won)
+    except Exception as exc:
+        _logger.debug("scrape.e2_attempt.record_failed", url=req.url, error=str(exc)[:120])
+
+
 def _record_policy(payload: dict[str, Any] | None, req: Any) -> None:
     """After a scrape, remember which tier reached content on this domain.
 
@@ -1717,7 +1886,10 @@ def _record_policy(payload: dict[str, Any] | None, req: Any) -> None:
         if not domain_policy_enabled():
             return
         get_policy_store().record(
-            req.url, tier, challenge_vendor=req.__dict__.get("_challenge_detected")
+            req.url,
+            tier,
+            challenge_vendor=req.__dict__.get("_challenge_detected"),
+            winning_backend=req.__dict__.get("_render_backend_used"),
         )
     except Exception as exc:
         _logger.debug("scrape.policy.record_failed", url=req.url, error=str(exc)[:120])
@@ -1778,8 +1950,56 @@ def _agent_cfg_for(req: Any, tier: str) -> Any:
     if tier == "e1":
         _record_e1_cookie_outcome(req, cfg)
     else:
+        cfg = _cfg_for_e2_backend(req, cfg)
         _record_e2_cookie_outcome(req, cfg)
     return cfg
+
+
+def _cfg_for_e2_backend(req: Any, cfg: Any) -> Any:
+    """Ensure E2 gets a backend that can actually host it.
+
+    browser-use attaches over CDP only. Camoufox is Firefox and Firefox dropped
+    CDP for WebDriver BiDi, so ``SCRAPPER_TOOL_AGENT_BROWSER=camoufox`` — the
+    correct and recommended setting for D/E1 — makes E2 structurally impossible.
+    That combination used to surface as a 503 the caller had to decode and fix
+    by hand; both settings are individually valid, so it read as a bug in the
+    tool rather than an impossible pair.
+
+    The substitution is safe precisely because it is scoped to this request's E2
+    leg: D and E1 keep Camoufox, which is where its measured bypass advantage
+    actually applies. An explicit per-request ``browser`` always wins — a caller
+    who names a backend has made a decision, and silently overriding it would
+    reintroduce the silent-downgrade problem from the other direction.
+    """
+    try:
+        from scrapper_tool.agent.backends.browser import (  # noqa: PLC0415
+            BACKEND_CAPABILITIES,
+            backends_supporting,
+        )
+    except ImportError:
+        # No [llm-agent] extra, so there is no E2 to host and nothing to choose
+        # between. Leaving the config untouched keeps the missing-extra error
+        # the caller actually needs to see.
+        return cfg
+
+    if getattr(req, "browser", None):
+        return cfg  # explicit caller choice outranks us
+    current = getattr(cfg, "browser", None)
+    caps = BACKEND_CAPABILITIES.get(str(current))
+    if caps is not None and caps.cdp:
+        return cfg
+    candidates = backends_supporting(cdp=True)
+    if not candidates:  # pragma: no cover — the table always has one
+        return cfg
+    chosen = candidates[0]
+    req.__dict__["_e2_backend_substituted"] = (current, chosen)
+    _logger.info(
+        "scrape.e2.backend_substituted",
+        configured=current,
+        using=chosen,
+        reason="browser-use attaches over CDP; the configured backend offers none",
+    )
+    return cfg.merged(browser=chosen) if hasattr(cfg, "merged") else cfg
 
 
 def _record_e1_cookie_outcome(req: Any, cfg: Any) -> None:
@@ -1906,12 +2126,135 @@ def _harvest_cookies(req: Any, harvested: Any, *, tier: str) -> None:
     )
 
 
+def _backend_capabilities_payload() -> list[dict[str, Any]]:
+    """Every browser backend, what it can host, and whether it is installed.
+
+    Valid backend names appeared in no documentation: a downstream integration
+    discovered them from an enum embedded in an error message, after concluding
+    E2 was structurally unavailable. They are part of the contract, so they are
+    published.
+    """
+    try:
+        from scrapper_tool.agent.backends.browser import (  # noqa: PLC0415
+            BACKEND_CAPABILITIES,
+            BACKEND_FALLBACK_ORDER,
+        )
+    except ImportError:
+        return []
+    installed = {"llm-agent": _agent_available(), "hostile": _hostile_available()}
+    return [
+        {
+            "name": name,
+            "engine": BACKEND_CAPABILITIES[name].engine,
+            "cdp": BACKEND_CAPABILITIES[name].cdp,
+            "requires_extra": BACKEND_CAPABILITIES[name].extra,
+            "installed": installed.get(BACKEND_CAPABILITIES[name].extra, False),
+            # E2 attaches over CDP only, so this is the field that answers
+            # "why can't I reach the interactive tier?" without a failed request.
+            "can_host_e2": BACKEND_CAPABILITIES[name].cdp,
+        }
+        for name in BACKEND_FALLBACK_ORDER
+    ]
+
+
+def _tier_capabilities_payload() -> list[dict[str, Any]]:
+    """Each cascade tier and whether it can actually run here.
+
+    The point is to let a client warn at startup — "E2 is configured but
+    unreachable with this backend" — rather than on the first hostile page
+    months later, which is how one integration actually found out.
+    """
+    agent = _agent_available()
+    return [
+        {"tier": "a_b_c", "available": True, "reason": "always available"},
+        {
+            "tier": "d",
+            "available": _hostile_available(),
+            "reason": "requires the [hostile] extra",
+        },
+        {
+            "tier": "render",
+            "available": agent and _render_tier_enabled(),
+            "reason": "requires the [llm-agent] extra and SCRAPPER_TOOL_RENDER_TIER=1",
+        },
+        {"tier": "e1", "available": agent, "reason": "requires the [llm-agent] extra"},
+        {
+            "tier": "e2",
+            "available": agent,
+            "reason": (
+                "requires the [llm-agent] extra; runs on a CDP-capable backend, "
+                "selected automatically when the configured one cannot host it"
+            ),
+        },
+    ]
+
+
 def _render_tier_enabled() -> bool:
     """Render tier is on by default; ``SCRAPPER_TOOL_RENDER_TIER=0`` disables it."""
     return _extras.render_tier_enabled()
 
 
-async def _do_render_step(
+_DEFAULT_MAX_RENDER_BACKENDS = 2
+
+
+def _max_render_backends() -> int:
+    """How many browser backends the render tier may burn on one URL.
+
+    Two by default. The second attempt is cheap relative to escalating a tier
+    (a browser launch, not an LLM loop) and it changes *engine*, which is the
+    variable most likely to change a bot-wall verdict. Beyond two the returns
+    fall off fast and the latency does not.
+    """
+    raw = os.environ.get("SCRAPPER_TOOL_RENDER_MAX_BACKENDS", "")
+    try:
+        value = int(raw)
+    except ValueError:
+        return _DEFAULT_MAX_RENDER_BACKENDS
+    return max(1, value)
+
+
+def _interstitial_vendor(html: str, status_code: int) -> str | None:
+    """Bot-vendor name if this render hit a wall, else None."""
+    from scrapper_tool._challenge import is_interstitial  # noqa: PLC0415
+
+    return is_interstitial(html, status_code)
+
+
+def _render_backend_candidates(req: Any, cfg: Any) -> tuple[str, ...]:
+    """Browser backends to try at the render tier, best first.
+
+    Ordering, in precedence:
+
+    1. An explicit per-request ``browser`` — a caller who names one has decided,
+       and there is nothing to search.
+    2. Whatever the domain policy saw win here before. Evidence about *this*
+       domain outranks the operator's global default.
+    3. The configured default, then the remaining engines.
+
+    Capped by :func:`_max_render_backends`. The cap is what keeps "try
+    everything" from meaning "try everything every time" — see
+    ``BACKEND_FALLBACK_ORDER`` for why the order is complementarity rather than
+    strength.
+    """
+    configured = str(getattr(cfg, "browser", "") or "camoufox")
+    if getattr(req, "browser", None):
+        return (configured,)
+    try:
+        from scrapper_tool.agent.backends.browser import (  # noqa: PLC0415
+            BACKEND_FALLBACK_ORDER,
+        )
+    except ImportError:
+        return (configured,)
+
+    ordered: list[str] = []
+    learned = req.__dict__.get("_policy_best_backend")
+    for name in (learned, configured, *BACKEND_FALLBACK_ORDER):
+        if name and name not in ordered:
+            ordered.append(str(name))
+    return tuple(ordered[: _max_render_backends()])
+
+
+async def _do_render_step(  # noqa: PLR0915 - linear tier; the backend loop is the point
     req: Any,
     attempts: list[str],
     start: float,
@@ -1969,18 +2312,8 @@ async def _do_render_step(
             locale=cfg.camoufox_locale,
         )
         render_cookies = _cookies_for_tier(req, "render")
-        result = await render_html(
-            req.url,
-            browser=cfg.browser,
-            timeout_s=cfg.timeout_s,
-            options=options,
-            cdp_url=cfg.obscura_cdp_url,
-            cookies=render_cookies,
-        )
-        if render_cookies:
-            _mark_cookies_applied(req, "render")
     except Exception as exc:
-        _logger.warning("scrape.render.failed", url=req.url, error=str(exc)[:200])
+        _logger.warning("scrape.render.config_failed", url=req.url, error=str(exc)[:200])
         log.append(
             _build_log_entry(
                 "render",
@@ -1991,6 +2324,71 @@ async def _do_render_step(
             )
         )
         return None, exc
+
+    # Backend exhaustion. A bot wall is a verdict on *this browser*, not on the
+    # tier: measured on tascaparts.com, Camoufox got a clean 200 where Patchright
+    # earned a hard WAF block, and other targets invert that. So a walled render
+    # retries on a different engine before the cascade pays for an LLM tier.
+    #
+    # Only a *wall* triggers the retry. A timeout, a crash on the last candidate,
+    # or a page with no extractable signal are not backend-dependent verdicts,
+    # and retrying them would double the cost for nothing.
+    candidates = _render_backend_candidates(req, cfg)
+    result = None
+    last_exc: BaseException | None = None
+    for idx, backend_name in enumerate(candidates):
+        is_last = idx == len(candidates) - 1
+        attempt_start = time.perf_counter()
+        try:
+            attempt = await render_html(
+                req.url,
+                browser=backend_name,
+                timeout_s=cfg.timeout_s,
+                options=options,
+                cdp_url=cfg.obscura_cdp_url,
+                cookies=render_cookies,
+            )
+        except Exception as exc:
+            last_exc = exc
+            _logger.warning(
+                "scrape.render.failed", url=req.url, backend=backend_name, error=str(exc)[:200]
+            )
+            log.append(
+                _build_log_entry(
+                    "render",
+                    outcome="failed",
+                    reason="exception",
+                    duration_s=time.perf_counter() - attempt_start,
+                    detail=f"[{backend_name}] {type(exc).__name__}: {exc!s}"[:200],
+                )
+            )
+            continue
+
+        result = attempt
+        req.__dict__["_render_backend_used"] = backend_name
+        vendor = _interstitial_vendor(attempt.html, attempt.status)
+        if vendor is None or is_last:
+            break
+        _logger.info(
+            "scrape.render.backend_walled", url=req.url, backend=backend_name, vendor=vendor
+        )
+        log.append(
+            _build_log_entry(
+                "render",
+                outcome="failed",
+                reason="blocked",
+                duration_s=time.perf_counter() - attempt_start,
+                detail=(
+                    f"[{backend_name}] {vendor} wall; retrying on "
+                    f"{candidates[idx + 1]!r} (different engine)"
+                ),
+            )
+        )
+
+    if result is None:
+        return None, last_exc
+    if render_cookies:
+        _mark_cookies_applied(req, "render")
 
     # Harvest BEFORE the accept/reject branch below. A render can win a
     # cf_clearance and still produce no accepted signal — that is precisely the
@@ -2234,16 +2632,21 @@ async def _do_scrape_e_tier(  # noqa: PLR0912, PLR0915 — linear cascade; split
             raise last_error
         raise ScrapingError("/scrape mode=extract failed without an exception (unreachable)")
 
-    # ----- E2 gate: interactive tasks only -----
+    # ----- E2 gate: learned per domain -----
     # mode="browse" is a direct request for E2, so it bypasses the gate.
-    if req.mode != "browse" and not getattr(req, "interactive", False):
+    e2_allowed, e2_reason = (True, "mode=browse") if req.mode == "browse" else _e2_gate(req)
+    if not e2_allowed:
         log.append(
             _build_log_entry(
                 "e2",
                 outcome="skipped",
-                reason="no_signal",
+                # "not_permitted" rather than "no_signal": the vendor did not
+                # beat us here, our own configuration or learned history declined
+                # to try. Only one of those is actionable by the caller, and the
+                # old shared reason made them indistinguishable in the log.
+                reason="not_permitted",
                 duration_s=0.0,
-                detail="interactive=false; E2 reserved for login/pagination/form flows",
+                detail=e2_reason,
             )
         )
         if blocked_e1 is not None:
@@ -2275,18 +2678,25 @@ async def _do_scrape_e_tier(  # noqa: PLR0912, PLR0915 — linear cascade; split
     try:
         result = await agent_browse(req.url, instruction, schema=schema, config=cfg)
         _harvest_cookies(req, result.cookies, tier="e2")
+        # Recorded before the response is built: this is the observation that
+        # decides whether E2 is worth paying for on this domain next time, and
+        # a win here is what permanently re-enables a domain the futility
+        # counter had written off.
+        _record_e2_attempt(req, won=not result.blocked)
         log.append(
             _build_log_entry(
                 "e2",
                 outcome="won",
                 reason="ok",
                 duration_s=time.perf_counter() - e2_start,
+                detail=_e2_backend_detail(req),
             )
         )
         return _scrape_response_from_agent(
             result, attempts, start, mode="e2", hostile_skipped=hostile_skipped, req=req
         )
     except AgentBlockedError as exc:
+        _record_e2_attempt(req, won=False)
         log.append(
             _build_log_entry(
                 "e2",

@@ -145,7 +145,8 @@ Add to your client's MCP config (`.mcp.json` for Claude Code,
 }
 ```
 
-Restart the client and all nine tools appear. That is the whole setup for the
+Restart the client and all nine tools appear, plus a `skill://scrapper-tool`
+resource carrying the tool's own operating manual. That is the whole setup for the
 default transport — stdio, which the client spawns and talks to over
 stdin/stdout.
 

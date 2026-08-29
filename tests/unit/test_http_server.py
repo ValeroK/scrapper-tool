@@ -330,7 +330,12 @@ class TestScrape:
         monkeypatch.setitem(sys.modules, "scrapper_tool.agent", agent_module)
 
         async with _client(app_no_auth) as client:
-            resp = await client.post("/scrape", json={"url": "https://site.test/missing"})
+            # interactive=False: this test pins E1's own failure surface, so E2
+            # must stay out of the way. Under the default (auto) the cascade
+            # would correctly escalate, which is a different test.
+            resp = await client.post(
+                "/scrape", json={"url": "https://site.test/missing", "interactive": False}
+            )
 
         assert resp.status_code == 500
         body = resp.json()
@@ -2189,7 +2194,7 @@ class TestDomainPolicySkip:
         _mock_agent_module(monkeypatch, extract_result=blocked)
 
         async with _client(app_no_auth) as client:
-            await client.post("/scrape", json={"url": "https://hard.test/p"})
+            await client.post("/scrape", json={"url": "https://hard.test/p", "interactive": False})
 
         assert get_policy_store().get("https://hard.test/p") is None
 
@@ -2198,12 +2203,13 @@ class TestDomainPolicySkip:
 
 
 class TestE2InteractiveGate:
-    """B4 — a blocked E1 no longer auto-escalates into the agent loop.
+    """The explicit halves of the tri-state ``interactive`` flag.
 
-    E2 (browser-use) is the priciest tier by a wide margin, and running it on
-    every blocked E1 spends a multi-step agent loop to hit the same wall more
-    slowly. It earns its cost only on genuinely interactive flows, so the caller
-    has to say so.
+    ``interactive`` defaults to *auto* since v3.2.0 — the learned gate in
+    :class:`TestE2LearnedGate` covers that path. What these pin is that the two
+    explicit values still win outright: ``False`` opts out of E2 entirely (the
+    old default, for callers capping cost) and ``True`` forces it to be
+    reachable regardless of what the domain policy has learned.
     """
 
     @staticmethod
@@ -2228,18 +2234,24 @@ class TestE2InteractiveGate:
         _mock_agent_module(
             monkeypatch,
             extract_result=blocked,
-            browse_side_effect=AssertionError("E2 must not run without interactive=true"),
+            browse_side_effect=AssertionError("E2 must not run when opted out"),
         )
 
         async with _client(app_no_auth) as client:
-            resp = await client.post("/scrape", json={"url": "https://protected.com/p"})
+            resp = await client.post(
+                "/scrape", json={"url": "https://protected.com/p", "interactive": False}
+            )
 
         body = resp.json()
         assert body["pattern_attempts"] == ["a_b_c", "e1"]
         assert body["blocked"] is True
         gate = [r for r in body["escalation_log"] if r["step"] == "e2"]
         assert gate[0]["outcome"] == "skipped"
-        assert "interactive=false" in gate[0]["detail"]
+        # "not_permitted", never "no_signal": we declined to run the tier, the
+        # vendor did not beat us. A caller counting a vendor's failure budget
+        # must be able to tell those apart from the log alone.
+        assert gate[0]["reason"] == "not_permitted"
+        assert "opted out" in gate[0]["detail"]
 
     @pytest.mark.asyncio
     async def test_blocked_e1_escalates_with_interactive(
@@ -2269,7 +2281,9 @@ class TestE2InteractiveGate:
         _mock_agent_module(monkeypatch, extract_result=blocked)
 
         async with _client(app_no_auth) as client:
-            resp = await client.post("/scrape", json={"url": "https://protected.com/p"})
+            resp = await client.post(
+                "/scrape", json={"url": "https://protected.com/p", "interactive": False}
+            )
 
         assert resp.status_code == 200
         body = resp.json()
@@ -2311,7 +2325,9 @@ class TestE2InteractiveGate:
         _mock_agent_module(monkeypatch, extract_side_effect=AgentBlockedError("e1 blocked"))
 
         async with _client(app_no_auth) as client:
-            resp = await client.post("/scrape", json={"url": "https://protected.com/p"})
+            resp = await client.post(
+                "/scrape", json={"url": "https://protected.com/p", "interactive": False}
+            )
 
         assert resp.status_code == 422
         assert resp.json()["error"] == "blocked"
@@ -2378,11 +2394,13 @@ class TestHardE1FailureHandsOffToE2:
         _mock_agent_module(
             monkeypatch,
             extract_side_effect=AgentError("net::ERR_NAME_NOT_RESOLVED"),
-            browse_side_effect=AssertionError("E2 must not run without interactive=true"),
+            browse_side_effect=AssertionError("E2 must not run when opted out"),
         )
 
         async with _client(app_no_auth) as client:
-            resp = await client.post("/scrape", json={"url": "https://protected.com/p"})
+            resp = await client.post(
+                "/scrape", json={"url": "https://protected.com/p", "interactive": False}
+            )
 
         assert resp.status_code == 500
         body = resp.json()

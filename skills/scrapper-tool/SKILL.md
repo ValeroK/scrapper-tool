@@ -31,15 +31,24 @@ a_b_c    curl_cffi TLS-impersonation HTTP + parse
 d        Scrapling (hostile fetcher, solves Cloudflare)
 render   stealth browser (Camoufox) + parse         NO LLM
 e1       Crawl4AI + local LLM (one call)
-e2       browser-use agent (multi-step)             priciest, opt-in only
+e2       browser-use agent (multi-step)             priciest, auto-reached
 ```
 
 - It **auto-escalates**: a page that a plain fetch can read is served by `a_b_c`;
   a JS-rendered or 403-walled page climbs to `render`; only genuinely unstructured
   or interactive pages reach the LLM tiers.
-- **`e2` (the interactive agent) never runs unless you ask for it** with
-  `interactive=true`. It's for login / pagination / dynamic forms — a merely
-  *walled* page will wall the agent too, for far more cost.
+- **`e2` (the interactive agent) is reached automatically** once every cheaper
+  tier is exhausted. You do not have to recognise an interactive page — that is
+  the cascade's job. It is skipped only on a domain where it has already failed
+  twice without ever winning, and a single win re-enables it for good.
+  `interactive=true` forces it anyway; `interactive=false` opts out to cap cost.
+- **A walled page gets more than one browser.** Backends are complementary, not
+  ranked: on one target Camoufox gets a clean 200 where Patchright is hard-
+  blocked, and on another the reverse. So a walled render retries on a different
+  engine before anything pays for an LLM tier.
+- **Captchas are solved wherever they appear** — Turnstile, reCAPTCHA v2,
+  hCaptcha and GeeTest/DataDome sliders — from the `render` tier upward, not just
+  in the LLM tiers.
 - Success is judged on **content, not status code**: a 403 that carries a real
   rendered DOM (common with Akamai) counts as a win.
 
@@ -190,8 +199,8 @@ auto_scrape(
   url,                       # required
   schema_json = null,        # optional: shape to extract (see "Schemas" below)
   instruction = null,        # optional: natural-language extraction hint (LLM tiers)
-  interactive = false,       # true → allow the E2 agent for login/pagination/forms
-  browser = null,            # "camoufox" (default) | "patchright" | "obscura"
+  interactive = null,        # null = auto (default). true forces E2, false opts out
+  browser = null,            # override the automatic choice; GET /capabilities lists valid names
   timeout_s = 120,
   hostile_only = false,      # skip the HTTP ladder, start at Scrapling (known-hard sites)
 )
@@ -225,7 +234,7 @@ result = await scrape("https://store.example.com/product/123")
 print(result["pattern_used"], result["product"])
 ```
 
-`scrape(url, schema=None, *, interactive=False, mode="auto", browser=None,
+`scrape(url, schema=None, *, interactive=None, mode="auto", browser=None,
 model=None, timeout_s=None, instruction=None, persist_browser_profile_dir=None,
 cookies=None)` — same params as `auto_scrape`, plus two the MCP surface does not
 expose: `cookies` (see "It needs me to be logged in") and
@@ -276,6 +285,11 @@ GET  /health   /ready   /metrics    (Prometheus)
 `POST /scrape` takes the same fields as `auto_scrape` and returns the same
 payload. Also: `/fetch` (tier 1 only), `/extract` (force E1), `/browse` (force E2).
 
+Two endpoints exist so you never have to guess at this tool's shape:
+`GET /capabilities` lists the valid `browser` names, which tiers are usable in
+this deployment, and the flags that gate them; `GET /skill` returns this
+document. Over MCP the same text is the `skill://scrapper-tool` resource.
+
 Sending `cookies` to a sidecar with no API key configured is refused with **403**
 — an open port that accepts session cookies lets anyone replay someone's login
 through that host. The operator sets `SCRAPPER_TOOL_HTTP_API_KEY` (and you send
@@ -322,11 +336,15 @@ Every scrape returns a dict. The keys that matter:
 | `cookies_skipped` | `[{tier, reason}]` for tiers that ran **without** them. Same condition |
 | `cookies_harvested_from` | tiers that *won* a cookie (e.g. a `cf_clearance`) and passed it forward |
 
-**How to act on it:** if `blocked` is true, the site defeated every available
-tier — retry with `interactive=true` only if the page genuinely needs
-interaction, otherwise report it as unreachable (it may need a residential proxy,
-which the operator supplies via `SCRAPPER_TOOL_PROXIES`, not something you can
-fix in the call). If `pattern_used` is `e1`/`e2`, a local LLM was used — that's
+**How to act on it:** if `blocked` is true, the site defeated every tier the
+cascade was allowed to run — including, by default, more than one browser engine
+and the interactive agent. Read `escalation_log` before concluding anything: a
+row with `reason: "not_permitted"` means *we* declined to run that tier (an
+explicit `interactive=false`, a missing extra, or a learned verdict), which is a
+different problem from a tier that ran and lost. Only the first is fixable in the
+call. If everything genuinely ran and lost, report it as unreachable — it may
+need a residential proxy, which the operator supplies via
+`SCRAPPER_TOOL_PROXIES`, not something you can fix in the call. If `pattern_used` is `e1`/`e2`, a local LLM was used — that's
 normal for hard/unstructured pages but slower; a CSS `schema` avoids it when the
 data is in the DOM.
 
@@ -346,8 +364,9 @@ browser profile dir and let the browser keep its own jar.
   `schema` if you want specific fields.
 - **"Get every product on this site"** → `map_site` first to gauge size, then
   `crawl_site` with a `schema`.
-- **"It needs me to log in / click through pages / fill a form"** → add
-  `interactive=true` (this is the only case that unlocks the E2 agent).
+- **"It needs me to log in / click through pages / fill a form"** → just call
+  `auto_scrape`; the cascade reaches the E2 agent on its own. Pass
+  `interactive=true` only to force it past a learned "E2 never works here".
 - **"It's a known-hard site (Cloudflare/Akamai)"** → just call `auto_scrape`; the
   cascade escalates on its own. Optionally `hostile_only=true` to skip the
   ladder and save ~2 s.
@@ -398,8 +417,9 @@ The escape hatch is always **allowlist the target**, never turn the guard off:
   missing / blocked with the one command that fixes it. The common causes are a
   browser *module* that imports while its *binary* was never downloaded, and a
   local LLM that isn't running. `e2 | blocked` on the default `camoufox` backend
-  is expected, not a fault — Firefox has no CDP, so E2 needs
-  `SCRAPPER_TOOL_AGENT_BROWSER=patchright`.
+  is a *doctor* artefact, not a scrape fault: Firefox has no CDP, so E2 cannot
+  attach to Camoufox — but a real scrape now picks a CDP-capable backend for the
+  E2 leg by itself, leaving D and E1 on Camoufox where its stealth counts.
 
 - **`docker run … scrapper-tool doctor` does not work.** The image entrypoint is
   `scrapper-tool-serve`, so those tokens are parsed as server flags and it exits

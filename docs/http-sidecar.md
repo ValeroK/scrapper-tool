@@ -209,6 +209,8 @@ Returns 503 if `prometheus-client` isn't installed in this build (older `[http]`
 | `/health` | GET | no | Liveness probe — always 200 |
 | `/ready` | GET | no | Readiness with detailed component checks |
 | `/version` | GET | no | Version + which extras are installed |
+| `/capabilities` | GET | no | Valid `browser` names with engine/CDP support, which tiers are usable here, and the flags that gate them. Check this at client startup. |
+| `/skill` | GET | no | The tool's own operating manual as markdown, for LLM agents driving the sidecar |
 | `/scrape` | POST | optional | **Primary** — auto-escalating ladder A/B/C → D → E1 → E2 |
 | `/fetch` | POST | optional | Pattern A/B/C — TLS-impersonation fetch + Pattern B/C extraction |
 | `/extract` | POST | optional | Pattern E1 — Crawl4AI + LLM (1 LLM call) |
@@ -217,7 +219,7 @@ Returns 503 if `prometheus-client` isn't installed in this build (older `[http]`
 | `/redoc` | GET | no | ReDoc UI (read-friendly reference) |
 | `/openapi.json` | GET | no | Raw OpenAPI 3.1 spec |
 
-Auth: when `SCRAPPER_TOOL_HTTP_API_KEY` is set, the four POST endpoints require `X-API-Key: <value>`. The operational endpoints (`/health`, `/ready`, `/version`) and docs (`/docs`, `/redoc`, `/openapi.json`) are always unauthenticated so orchestrators can probe and clients can read the spec without credentials.
+Auth: when `SCRAPPER_TOOL_HTTP_API_KEY` is set, the four POST endpoints require `X-API-Key: <value>`. The operational endpoints (`/health`, `/ready`, `/version`, `/capabilities`, `/skill`) and docs (`/docs`, `/redoc`, `/openapi.json`) are always unauthenticated so orchestrators can probe and clients can read the spec without credentials.
 
 ---
 

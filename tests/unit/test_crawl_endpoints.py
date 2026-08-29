@@ -335,7 +335,13 @@ class TestCrawlEndpoint:
         monkeypatch.setitem(sys.modules, "scrapper_tool.agent", agent_module)
 
         async with _client(app_no_auth) as client:
-            resp = await client.post("/crawl", json={"url": "https://site.test/", "depth": 1})
+            resp = await client.post(
+                "/crawl",
+                # interactive=False: this pins E1's *own* failure surface, so E2
+                # must stay out of it. Under the default (auto) the cascade would
+                # correctly escalate and the dead host would be E2's problem.
+                json={"url": "https://site.test/", "depth": 1, "interactive": False},
+            )
 
         assert resp.status_code == 200, "one dead page must not 5xx the whole crawl"
         body = resp.json()

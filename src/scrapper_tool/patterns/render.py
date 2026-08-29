@@ -26,11 +26,12 @@ Usage::
 
 from __future__ import annotations
 
+import os
 import re
 from dataclasses import dataclass, field, replace
 from typing import TYPE_CHECKING, Any
 
-from scrapper_tool._challenge import has_real_content
+from scrapper_tool._challenge import has_real_content, is_interstitial
 from scrapper_tool._logging import get_logger
 from scrapper_tool._urlguard import assert_tier_allowed, check_url, url_guard_enabled
 from scrapper_tool.agent.backends.browser import (
@@ -139,6 +140,57 @@ class RenderResult:
     cookies: Sequence[dict[str, Any]] = field(default_factory=tuple)
 
 
+def _captcha_solving_enabled() -> bool:
+    """On by default; ``SCRAPPER_TOOL_RENDER_SOLVE_CAPTCHA=0`` disables."""
+    raw = os.environ.get("SCRAPPER_TOOL_RENDER_SOLVE_CAPTCHA")
+    if raw is None or not raw.strip():
+        return True
+    return raw.strip().lower() in {"1", "true", "yes", "on"}
+
+
+async def _try_clear_challenge(page: Any, url: str, html: str, status: int) -> str:
+    """Attempt to clear a bot wall on a live render, returning the resulting HTML.
+
+    The captcha stack (settle -> checkbox -> slider -> local vision -> paid
+    token) already existed but was reachable only from E1 and E2 — the two most
+    expensive tiers. That is backwards: the render tier holds a live Playwright
+    page, which is everything the solvers need, and it sits *below* the LLM
+    tiers. A wall that a checkbox click would have cleared was escalating into an
+    agent loop, or being reported as blocked outright.
+
+    Deliberately gated on an already-detected interstitial. ``solve_on_page``
+    will happily settle-and-poll a page with no challenge on it, and paying that
+    on every ordinary render would tax the common case for the rare one.
+
+    Never raises. A captcha attempt is an optimisation on top of a render that
+    has already happened; if it fails, the caller still gets the walled HTML and
+    the cascade escalates exactly as before.
+    """
+    if is_interstitial(html, status) is None:
+        return html
+    try:
+        from scrapper_tool.agent.backends import get_captcha_solver  # noqa: PLC0415
+        from scrapper_tool.agent.backends.captcha_dom import solve_on_page  # noqa: PLC0415
+        from scrapper_tool.agent.backends.llm import get_vision_backend  # noqa: PLC0415
+        from scrapper_tool.agent.types import AgentConfig  # noqa: PLC0415
+    except ImportError:
+        return html  # no [llm-agent] extra: nothing to solve with
+
+    try:
+        cfg = AgentConfig.from_env()
+        solved = await solve_on_page(
+            page, get_captcha_solver(cfg), url, vision=await get_vision_backend(cfg)
+        )
+    except Exception as exc:
+        _logger.info("patterns.render.captcha_attempt_failed", url=url, error=str(exc)[:200])
+        return html
+    if not solved:
+        _logger.info("patterns.render.captcha_unsolved", url=url)
+        return html
+    _logger.info("patterns.render.captcha_cleared", url=url)
+    return str(await page.content())
+
+
 async def render_html(
     url: str,
     *,
@@ -152,6 +204,7 @@ async def render_html(
     behavior: str = "off",
     proxy_pool: ProxyPool | None = None,
     cookies: list[CookieIn] | None = None,
+    solve_captcha: bool | None = None,
 ) -> RenderResult:
     """Render ``url`` with a stealth browser and return the HTML. No LLM.
 
@@ -174,6 +227,10 @@ async def render_html(
         Caller-supplied cookies. Only those matching ``url`` by domain, path,
         scheme and expiry are injected, and injection happens *before* the
         first navigation.
+    solve_captcha
+        Attempt to clear a detected bot wall in-page before returning. Defaults
+        to the ``SCRAPPER_TOOL_RENDER_SOLVE_CAPTCHA`` setting (on). Costs nothing
+        on a page with no challenge on it.
 
     Raises
     ------
@@ -243,6 +300,11 @@ async def render_html(
 
         html = await page.content()
         status = int(getattr(response, "status", 200) or 200)
+        # Before the cookies are harvested, so a clearance won here flows out on
+        # RenderResult and the tiers above inherit it instead of re-fighting the
+        # same wall from scratch.
+        if solve_captcha if solve_captcha is not None else _captcha_solving_enabled():
+            html = await _try_clear_challenge(page, url, html, status)
         final_url = str(getattr(page, "url", url) or url)
         # Named `harvested` rather than `cookies` to keep it distinct from the
         # caller-supplied `cookies` parameter above. These are what the render

@@ -109,6 +109,11 @@ RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
 WORKDIR /app
 COPY --from=builder /app/.venv /app/.venv
 COPY --from=builder /app/src /app/src
+# The skill is the tool's own manual and is served over HTTP and MCP, so it has
+# to exist inside the image. It previously did not: `skills/` was in the sdist
+# but never copied here, so every containerised deployment served a sidecar that
+# could not explain itself.
+COPY skills/ /app/skills/
 COPY pyproject.toml README.md ./
 
 ENV PATH="/app/.venv/bin:${PATH}" \

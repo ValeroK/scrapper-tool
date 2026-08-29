@@ -122,6 +122,70 @@ class BrowserLaunchOptions:
     locale: str | None = None
 
 
+@dataclass(frozen=True)
+class BrowserCapabilities:
+    """What a backend can *structurally* do, independent of how well it evades.
+
+    This exists because the cascade needs to answer two different questions and
+    they have different answers:
+
+    - *Can this tier run on this backend at all?* — a hard yes/no. E2 attaches
+      over CDP only, so a backend with ``cdp=False`` cannot host it no matter how
+      good its stealth is. Encoding that here is what stops the cascade from ever
+      constructing the camoufox+E2 combination that used to raise a 503.
+    - *Which backend should we try next?* — a preference, not a ranking. See
+      ``BACKEND_FALLBACK_ORDER`` for why this deliberately is not a strength
+      ordering.
+
+    ``engine`` matters beyond CDP: retrying a block on a second Chromium is far
+    less likely to help than retrying on a different engine, because most
+    fingerprinting keys off the engine family.
+    """
+
+    name: str
+    engine: Literal["firefox", "chromium", "http"]
+    cdp: bool
+    extra: str
+
+
+BACKEND_CAPABILITIES: dict[str, BrowserCapabilities] = {
+    "camoufox": BrowserCapabilities(
+        name="camoufox", engine="firefox", cdp=False, extra="llm-agent"
+    ),
+    "patchright": BrowserCapabilities(
+        name="patchright", engine="chromium", cdp=True, extra="llm-agent"
+    ),
+    "obscura": BrowserCapabilities(name="obscura", engine="chromium", cdp=True, extra="llm-agent"),
+    "scrapling": BrowserCapabilities(name="scrapling", engine="http", cdp=False, extra="hostile"),
+}
+
+# Order to *try*, not a ranking of strength — the distinction matters and was
+# paid for. On tascaparts.com, Patchright earned a hard "you have been blocked"
+# WAF page where Camoufox got a clean 200; on other targets the reverse holds.
+# Backends are complementary, so the only defensible ordering is "engine we have
+# not tried yet, cheapest first". Camoufox leads because it is the measured best
+# single choice; Patchright follows because it changes *engine*, which is the
+# variable most likely to change the outcome. Obscura needs an external server,
+# so it is last among the browsers.
+BACKEND_FALLBACK_ORDER: tuple[str, ...] = ("camoufox", "patchright", "obscura", "scrapling")
+
+
+def backends_supporting(*, cdp: bool | None = None) -> tuple[str, ...]:
+    """Backend names matching a capability filter, in fallback order.
+
+    ``cdp=True`` is what E2 asks for. The filter is the whole mechanism behind
+    "impossible combinations cannot be constructed": E2 never sees Camoufox in
+    its candidate list, so there is nothing to refuse.
+    """
+    names = []
+    for name in BACKEND_FALLBACK_ORDER:
+        caps = BACKEND_CAPABILITIES[name]
+        if cdp is not None and caps.cdp != cdp:
+            continue
+        names.append(name)
+    return tuple(names)
+
+
 class BrowserBackend(Protocol):
     """Protocol implemented by all browser backends."""
 
@@ -578,13 +642,17 @@ async def open_browser(
 
 
 __all__ = [
+    "BACKEND_CAPABILITIES",
+    "BACKEND_FALLBACK_ORDER",
     "BrowserBackend",
+    "BrowserCapabilities",
     "BrowserHandle",
     "BrowserLaunchOptions",
     "CamoufoxBackend",
     "ObscuraBackend",
     "PatchrightBackend",
     "ScraplingBackend",
+    "backends_supporting",
     "get_browser_backend",
     "open_browser",
     "resolve_context",
