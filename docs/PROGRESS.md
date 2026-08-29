@@ -5,8 +5,9 @@ Living status for the concept-adoption series planned in
 Unlike the dated `research/` snapshots, this file is **edited in place** — it
 describes the current state, not a moment in the past.
 
-Last updated: 2026-08-29. Released as **v3.1.0** (MCP 2.x SDK migration),
-tagged and published to PyPI and GHCR.
+Last updated: 2026-08-29. Released as **v3.1.1**. The MCP 2.x SDK migration
+shipped in 3.1.0; 3.1.1 is a CI/docs follow-up with no functional source change
+(see CHANGELOG). Both are tagged and published to PyPI and GHCR.
 
 ---
 

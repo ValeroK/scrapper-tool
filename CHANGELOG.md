@@ -2,6 +2,34 @@
 
 All notable changes to `scrapper-tool` are recorded here. Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning follows [SemVer](https://semver.org/).
 
+## [3.1.1] - 2026-08-29
+
+CI and documentation only. **No functional source change**: diffing `src/`,
+`pyproject.toml` and `uv.lock` against the `v3.1.0` tag yields exactly three
+lines, all of them the version string itself. No dependency moved and no
+behaviour changed, so the installed package is equivalent to 3.1.0.
+
+Cut as a patch release rather than by moving the `v3.1.0` tag. That tag is
+published; moving it would also have re-fired the release workflows, and PyPI
+refuses a duplicate version, so the run would have failed for nothing.
+
+### Removed
+
+- **The dead Codecov upload.** 3.1.0 reported it as fixed; the first CI run
+  after that release disproved it. See the 3.1.0 entry below for the full
+  history — three faults stacked, the last visible only in CI. Nothing in the
+  repo consumed it (no badge, no `codecov.yml`), so it was removed rather than
+  repaired. `--cov-fail-under=85` is and always was the actual gate, unchanged
+  and still enforced in CI.
+
+### Fixed
+
+- `docs/PROGRESS.md` still described 3.1 as "landed on `main` and unreleased".
+- The 3.1.0 CHANGELOG entry claimed coverage was uploading again. Corrected in
+  place below rather than silently dropped, since that text shipped to PyPI.
+
+---
+
 ## [3.1.0] - 2026-08-29
 
 ### Changed (MCP 2.x SDK migration)

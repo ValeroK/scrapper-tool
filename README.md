@@ -25,7 +25,7 @@ Built from the scraping core behind [PartsPilot](https://github.com/ValeroK/affi
 
 ---
 
-> **Status (2026-08-29):** stable (`v3.1.0`). The public Python API and MCP tool surface are SemVer-stable.
+> **Status (2026-08-29):** stable (`v3.1.1`). The public Python API and MCP tool surface are SemVer-stable.
 >
 > **`v3.1.0`** migrates the MCP server to the 2.x SDK (`FastMCP` — `MCPServer`),
 > lifting the `mcp<2` cap deferred from 3.0.0. No public Python API or MCP tool

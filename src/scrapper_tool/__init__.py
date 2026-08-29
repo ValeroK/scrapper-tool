@@ -72,7 +72,7 @@ from scrapper_tool.proxy import (
     ProxyPool,
 )
 
-__version__ = "3.1.0"
+__version__ = "3.1.1"
 
 
 def _agent_lazy(name: str) -> object:
