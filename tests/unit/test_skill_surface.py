@@ -10,16 +10,31 @@ message, because nothing over the wire said what the tool could do.
 
 from __future__ import annotations
 
+import pathlib
 from typing import TYPE_CHECKING, Any
 
 import pytest
+from httpx import ASGITransport, AsyncClient
 
 from scrapper_tool import http_server
 from scrapper_tool.skill import skill_markdown, skill_path
-from tests.unit.test_http_server import _client
 
 if TYPE_CHECKING:
     from pathlib import Path
+
+
+def _client(app: Any) -> AsyncClient:
+    """A local ASGI client.
+
+    Deliberately duplicated from ``test_http_server`` rather than imported from
+    it. ``tests`` has no ``__init__.py``, so ``from tests.unit...`` resolves only
+    when the repository root happens to be on ``sys.path`` — true under
+    ``python -m pytest`` (which prepends the CWD) and false under the
+    ``uv run pytest`` console script that CI uses. Three lines of duplication
+    beats a cross-module test import that works on one invocation and not the
+    other.
+    """
+    return AsyncClient(transport=ASGITransport(app=app), base_url="http://test")
 
 
 class TestSkillResolution:
@@ -152,3 +167,33 @@ class TestCapabilitiesEndpoint:
         assert tiers["e1"] is False
         assert tiers["e2"] is False
         assert tiers["render"] is False
+
+
+class TestNoCrossTestImports:
+    """Guard against the import that broke CI on the 3.2.0 release push.
+
+    ``tests`` has no ``__init__.py``, so ``from tests.unit.x import y`` resolves
+    only when the repository root is on ``sys.path``. ``python -m pytest``
+    prepends the CWD and it works; the ``uv run pytest`` console script CI uses
+    does not, and it fails at collection with ``No module named 'tests'``.
+
+    A local run therefore cannot catch it, which is exactly why this guard is
+    cheaper than remembering. It is the same kind of check the repo already uses
+    to police hand-written tool lists.
+    """
+
+    def test_no_test_module_imports_the_tests_package(self) -> None:
+        # Derived from __file__, not the CWD: this guard must hold wherever
+        # pytest is invoked from, which is half the point of it.
+        tests_root = pathlib.Path(__file__).resolve().parent.parent
+        offenders = []
+        for path in sorted(tests_root.rglob("*.py")):
+            for lineno, line in enumerate(path.read_text(encoding="utf-8").splitlines(), start=1):
+                stripped = line.strip()
+                if stripped.startswith(("from tests.", "from tests ", "import tests")):
+                    offenders.append(f"{path}:{lineno}: {stripped}")
+        assert not offenders, (
+            "test modules must not import each other via the `tests` package "
+            "(it has no __init__.py, so this passes locally and fails in CI): "
+            + "; ".join(offenders)
+        )
