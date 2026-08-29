@@ -71,12 +71,18 @@ Lifts the `mcp<2` cap deferred from 3.0.0. Planned in
 
 ### Fixed (CI)
 
-- **Coverage is uploaded to Codecov again.** Two independent faults: the step
-  was gated on `matrix.extras == 'dev,agent,http'`, a value the matrix stopped
-  producing when it was trimmed, so the condition was never true; and the
-  coverage run emitted only `term-missing`, so even when it did run there was
-  no report file to upload. Now gated on the Python version alone and emitting
-  `coverage.xml`.
+- **The Codecov upload runs and sends a report again** (it does not yet land
+  — see below). Two independent faults: the step was gated on
+  `matrix.extras == 'dev,agent,http'`, a value the matrix stopped producing
+  when it was trimmed, so the condition was never true; and the coverage run
+  emitted only `term-missing`, so even when it did run there was no report file
+  to upload. Now gated on the Python version alone and emitting `coverage.xml`.
+
+  **Known limitation:** the first CI run after this shipped showed Codecov
+  rejecting the upload with `Token required - not valid tokenless upload`.
+  Both faults above were real and are fixed, but a third only surfaces in CI:
+  the repository needs a `CODECOV_TOKEN` secret. The step is informational and
+  `fail_ci_if_error: false`, so this cannot fail a build.
 
 ---
 

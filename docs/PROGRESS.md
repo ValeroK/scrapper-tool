@@ -5,8 +5,8 @@ Living status for the concept-adoption series planned in
 Unlike the dated `research/` snapshots, this file is **edited in place** — it
 describes the current state, not a moment in the past.
 
-Last updated: 2026-08-29. Released as **v3.0.0**. The 3.1 MCP 2.x SDK migration
-is **landed on `main` and unreleased** — not yet tagged.
+Last updated: 2026-08-29. Released as **v3.1.0** (MCP 2.x SDK migration),
+tagged and published to PyPI and GHCR.
 
 ---
 
@@ -30,7 +30,7 @@ mypy `--strict` clean, zero `docs/openapi/` drift, `pip-audit` clean.
 
 ---
 
-## Landed on `main`, not yet released — 3.1 (MCP 2.x SDK)
+## Shipped — v3.1.0 (MCP 2.x SDK)
 
 Plan: [`research/2026-08-28-mcp-2x-migration-plan.md`](research/2026-08-28-mcp-2x-migration-plan.md).
 All twelve work items done.
@@ -116,7 +116,23 @@ Also fixed while there: `scripts/e2e/test_mcp_session.py` asserted
 `chrome150` and nothing reported it, because that file is neither collected nor
 (until now) linted. It now asserts against `IMPERSONATE_LADDER[0]`.
 
-Still unreleased — **not tagged**. Tagging publishes to PyPI and GHCR.
+**Released 2026-08-29 as `v3.1.0`.** CI green on all ten jobs, including the
+new `mcp-tool-surface-check`. Published to PyPI (`scrapper_tool-3.1.0`, wheel +
+sdist) and GHCR (`3.1.0`, `3.1`, `latest`). Verified from outside the repo by
+installing `scrapper-tool[agent]==3.1.0` from PyPI into a clean venv: it
+resolves `mcp` 2.1.1 and registers all nine tools.
+
+Minor rather than major on purpose: no public Python API and no MCP tool
+changed. The breaking part is the dependency floor on the `[agent]` extra,
+which will not co-install with an `mcp` 1.x pin.
+
+**One thing did not survive contact with CI.** The Codecov upload was reported
+here as fixed; the first real run showed it still rejected, with
+`Token required - not valid tokenless upload`. Both faults found locally were
+real and are fixed — the step runs, and it now finds and sends
+`coverage.xml` — but a third fault only exists in CI: the repo has no
+`CODECOV_TOKEN` secret. Adding it is the one open item. The step is
+informational and cannot fail a build.
 
 ---
 
