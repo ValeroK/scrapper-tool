@@ -68,6 +68,19 @@ def test_documented_tool_count_is_consistent() -> None:
     assert snapshot["tool_count"] == len(snapshot["tools"])
 
 
+def test_help_text_names_every_tool() -> None:
+    """`--help` is a tool list too, and it was three short.
+
+    Found at release time, by reading the output of `scrapper-tool-mcp
+    --help` rather than by any check. auto_scrape, map_site and crawl_site
+    were missing -- the same three that were missing everywhere else.
+    """
+    from scrapper_tool import mcp as mcp_module
+
+    missing = sorted(name for name in _snapshot_tool_names() if name not in mcp_module._HELP_TEXT)
+    assert not missing, f"--help does not mention: {missing}"
+
+
 def test_instructions_string_names_every_tool() -> None:
     """The guidance the LLM reads must not omit tools that exist.
 

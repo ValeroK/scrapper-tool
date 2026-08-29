@@ -25,7 +25,14 @@ Built from the scraping core behind [PartsPilot](https://github.com/ValeroK/affi
 
 ---
 
-> **Status (2026-08-27):** stable (`v3.0.0`). The public Python API and MCP tool surface are SemVer-stable.
+> **Status (2026-08-29):** stable (`v3.1.0`). The public Python API and MCP tool surface are SemVer-stable.
+>
+> **`v3.1.0`** migrates the MCP server to the 2.x SDK (`FastMCP` — `MCPServer`),
+> lifting the `mcp<2` cap deferred from 3.0.0. No public Python API or MCP tool
+> changed; the breaking part is the dependency floor, `mcp>=2.1.1,<3` on the
+> `[agent]` extra, which will not co-install with a `mcp` 1.x pin. It also fixes
+> both docker-compose MCP services, which inherited the REST entrypoint and so
+> never spoke MCP at all.
 >
 > **`v3.0.0`** adds a target URL guard that vets every URL before a request is issued — private, loopback and cloud-metadata targets are refused, and that is **on by default**, which is the breaking part. It also gives the captcha grid tier its own vision model, blocks page-initiated SSRF in the render tier, promotes the impersonation ladder to `chrome150`, and stops overriding the impersonated `User-Agent` (which had been advertising `scrapper-tool/0.1` beside a Chrome TLS handshake — a self-identifying mismatch).
 >

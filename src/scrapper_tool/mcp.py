@@ -1632,9 +1632,10 @@ _VALID_TRANSPORTS = {"stdio", "sse", "streamable-http"}
 
 _HELP_TEXT = """\
 scrapper-tool-mcp {version}
-MCP server exposing scrapper-tool helpers (fetch_with_ladder,
-extract_product, extract_microdata_price, canary, agent_extract,
-agent_browse) as tools any MCP-aware LLM agent can call.
+MCP server exposing scrapper-tool helpers as tools any MCP-aware LLM
+agent can call: auto_scrape (start here), fetch_with_ladder,
+extract_product, extract_microdata_price, map_site, crawl_site,
+agent_extract, agent_browse, canary.
 
 USAGE:
   scrapper-tool-mcp [--transport stdio|sse|streamable-http]
