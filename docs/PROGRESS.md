@@ -126,13 +126,22 @@ Minor rather than major on purpose: no public Python API and no MCP tool
 changed. The breaking part is the dependency floor on the `[agent]` extra,
 which will not co-install with an `mcp` 1.x pin.
 
-**One thing did not survive contact with CI.** The Codecov upload was reported
-here as fixed; the first real run showed it still rejected, with
-`Token required - not valid tokenless upload`. Both faults found locally were
-real and are fixed — the step runs, and it now finds and sends
-`coverage.xml` — but a third fault only exists in CI: the repo has no
-`CODECOV_TOKEN` secret. Adding it is the one open item. The step is
-informational and cannot fail a build.
+**One thing did not survive contact with CI**, and it is instructive. The
+Codecov upload was reported here as fixed. The first real run showed it still
+rejected: `Token required - not valid tokenless upload`. Both faults found
+locally were real and fixed — the step ran, found and sent `coverage.xml`
+— but a third existed only in CI.
+
+Removed rather than repaired, after checking what depended on it: no badge, no
+`codecov.yml`, nothing reading the data, and it had been silently dead since
+the test matrix was trimmed. `--cov-fail-under=85` is and always was the real
+gate, and it runs the same on a laptop as in CI. Fixing the upload would have
+meant a Codecov account and a repo secret to feed a service nobody reads.
+
+Post-release state: nothing outstanding. The remaining known gaps are the two
+the plan deferred on purpose — `doctor` cannot tell whether the captcha
+vision model can *see*, and `scripts/e2e/` stays in the manual tier, so its
+nine-tool coverage only runs when a human runs it.
 
 ---
 
