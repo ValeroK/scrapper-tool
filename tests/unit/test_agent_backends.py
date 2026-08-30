@@ -1427,6 +1427,14 @@ class TestVisionBackendResolution:
         """
         assert llm_mod._VISION_NEGATIVE_TTL_S < llm_mod._VISION_RESOLUTION_TTL_S
 
+        # Drive the clock, never sample it. Patching monotonic to a *fixed*
+        # number is a trap: real monotonic is machine uptime, so once the host
+        # has been up longer than that number the elapsed delta goes negative and
+        # nothing ever expires. That made this test pass or fail on how long the
+        # machine had been running.
+        now = 1_000_000.0
+        monkeypatch.setattr(llm_mod.time, "monotonic", lambda: now)
+
         self._serve(monkeypatch, set(), catalogue=("text-only",))
         cfg = AgentConfig(
             llm="openai_compat",
@@ -1441,7 +1449,8 @@ class TestVisionBackendResolution:
         assert await llm_mod.resolve_vision_model(cfg) is None
 
         # Past it, the tier comes back on its own.
-        monkeypatch.setattr(llm_mod.time, "monotonic", lambda: 10_000.0)
+        later = now + llm_mod._VISION_NEGATIVE_TTL_S + 1
+        monkeypatch.setattr(llm_mod.time, "monotonic", lambda: later)
         assert await llm_mod.resolve_vision_model(cfg) == "text-only"
 
     @pytest.mark.asyncio
