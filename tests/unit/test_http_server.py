@@ -2805,10 +2805,17 @@ class TestModeHostile:
         assert body["is_structured"] is True
 
     @pytest.mark.asyncio
-    async def test_mode_hostile_no_fallback_raises_on_d_failure(
+    async def test_mode_hostile_no_fallback_reports_a_pattern_failure(
         self, app_no_auth: Any, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        # D itself raises; hostile_fallback=False -> AgentBlockedError -> 422.
+        """Our tier failing is not the vendor blocking us.
+
+        This used to raise ``AgentBlockedError`` -> ``422 blocked``, which told
+        the caller the vendor had beaten us. It had not: the fetcher crashed. A
+        downstream consumer spent two days on an anti-bot wall that did not
+        exist, partly on the strength of this status, so a tier that ran and lost
+        for reasons of our own now says exactly that.
+        """
         _install_fake_hostile_client(
             monkeypatch,
             response=RuntimeError("scrapling: turnstile unsolvable"),
@@ -2823,8 +2830,13 @@ class TestModeHostile:
                     "hostile_fallback": False,
                 },
             )
-        assert resp.status_code == 422
-        assert resp.json()["error"] == "blocked"
+        assert resp.status_code == 502
+        body = resp.json()
+        assert body["error"] == "pattern_failed"
+        assert body["pattern"] == "d"
+        assert body["blocked"] is False
+        # No challenge was ever detected, so nothing justifies blaming the vendor.
+        assert body["vendor_hostile"] is False
 
     @pytest.mark.asyncio
     async def test_mode_hostile_no_fallback_no_extra_returns_503(

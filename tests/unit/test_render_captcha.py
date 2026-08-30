@@ -130,3 +130,57 @@ def _async_return(value: Any) -> Any:
         return value
 
     return _inner
+
+
+class TestRedirectOpensTheGate:
+    """The connection between this release and 3.2.0's captcha solver.
+
+    The solver is gated on a *detected* challenge. A wall carrying no vendor
+    signature was invisible to that gate, so the tier that could have cleared it
+    was never even invoked -- the reported bug and the new feature failed from one
+    root cause.
+    """
+
+    @pytest.mark.asyncio
+    async def test_a_signature_less_wall_reached_via_redirect_is_solved(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        captcha = (
+            "<html><head><title>Verification</title></head><body>"
+            "<h1>Please confirm you are not a robot</h1></body></html>"
+        )
+        # No vendor signature, so the body-only classifier sees nothing.
+        from scrapper_tool._challenge import is_interstitial
+
+        assert is_interstitial(captcha, 200) is None
+
+        called: list[str] = []
+
+        async def fake_solve(page: Any, solver: Any, url: str, **kwargs: Any) -> bool:
+            called.append(url)
+            return True
+
+        monkeypatch.setattr("scrapper_tool.agent.backends.captcha_dom.solve_on_page", fake_solve)
+        monkeypatch.setattr(
+            "scrapper_tool.agent.backends.llm.get_vision_backend", _async_return(None)
+        )
+
+        out = await render_mod._try_clear_challenge(
+            _Page(_CLEARED),
+            "https://vendor.test/parts/1",
+            captcha,
+            200,
+            final_url="https://vendor.test/captcha.html",
+        )
+
+        assert called, "the solver was never invoked on a redirect-detected wall"
+        assert out == _CLEARED
+
+    @pytest.mark.asyncio
+    async def test_a_clean_page_with_no_redirect_still_pays_nothing(self) -> None:
+        page = _Page(_CLEARED)
+        out = await render_mod._try_clear_challenge(
+            page, "https://vendor.test/p", _CLEARED, 200, final_url="https://vendor.test/p"
+        )
+        assert out == _CLEARED
+        assert page.content_calls == 0

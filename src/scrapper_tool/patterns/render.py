@@ -31,7 +31,7 @@ import re
 from dataclasses import dataclass, field, replace
 from typing import TYPE_CHECKING, Any
 
-from scrapper_tool._challenge import has_real_content, is_interstitial
+from scrapper_tool._challenge import has_real_content, is_interstitial, landed_on_challenge
 from scrapper_tool._logging import get_logger
 from scrapper_tool._urlguard import assert_tier_allowed, check_url, url_guard_enabled
 from scrapper_tool.agent.backends.browser import (
@@ -138,6 +138,10 @@ class RenderResult:
     status: int
     final_url: str
     cookies: Sequence[dict[str, Any]] = field(default_factory=tuple)
+    # The egress this render actually went out on. Defaults to None (direct), so
+    # every existing constructor keeps working; the cascade surfaces it so a
+    # caller can tell a vendor refusing *them* from a vendor refusing one IP.
+    proxy: str | None = None
 
 
 def _captcha_solving_enabled() -> bool:
@@ -148,7 +152,9 @@ def _captcha_solving_enabled() -> bool:
     return raw.strip().lower() in {"1", "true", "yes", "on"}
 
 
-async def _try_clear_challenge(page: Any, url: str, html: str, status: int) -> str:
+async def _try_clear_challenge(
+    page: Any, url: str, html: str, status: int, *, final_url: str = ""
+) -> str:
     """Attempt to clear a bot wall on a live render, returning the resulting HTML.
 
     The captcha stack (settle -> checkbox -> slider -> local vision -> paid
@@ -166,7 +172,11 @@ async def _try_clear_challenge(page: Any, url: str, html: str, status: int) -> s
     has already happened; if it fails, the caller still gets the walled HTML and
     the cascade escalates exactly as before.
     """
-    if is_interstitial(html, status) is None:
+    # Gated on a *detected* challenge, but detection now includes the redirect
+    # signal. Without it this gate silently disabled the whole solver on any wall
+    # carrying no vendor signature — which is precisely the wall that most needed
+    # solving, and the reason the reported captcha page was never even attempted.
+    if is_interstitial(html, status) is None and not landed_on_challenge(url, final_url, html):
         return html
     try:
         from scrapper_tool.agent.backends import get_captcha_solver  # noqa: PLC0415
@@ -304,7 +314,9 @@ async def render_html(
         # RenderResult and the tiers above inherit it instead of re-fighting the
         # same wall from scratch.
         if solve_captcha if solve_captcha is not None else _captcha_solving_enabled():
-            html = await _try_clear_challenge(page, url, html, status)
+            html = await _try_clear_challenge(
+                page, url, html, status, final_url=str(getattr(page, "url", url) or url)
+            )
         final_url = str(getattr(page, "url", url) or url)
         # Named `harvested` rather than `cookies` to keep it distinct from the
         # caller-supplied `cookies` parameter above. These are what the render
@@ -339,7 +351,13 @@ async def render_html(
             bytes=len(html),
             proxied=attempt_proxy is not None,
         )
-        return RenderResult(html=html, status=status, final_url=final_url, cookies=harvested)
+        return RenderResult(
+            html=html,
+            status=status,
+            final_url=final_url,
+            cookies=harvested,
+            proxy=attempt_proxy,
+        )
 
 
 async def _render_via_scrapling(
@@ -366,7 +384,7 @@ async def _render_via_scrapling(
         status=status,
         bytes=len(html),
     )
-    return RenderResult(html=html, status=status, final_url=final_url)
+    return RenderResult(html=html, status=status, final_url=final_url, proxy=opts.proxy)
 
 
 __all__ = [

@@ -61,6 +61,42 @@ class BlockedError(ScrapingError):
     """
 
 
+class PatternFailed(ScrapingError):
+    """Raised when one of *our* tiers could not deliver, for reasons of our own.
+
+    The distinction this draws is the most expensive one in the whole API, and it
+    used to be missing entirely: a browser that timed out, an extra that was not
+    installed, and a classifier that rejected a body were all raised as
+    :class:`BlockedError`, arriving at the caller as ``422 blocked``. That says
+    the vendor beat us. Frequently the vendor was never involved -- one reported
+    case was a page the vendor served cleanly to a plain HTTP client in the same
+    minute we called it blocked.
+
+    Only one of those two is actionable by the caller, and only one belongs in a
+    per-vendor failure budget. So ``blocked`` is now reserved for evidence of
+    blocking -- a vendor signature, a challenge redirect, a status with a known
+    fingerprint -- and everything else raises this.
+
+    ``vendor_hostile`` is deliberately explicit rather than inferred from the
+    class: a tier can fail *because* of a wall it could not clear, and a caller
+    that wants to count vendor hostility should not have to guess which of our
+    failures were really theirs.
+    """
+
+    def __init__(
+        self,
+        message: str,
+        *,
+        pattern: str,
+        reason: str,
+        vendor_hostile: bool = False,
+    ) -> None:
+        super().__init__(message)
+        self.pattern = pattern
+        self.reason = reason
+        self.vendor_hostile = vendor_hostile
+
+
 class ParseError(ScrapingError):
     """Raised when the extractor cannot find expected fields.
 
@@ -182,6 +218,7 @@ __all__ = [
     "CaptchaSolveError",
     "ConfigurationError",
     "ParseError",
+    "PatternFailed",
     "ScrapingError",
     "UrlNotAllowed",
     "VendorHTTPError",

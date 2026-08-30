@@ -32,6 +32,7 @@ text.
 from __future__ import annotations
 
 import re
+from urllib.parse import urlsplit
 
 # Only the head of a document is scanned — challenge pages declare themselves early
 # and this keeps the check cheap on multi-MB documents.
@@ -241,6 +242,106 @@ def looks_like_content_free_shell(html: str) -> bool:
     return len(" ".join(text.split())) < _SHELL_MAX_TEXT_CHARS
 
 
+# --- redirect-to-challenge -------------------------------------------------
+#
+# The signature tables above answer "does this body announce a known vendor?".
+# They cannot answer "did the vendor quietly move us somewhere else?", and that
+# is the gap that corrupts results the worst way round.
+#
+# Measured: a vendor answered a product URL with a 4,419-byte page at
+# ``/captcha.html``. It has a <title>, it has visible text, and it carries no
+# vendor signature -- so ``is_interstitial`` returned None and
+# ``has_real_content`` returned True, and the caller was handed a captcha as
+# content. A false negative, which is strictly worse than a false block: a false
+# block costs one escalation, a false pass corrupts the dataset silently.
+#
+# The evidence the signature tables miss is in the *URL*: we asked for a product
+# page and finished somewhere else entirely.
+#
+# What this must NOT do is treat any redirect as suspicious. Ordinary redirects
+# are everywhere -- scheme upgrades, trailing slashes, www canonicalisation,
+# locale prefixes, and genuine content moves -- and flagging them would escalate
+# most of the web. So difference alone is never enough; there has to be
+# corroborating evidence, and there are exactly two kinds worth trusting.
+_CHALLENGE_PATH_TOKENS: tuple[str, ...] = (
+    "/captcha",
+    "/challenge",
+    "/blocked",
+    "/access-denied",
+    "/accessdenied",
+    "/_sec/",
+    "/cdn-cgi/challenge",
+    "/distil_r_captcha",
+    "/px/captcha",
+    "/sorry/",
+)
+# Phrases a page shows a *human* when it is asking them to prove they are one.
+# Deliberately much narrower than `_BLOCK_MESSAGE_TERMS`, which matches things
+# like "403" and "challenge" anywhere -- fine for an exception string, far too
+# loose for page text, where "security check" in a footer would condemn the page.
+_VERIFICATION_PHRASES: tuple[str, ...] = (
+    "are not a robot",
+    "are a robot",
+    "verify you are human",
+    "verify you're human",
+    "confirm you are human",
+    "complete the security check",
+    "security check to access",
+    "enable javascript and cookies",
+    "unusual traffic from your",
+)
+
+
+def _normalised_path(url: str) -> str | None:
+    """Path of ``url``, lowercased, without a trailing slash. None if unparseable.
+
+    Host and scheme are deliberately discarded: an http->https upgrade or a www
+    canonicalisation is not a redirect worth reasoning about, and comparing full
+    URLs would flag both.
+    """
+    try:
+        parts = urlsplit(url)
+    except ValueError:
+        return None
+    if not parts.path:
+        return "/"
+    return parts.path.rstrip("/").lower() or "/"
+
+
+def landed_on_challenge(requested_url: str, final_url: str, html: str) -> bool:
+    """True when a request finished on a page that is asking us to prove we're human.
+
+    Two independent signals, either sufficient, both requiring that the path
+    actually changed:
+
+    1. The final path *names* itself a challenge (``/captcha``, ``/sorry/``,
+       ``/cdn-cgi/challenge``...). High precision -- no ordinary product route
+       looks like this -- so no body evidence is needed.
+    2. The path changed and the body is small and says, in words, that it wants
+       a human. Small because challenge interstitials are; the phrase list is
+       narrow because page furniture is not evidence.
+
+    Returns False for everything else, including every redirect that merely moved
+    scheme, host or trailing slash. See :func:`is_interstitial` for the
+    body-signature half of this question -- the two are complementary, and this
+    one exists precisely for walls that carry no recognisable signature.
+    """
+    if not requested_url or not final_url or not html:
+        return False
+    requested_path = _normalised_path(requested_url)
+    final_path = _normalised_path(final_url)
+    if requested_path is None or final_path is None or requested_path == final_path:
+        return False
+
+    if any(token in final_path for token in _CHALLENGE_PATH_TOKENS):
+        return True
+
+    if len(html) >= _CHALLENGE_BODY_MAX_BYTES:
+        return False
+    lowered = html.lower()
+    return any(phrase in lowered for phrase in _VERIFICATION_PHRASES)
+
+
 def looks_like_spa_shell(html: str) -> bool:
     """True when the response looks like an unhydrated SPA shell (small + SPA root)."""
     if not html or len(html) > _SPA_SHELL_MAX_BYTES:
@@ -339,6 +440,7 @@ __all__ = [
     "has_real_content",
     "is_cf_challenge_body",
     "is_interstitial",
+    "landed_on_challenge",
     "looks_like_block_message",
     "looks_like_content_free_shell",
     "looks_like_spa_shell",

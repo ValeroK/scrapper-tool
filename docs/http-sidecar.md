@@ -223,6 +223,26 @@ Auth: when `SCRAPPER_TOOL_HTTP_API_KEY` is set, the four POST endpoints require 
 
 ---
 
+### Telling a block from a failure
+
+`blocked` (HTTP 422) means an anti-bot platform stopped us, and `challenge_detected`
+carries the evidence -- a vendor name, or `redirect` when the request finished on a
+page asking us to prove we are human.
+
+A tier of ours that timed out, crashed, or found no signal returns **HTTP 502
+`pattern_failed`** instead:
+
+```json
+{"error": "pattern_failed", "pattern": "d", "reason": "browser_timeout",
+ "vendor_hostile": false, "blocked": false}
+```
+
+`reason` is one of `timeout`, `extra_missing`, `no_signal`, `exception`. Only a
+422 belongs in a per-vendor failure budget; a 502 is ours to fix.
+
+Every result also carries `requested_url` and `egress`, so a caller can see the
+redirect and the network path without trusting our verdict at all.
+
 ## `/scrape` — the main endpoint
 
 The one you'll call 95% of the time. Give it a URL and (optionally) a schema, get back structured data plus a `pattern_used` field telling you which pattern produced it.

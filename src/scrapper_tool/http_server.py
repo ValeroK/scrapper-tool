@@ -69,6 +69,7 @@ from scrapper_tool.errors import (  # noqa: E402
     AgentTimeoutError,
     BlockedError,
     ConfigurationError,
+    PatternFailed,
     ScrapingError,
     UrlNotAllowed,
     VendorHTTPError,
@@ -566,6 +567,26 @@ def _build_app(  # noqa: PLR0915 - one statement per route; splitting hides the 
             content={"error": "blocked", "detail": str(exc), "blocked": True},
         )
 
+    @app.exception_handler(PatternFailed)
+    async def _h_pattern_failed(_req: Request, exc: PatternFailed) -> Response:
+        # 502, not 422. 422 is this API's word for "an anti-bot platform stopped
+        # us", and a caller counting it against a vendor's failure budget is
+        # doing the right thing with it. A tier of ours that timed out or found
+        # no signal is a different event with a different remedy, and saying so
+        # in the status is what lets a caller tell them apart without parsing
+        # prose out of `detail`.
+        return JSONResponse(
+            status_code=502,
+            content={
+                "error": "pattern_failed",
+                "detail": str(exc),
+                "pattern": exc.pattern,
+                "reason": exc.reason,
+                "vendor_hostile": exc.vendor_hostile,
+                "blocked": False,
+            },
+        )
+
     @app.exception_handler(BlockedError)
     async def _h_blocked(_req: Request, exc: BlockedError) -> Response:
         return JSONResponse(
@@ -664,6 +685,31 @@ def _build_app(  # noqa: PLR0915 - one statement per route; splitting hides the 
             "configured_browser": configured_browser,
             "tiers": _tier_capabilities_payload(),
             "render_max_backends": _max_render_backends(),
+            "result_fields": {
+                "requested_url": "what was asked for; compare against `url` to spot a redirect",
+                "url": "where the request actually finished",
+                "egress": "which network path was used ({via, proxy})",
+                "challenge_detected": (
+                    "vendor name, or 'redirect' when we finished on a challenge page"
+                ),
+                "blocked": "true ONLY on evidence of blocking, never on our own failures",
+                "intermediate_raw_text": (
+                    "the best pre-LLM HTML any tier captured, including A/B/C's body "
+                    "when the fetch worked but nothing extractable was in it"
+                ),
+            },
+            "errors": {
+                "blocked": {
+                    "status": 422,
+                    "meaning": "an anti-bot platform stopped us; evidence is in challenge_detected",
+                },
+                "pattern_failed": {
+                    "status": 502,
+                    "meaning": "one of our tiers did not deliver, for reasons of our own",
+                    "fields": ["pattern", "reason", "vendor_hostile"],
+                    "reasons": ["timeout", "extra_missing", "no_signal", "exception"],
+                },
+            },
             "flags": {
                 "interactive": {
                     "type": "boolean|null",
@@ -1689,17 +1735,99 @@ def _learn_recipe(req: Any, html: str, data: Any, *, source_tier: str) -> None:
         _logger.debug("scrape.learn.failed", url=req.url, error=str(exc)[:160])
 
 
-def _note_challenge(req: Any, log: list[dict[str, Any]], html: str, status_code: int) -> str | None:
+def _egress_report(req: Any) -> dict[str, Any]:
+    """Which network path this request went out on.
+
+    ``via`` distinguishes the sidecar's own network from an in-process caller,
+    which is the distinction that cost two hours: identical code, identical
+    minute, different answer from the vendor, and nothing in the result naming
+    the difference.
+
+    ``proxy`` is redacted through the same helper the cookie logging uses --
+    proxy URLs carry credentials, and a response body is what every reverse
+    proxy in the path writes to its access log.
+    """
+    proxy = req.__dict__.get("_egress_proxy")
+    return {
+        "via": "sidecar",
+        "proxy": _redact_proxy(proxy) if proxy else None,
+    }
+
+
+def _redact_proxy(proxy: str) -> str:
+    """``scheme://host:port``, with any credentials stripped."""
+    from urllib.parse import urlsplit  # noqa: PLC0415
+
+    try:
+        parts = urlsplit(proxy)
+    except ValueError:
+        return "***"
+    if not parts.hostname:
+        return "***"
+    port = f":{parts.port}" if parts.port else ""
+    scheme = f"{parts.scheme}://" if parts.scheme else ""
+    return f"{scheme}{parts.hostname}{port}"
+
+
+def _failure_reason(error: object) -> str:
+    """Bucket a tier's failure into a short, stable reason code.
+
+    A cheap enum rather than free text, because the whole point of separating
+    ``pattern_failed`` from ``blocked`` is to let a caller branch on the cause
+    without parsing prose.
+    """
+    text = str(error or "").lower()
+    if not text:
+        return "no_signal"
+    if "timeout" in text or "timed out" in text:
+        return "timeout"
+    if "not installed" in text or "extra" in text:
+        return "extra_missing"
+    if "classifier rejected" in text:
+        return "no_signal"
+    return "exception"
+
+
+def _landed_on_challenge(req: Any, final_url: str, html: str) -> bool:
+    """Did this request finish on a page asking us to prove we are human?"""
+    from scrapper_tool._challenge import landed_on_challenge  # noqa: PLC0415
+
+    return landed_on_challenge(req.url, final_url, html)
+
+
+def _note_challenge(
+    req: Any,
+    log: list[dict[str, Any]],
+    html: str,
+    status_code: int,
+    *,
+    final_url: str | None = None,
+) -> str | None:
     """Record which bot vendor walled us, if any. Returns the vendor name.
 
     Stashed on the request so the final payload can surface
     ``challenge_detected`` regardless of which tier ends up winning — knowing a
     page was walled is the single most useful thing for tuning a target, and it
     was previously invisible.
+
+    ``final_url`` adds the second half of the question. The signature tables
+    answer "does this body announce a vendor?"; they cannot answer "were we
+    quietly moved somewhere else?", and a vendor captcha page carrying no
+    recognisable signature passed both checks and was returned as content. See
+    :func:`~scrapper_tool._challenge.landed_on_challenge`.
     """
-    from scrapper_tool._challenge import is_interstitial  # noqa: PLC0415
+    from scrapper_tool._challenge import is_interstitial, landed_on_challenge  # noqa: PLC0415
 
     vendor = is_interstitial(html, status_code)
+    if vendor is None and final_url and landed_on_challenge(req.url, final_url, html):
+        vendor = "redirect"
+        req.__dict__["_challenge_redirect"] = final_url
+        _logger.info(
+            "scrape.challenge_redirect",
+            requested=req.url,
+            final_url=final_url,
+            detail="request finished on a page asking us to prove we are human",
+        )
     if vendor is None:
         return None
     req.__dict__["_challenge_detected"] = vendor
@@ -2213,11 +2341,22 @@ def _max_render_backends() -> int:
     return max(1, value)
 
 
-def _interstitial_vendor(html: str, status_code: int) -> str | None:
-    """Bot-vendor name if this render hit a wall, else None."""
-    from scrapper_tool._challenge import is_interstitial  # noqa: PLC0415
+def _interstitial_vendor(
+    html: str, status_code: int, *, requested_url: str = "", final_url: str = ""
+) -> str | None:
+    """Bot-vendor name if this render hit a wall, else None.
 
-    return is_interstitial(html, status_code)
+    Also reports ``"redirect"`` for a render that finished on a challenge page
+    carrying no vendor signature — the case the backend-exhaustion loop most
+    needs to see, since landing on a captcha is exactly the verdict that another
+    browser engine might not earn.
+    """
+    from scrapper_tool._challenge import is_interstitial, landed_on_challenge  # noqa: PLC0415
+
+    vendor = is_interstitial(html, status_code)
+    if vendor is None and requested_url and landed_on_challenge(requested_url, final_url, html):
+        return "redirect"
+    return vendor
 
 
 def _render_backend_candidates(req: Any, cfg: Any) -> tuple[str, ...]:
@@ -2366,7 +2505,13 @@ async def _do_render_step(  # noqa: PLR0915 - linear tier; the backend loop is t
 
         result = attempt
         req.__dict__["_render_backend_used"] = backend_name
-        vendor = _interstitial_vendor(attempt.html, attempt.status)
+        req.__dict__["_egress_proxy"] = attempt.proxy
+        vendor = _interstitial_vendor(
+            attempt.html,
+            attempt.status,
+            requested_url=req.url,
+            final_url=attempt.final_url,
+        )
         if vendor is None or is_last:
             break
         _logger.info(
@@ -2727,9 +2872,15 @@ async def _do_hostile_only(req: Any, attempts: list[str], start: float) -> dict[
                 "mode=hostile requires the [hostile] extra. "
                 "Install with: pip install scrapper-tool[hostile]"
             )
-        raise AgentBlockedError(
+        # Was AgentBlockedError -- i.e. "the vendor blocked us" -- for a tier of
+        # ours that simply did not deliver. `d_error` here is a browser timeout,
+        # a crashed fetcher or a classifier rejection far more often than a wall.
+        raise PatternFailed(
             f"mode=hostile and Pattern D failed for {req.url}: "
-            f"{d_error or 'classifier rejected D output'}"
+            f"{d_error or 'classifier rejected D output'}",
+            pattern="d",
+            reason=_failure_reason(d_error),
+            vendor_hostile=req.__dict__.get("_challenge_detected") is not None,
         )
 
     # Fall through to E1 → E2 with hostile_skipped flag preserved.
@@ -2822,6 +2973,17 @@ async def _do_scrape(req: Any) -> dict[str, Any]:
         # Surfaced here rather than in each tier's return: the vendor that
         # walled us is worth reporting no matter which tier eventually won.
         payload["challenge_detected"] = req.__dict__.get("_challenge_detected")
+        # Where we were standing, and what we actually asked for.
+        #
+        # A vendor served the host 74 KB of clean HTML and handed the container a
+        # captcha, in the same minute from the same machine. Nothing in the
+        # result said which path was used, so the same symptom read first as "the
+        # vendor is hostile" and then as "the sidecar is broken". Neither was
+        # true, and the field that would have settled it in a glance costs one
+        # line. `requested_url` sits beside `url` so the redirect this release
+        # now detects is legible to a caller who wants to judge it themselves.
+        payload["requested_url"] = req.url
+        payload["egress"] = _egress_report(req)
         # Which tiers actually carried the caller's cookies, and which ran
         # without them. Both keys are always present when cookies were supplied
         # so a caller can tell "not applied" from "field absent".
@@ -2848,7 +3010,9 @@ async def _do_scrape(req: Any) -> dict[str, Any]:
         _observe_cascade(payload, exception=raised)
 
 
-async def _do_scrape_inner(req: Any, attempts: list[str], start: float) -> dict[str, Any]:
+async def _do_scrape_inner(  # noqa: PLR0912 - linear cascade; branches are the tiers
+    req: Any, attempts: list[str], start: float
+) -> dict[str, Any]:
     """The actual cascade body — extracted so _do_scrape's try/finally
     can wrap it cleanly without indenting the whole thing one level."""
     last_error: BaseException | None = None
@@ -2913,6 +3077,20 @@ async def _do_scrape_inner(req: Any, attempts: list[str], start: float) -> dict[
             )
 
             a_b_c_duration = time.perf_counter() - a_b_c_start
+            # A redirect onto a challenge page vetoes the win outright.
+            #
+            # The extractors are perfectly capable of "succeeding" on a captcha:
+            # mode="fetch" accepts any 200 carrying a body, and a vendor captcha
+            # page is a body. That is how a 4,419-byte challenge came back as
+            # pattern_used="a_b_c", blocked=False, challenge_detected=None -- a
+            # false negative, and worse than a false block, because a caller that
+            # trusts the flag parses the challenge as content.
+            #
+            # The classifier's verdict is therefore not sufficient on its own. It
+            # answers "did we extract a shape?", which a challenge page can
+            # satisfy; it cannot answer "is this the page we asked for?".
+            if success and _landed_on_challenge(req, str(response.url), text):
+                success = False
             if success:
                 _ = profile  # currently unused in response shape; kept for logging
                 log.append(
@@ -2939,7 +3117,20 @@ async def _do_scrape_inner(req: Any, attempts: list[str], start: float) -> dict[
                     "is_structured": True,
                     "duration_s": time.perf_counter() - start,
                 }
-            vendor = _note_challenge(req, log, text, response.status_code)
+            vendor = _note_challenge(
+                req, log, text, response.status_code, final_url=str(response.url)
+            )
+            # A challenge redirect IS evidence of blocking -- which is exactly
+            # what `blocked` is now reserved for -- so say so rather than letting
+            # mode="fetch" fall off the end of its only tier into a bare
+            # "unreachable". This is the one place the two halves of this release
+            # meet: the redirect signal supplies the evidence, and the vocabulary
+            # split decides which word it earns.
+            if vendor == "redirect" and req.mode == "fetch":
+                raise BlockedError(
+                    f"{req.url} redirected to {response.url}, which is asking us to "
+                    "prove we are human. The page was NOT returned as content."
+                )
             log.append(
                 _build_log_entry(
                     "a_b_c",
@@ -3159,8 +3350,17 @@ def _scrape_response_from_agent(
     # artefact you want when the LLM tier is being asked why it was needed.
     intermediate = None
     if req is not None:
-        intermediate = req.__dict__.get("_render_intermediate_html") or req.__dict__.get(
-            "_d_intermediate_html"
+        intermediate = (
+            req.__dict__.get("_render_intermediate_html")
+            or req.__dict__.get("_d_intermediate_html")
+            # A/B/C's body is the last fallback, and it was missing.
+            #
+            # A 200 that carried no extractable shape is a *parse* outcome, not a
+            # fetch failure -- a catalog index legitimately has no product offer
+            # in it. The bytes were already captured here for the recipe learner,
+            # so the caller was being told "nothing" about a page we were holding
+            # the whole time, and the only way to see it was to re-fetch.
+            or req.__dict__.get("_a_b_c_html")
         )
     log: list[dict[str, Any]] = (
         list(req.__dict__.get("_escalation_log", [])) if req is not None else []
