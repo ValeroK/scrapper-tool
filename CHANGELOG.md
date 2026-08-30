@@ -2,6 +2,74 @@
 
 All notable changes to `scrapper-tool` are recorded here. Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning follows [SemVer](https://semver.org/).
 
+## [4.0.0] - 2026-08-30
+
+A second field report, from the same harvest. Its headline is the exact inverse
+of the last one: 3.2.0 fixed `blocked=True` on pages full of data, and this fixes
+`blocked=False` on a captcha. They are one defect seen from opposite sides -- a
+verdict asserted without evidence, in a field that conflates "the vendor refused
+us" with "we did not manage it".
+
+### Added
+
+- **`scrapper-tool diagnose <url>`.** Fetches one page with every impersonation
+  profile and a couple of URL variants, then prints a verdict: `wrong_url`,
+  `reachable`, `challenged` or `unreachable`. Built because two of the five
+  reported symptoms were wrong paths read as vendor hostility, and a 404 and a
+  wall are indistinguishable once you have decided a vendor is hostile. Obeys
+  the URL guard; exit 0 when reachable, 1 otherwise.
+- **`requested_url` and `egress` on every result.** A vendor served the host
+  74 KB of clean HTML and handed the container a captcha, in the same minute from
+  the same machine; nothing in the result named the difference, so one symptom
+  read first as "the vendor is hostile" and then as "the sidecar is broken".
+  Proxy credentials are redacted.
+- **`PatternFailed` (HTTP 502) in the error taxonomy**, carrying `pattern`,
+  `reason` and `vendor_hostile`.
+- **`/capabilities` now publishes the error contract and the result fields**, so
+  a client can learn the 422/502 split without reading prose.
+
+### Fixed
+
+- **A captcha could be returned as a successful fetch.** `mode="fetch"` followed
+  a redirect onto `/captcha.html`, returned 4,419 bytes of challenge, and
+  reported `blocked=False` with `challenge_detected=None`. The classifier only
+  recognises a wall by vendor signature or by a titleless script-only shell, and
+  an ordinary-looking captcha page is neither -- verified: a 4,223-byte page with
+  a title and visible text returns `is_interstitial -> None` and
+  `has_real_content -> True`.
+
+  The evidence it missed was in the URL. `landed_on_challenge` compares the
+  requested path against the final one, and is deliberately narrow: a differing
+  URL is never on its own enough, because scheme upgrades, trailing slashes,
+  canonical hosts and locale prefixes are all ordinary. It fires on a named
+  challenge path, or on a changed path with a small body that asks in words for
+  a human.
+
+  This also silently disabled 3.2.0's captcha solver, which is gated on
+  `is_interstitial(...) is not None` -- a wall the classifier could not see never
+  reached the solver that could have cleared it. Both now work.
+- **Our failures no longer speak the vendor's language.** A Pattern D browser
+  timeout, a missing extra and a classifier rejection were all raised as
+  `AgentBlockedError` and arrived as `422 blocked`, which says the vendor beat
+  us. They now raise `PatternFailed` -> `502`, and `blocked` is reserved for
+  evidence. Only one of those two belongs in a per-vendor failure budget.
+- **A/B/C's bytes are no longer thrown away.** A 200 that carried no extractable
+  shape is a parse outcome, not a fetch failure -- a catalog index legitimately
+  has no product offer in it. The body was already captured for the recipe
+  learner; `intermediate_raw_text` simply never fell back to it, so the caller
+  was told nothing about a page we were holding.
+- **A test that passed or failed on machine uptime.** The vision-TTL test from
+  3.2.0 patched `time.monotonic` to a fixed `10_000.0`; real monotonic is uptime,
+  so once the host had been up longer than that the elapsed delta went negative
+  and the cache never expired. It now drives the clock instead of sampling it.
+
+### Changed
+
+- **`blocked` is evidence-only, and that is consumer-visible.** A caller keying
+  on `422` to mean "give up on this vendor" will now see `502` for failures that
+  were always ours. That is the point of the change, and it is the reason this
+  is a major bump rather than a minor one.
+
 ## [3.2.0] - 2026-08-29
 
 Driven by a heavy consumer's field report after a ~180k-row harvest across five
