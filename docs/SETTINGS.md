@@ -312,6 +312,22 @@ E2     browser-use agent            -> priciest, reached automatically (see belo
 | `SCRAPPER_TOOL_RENDER_SOLVE_CAPTCHA` | `1` (on) | Let the render tier clear a detected captcha in-page. Costs nothing on a page with no challenge on it. Set `0` to leave captchas to the LLM tiers. |
 | `SCRAPPER_TOOL_SKILL_PATH` | bundled | Path to the skill served at `GET /skill` and the `skill://scrapper-tool` MCP resource. Override to vendor house rules on top of the shipped manual. |
 
+### Diagnosing one URL
+
+`scrapper-tool diagnose <url>` fetches a single page with every impersonation
+profile and a couple of URL variants, then prints a verdict table. It exists to
+separate the four things that all look identical from a failed scrape: a wrong
+path, a real wall, a wall on one network path only, and a host that is simply not
+answering.
+
+```
+verdict:  wrong_url
+  404   chrome150      HTTP 404, 555 b - check the path, not the vendor
+```
+
+Exit 0 when the page is reachable, 1 otherwise, `--json` for machine use. It
+obeys the URL guard like every other tier.
+
 ### Asking what this deployment can do
 
 `GET /capabilities` reports the valid `browser` names with their engine and CDP

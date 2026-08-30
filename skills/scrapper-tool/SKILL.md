@@ -332,9 +332,25 @@ Every scrape returns a dict. The keys that matter:
 | `blocked` | true when every tier failed |
 | `is_structured` | whether a real structured payload was produced |
 | `escalation_log` | per-tier trace: what ran, what it cost, why it escalated |
+| `requested_url` | what you asked for. Differs from `url` when you were redirected |
+| `egress` | which network path was used: `{via, proxy}`. Proxy credentials are redacted |
 | `cookies_applied` | tiers that carried your cookies. Present only when you sent some |
 | `cookies_skipped` | `[{tier, reason}]` for tiers that ran **without** them. Same condition |
 | `cookies_harvested_from` | tiers that *won* a cookie (e.g. a `cf_clearance`) and passed it forward |
+
+**Two fields settle most questions before you guess.** `requested_url` is what
+you asked for and `url` is where the request finished; if they differ, you were
+redirected, and `challenge_detected: "redirect"` means you were redirected onto a
+page asking you to prove you are human. `egress` names the network path that got
+that answer -- the same vendor can serve one path clean HTML and hand another a
+captcha in the same minute, which is not the same thing as "this vendor blocks
+us".
+
+**`blocked` now means one thing only.** It is true only on *evidence* of
+blocking: a vendor signature, a challenge redirect, a known-hostile status. A
+tier of ours that timed out, crashed or found nothing returns HTTP 502
+`pattern_failed` instead, carrying `pattern`, `reason` and `vendor_hostile`. Only
+one of those two belongs in a vendor's failure budget.
 
 **How to act on it:** if `blocked` is true, the site defeated every tier the
 cascade was allowed to run — including, by default, more than one browser engine
@@ -412,6 +428,12 @@ The escape hatch is always **allowlist the target**, never turn the guard off:
 - The toolkit cannot manufacture IP reputation. If a site blocks every tier from
   your IP, that's an IP-trust limit — a residential/mobile proxy is the fix, not
   a different tier.
+- **When ONE url fails, run `scrapper-tool diagnose <url>` before theorising.**
+  It fetches the page with every impersonation profile and a couple of URL
+  variants, then prints a verdict: `wrong_url` (every profile got a 404 -- the
+  path is wrong, the vendor is innocent), `reachable`, `challenged` (a real wall
+  on this network path), or `unreachable`. Two of the five symptoms in the report
+  that prompted this command were wrong paths read as hostility.
 - **When several tiers fail at once, suspect the install before the site.** Ask
   the user to run `scrapper-tool doctor`: it reports each tier as ok / degraded /
   missing / blocked with the one command that fixes it. The common causes are a

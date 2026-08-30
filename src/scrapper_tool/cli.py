@@ -34,6 +34,7 @@ from typing import TYPE_CHECKING, Any, Protocol
 
 from scrapper_tool import _cookies_cli as _cookies_cmd
 from scrapper_tool import canary as _canary_cmd
+from scrapper_tool import diagnose as _diagnose_cmd
 from scrapper_tool import doctor as _doctor_cmd
 
 if TYPE_CHECKING:
@@ -54,6 +55,7 @@ class _Command(Protocol):
 _COMMANDS: dict[str, _Command] = {
     "canary": _canary_cmd,
     "cookies": _cookies_cmd,
+    "diagnose": _diagnose_cmd,
     "doctor": _doctor_cmd,
 }
 
