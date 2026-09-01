@@ -731,7 +731,15 @@ def _build_app(  # noqa: PLR0915 - one statement per route; splitting hides the 
                     "choices": [b["name"] for b in _backend_capabilities_payload()],
                     "description": "Per-request backend override; wins over every automatic choice",
                 },
-                "solve_cloudflare": {"type": "boolean", "default": False},
+                "solve_cloudflare": {
+                    "type": 'boolean|"auto"',
+                    "default": "auto",
+                    "description": (
+                        "'auto' (default) probes first and re-runs with the solver only "
+                        "when a CF challenge is detected; true always solves; false never "
+                        "does"
+                    ),
+                },
                 "cookies": {"type": "array|null"},
             },
         }

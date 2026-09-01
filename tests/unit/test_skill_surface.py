@@ -197,3 +197,55 @@ class TestNoCrossTestImports:
             "(it has no __init__.py, so this passes locally and fails in CI): "
             + "; ".join(offenders)
         )
+
+
+class TestCapabilitiesMatchesTheModel:
+    """The endpoint that states the contract must not contradict the contract.
+
+    `/capabilities` reported `solve_cloudflare` as `{"type": "boolean", "default":
+    false}` while the field is `bool | Literal["auto"]` defaulting to `"auto"` --
+    wrong in both type and default, in the one endpoint whose entire purpose is to
+    let a client learn the contract without reading prose. A consumer reading it
+    concluded `"auto"` was invalid, which is exactly the failure the endpoint was
+    added to prevent.
+
+    Hand-written documentation of a machine-readable thing drifts. This checks it
+    against the model rather than against a second hand-written list.
+    """
+
+    @pytest.fixture()
+    def app_no_auth(self) -> Any:
+        return http_server._build_app(api_key=None, cors_origins=["*"])
+
+    @pytest.mark.asyncio
+    async def test_documented_defaults_equal_the_real_defaults(self, app_no_auth: Any) -> None:
+        async with _client(app_no_auth) as client:
+            flags = (await client.get("/capabilities")).json()["flags"]
+
+        model = http_server.ScrapeRequest(url="https://vendor.test/p")
+        mismatches = []
+        for name, described in flags.items():
+            if "default" not in described or not hasattr(model, name):
+                continue
+            actual = getattr(model, name)
+            if described["default"] != actual:
+                mismatches.append(f"{name}: documented {described['default']!r}, real {actual!r}")
+        assert not mismatches, "\n".join(mismatches)
+
+    @pytest.mark.asyncio
+    async def test_every_documented_flag_is_a_real_request_field(self, app_no_auth: Any) -> None:
+        """A flag we advertise but do not accept is worse than one we omit."""
+        async with _client(app_no_auth) as client:
+            flags = (await client.get("/capabilities")).json()["flags"]
+
+        fields = set(http_server.ScrapeRequest.model_fields)
+        assert not (set(flags) - fields), f"advertised but not accepted: {set(flags) - fields}"
+
+    @pytest.mark.asyncio
+    async def test_solve_cloudflare_advertises_its_auto_value(self, app_no_auth: Any) -> None:
+        """The specific regression: 'auto' is accepted, is the default, and was omitted."""
+        async with _client(app_no_auth) as client:
+            described = (await client.get("/capabilities")).json()["flags"]["solve_cloudflare"]
+
+        assert "auto" in described["type"]
+        assert described["default"] == "auto"
