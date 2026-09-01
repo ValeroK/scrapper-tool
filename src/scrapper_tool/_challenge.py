@@ -342,6 +342,95 @@ def landed_on_challenge(requested_url: str, final_url: str, html: str) -> bool:
     return any(phrase in lowered for phrase in _VERIFICATION_PHRASES)
 
 
+# --- the host-titled wall --------------------------------------------------
+#
+# A reported Cloudflare interstitial that every existing detector waved through:
+#
+#     <div class="main-wrapper KfMSd3" role="main">
+#       <img src="/favicon.ico" class="VNsDw9 TiPCY0" alt="Icon for www.amayama.com">
+#       <h1>www.amayama.com</h1>
+#
+# It beat the two heuristics we had, in opposite directions at once:
+#
+# * **Vocabulary** failed because the page contains no challenge words at all --
+#   no "captcha", no "just a moment", no "checking your browser". The class names
+#   are per-deploy gibberish, so they cannot be matched either.
+# * **Size** failed the OTHER way from the usual interstitial. At ~29 KB it sails
+#   past every "small body" gate, including the one in `landed_on_challenge`.
+#
+# And it arrives with no redirect, so the URL comparison cannot fire.
+#
+# The consequence is the worst kind: it is returned as a *success*, so a consumer
+# records "walked it, found nothing" for a page it never saw. In a catalog that is
+# indistinguishable from a genuinely empty category, and nothing downstream ever
+# detects it.
+#
+# The signal that does separate it is that the page introduces itself as the
+# HOST. A document whose only heading is its own domain name, with almost no
+# visible text, is not a page anyone published as content -- whatever its byte
+# size or vocabulary. Cloudflare's own markup states it twice: once in the <h1>
+# and once in `alt="Icon for <host>"`.
+#
+# Measured on VISIBLE text, deliberately, not on raw bytes -- that is what makes
+# this immune to the size failure above. A 29 KB document that is 28 KB of inline
+# script has almost nothing to read.
+_COMMENT_RE = re.compile(r"<!--.*?-->", re.DOTALL)
+_H1_RE = re.compile(r"<h1[^>]*>(.*?)</h1>", re.IGNORECASE | re.DOTALL)
+_ICON_ALT_RE = re.compile(r"""alt=["']\s*icon for ([^"']+)["']""", re.IGNORECASE)
+_WALL_MAX_VISIBLE_CHARS = 300
+
+
+def _visible_text(html: str) -> str:
+    """Readable text with script, style, noscript and comments removed."""
+    stripped = _COMMENT_RE.sub(" ", html)
+    stripped = _STYLE_RE.sub(" ", _SCRIPT_RE.sub(" ", stripped))
+    return " ".join(_TAG_RE.sub(" ", stripped).split())
+
+
+def _bare_host(value: str) -> str:
+    """Lowercase hostname without ``www.``, from a URL or a bare host."""
+    candidate = value.strip().lower()
+    if "//" in candidate:
+        try:
+            candidate = urlsplit(candidate).hostname or ""
+        except ValueError:
+            return ""
+    candidate = candidate.strip().strip("/")
+    return candidate.removeprefix("www.")
+
+
+def looks_like_host_titled_wall(html: str, url: str) -> bool:
+    """True when a page's only heading is its own hostname and it says nothing else.
+
+    Size-independent by construction: it measures *visible* text, so a wall padded
+    to 29 KB with inline script reads the same as a 2 KB one. That is the whole
+    point -- the reported page was too LARGE for every small-body gate we had.
+
+    Narrow on purpose. Both halves are required: a page can legitimately put its
+    domain in an ``<h1>`` (a parked domain, a minimal landing page), and a page
+    can legitimately carry very little text (an app shell). Only the combination
+    is evidence, and structured data vetoes it outright -- a document publishing
+    schema.org or Open Graph is asserting itself as content, which no bot wall
+    does.
+    """
+    if not html or not url:
+        return False
+    host = _bare_host(url)
+    if not host:
+        return False
+
+    lowered = html.lower()
+    if any(marker in lowered for marker in _STRUCTURED_DATA_MARKERS):
+        return False
+    if len(_visible_text(html)) > _WALL_MAX_VISIBLE_CHARS:
+        return False
+
+    icon = _ICON_ALT_RE.search(html)
+    if icon is not None and _bare_host(icon.group(1)) == host:
+        return True
+    return any(_bare_host(_TAG_RE.sub("", heading)) == host for heading in _H1_RE.findall(html))
+
+
 def looks_like_spa_shell(html: str) -> bool:
     """True when the response looks like an unhydrated SPA shell (small + SPA root)."""
     if not html or len(html) > _SPA_SHELL_MAX_BYTES:
@@ -463,6 +552,7 @@ __all__ = [
     "landed_on_challenge",
     "looks_like_block_message",
     "looks_like_content_free_shell",
+    "looks_like_host_titled_wall",
     "looks_like_spa_shell",
     "looks_unhydrated",
 ]

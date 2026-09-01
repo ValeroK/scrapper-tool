@@ -86,7 +86,9 @@ class Diagnosis:
         }
 
 
-def _describe(html: str, status: int, requested: str, final: str) -> tuple[str, str]:
+def _describe(  # noqa: PLR0911 - one honest return per outcome; merging them hides the taxonomy
+    html: str, status: int, requested: str, final: str
+) -> tuple[str, str]:
     """Classify one fetched body. Returns ``(outcome, detail)``.
 
     Uses the shared classifier rather than a private copy, so a diagnosis and a
@@ -94,7 +96,11 @@ def _describe(html: str, status: int, requested: str, final: str) -> tuple[str, 
     the original investigation so slow was two components describing one page
     differently.
     """
-    from scrapper_tool._challenge import is_interstitial, landed_on_challenge  # noqa: PLC0415
+    from scrapper_tool._challenge import (  # noqa: PLC0415
+        is_interstitial,
+        landed_on_challenge,
+        looks_like_host_titled_wall,
+    )
 
     size = len(html)
     vendor = is_interstitial(html, status)
@@ -102,6 +108,8 @@ def _describe(html: str, status: int, requested: str, final: str) -> tuple[str, 
         return "challenge", f"{vendor} wall, {size:,} b"
     if landed_on_challenge(requested, final, html):
         return "challenge", f"redirected to {final}"
+    if looks_like_host_titled_wall(html, final or requested):
+        return "challenge", f"page is just the hostname, {size:,} b of mostly script"
     if status == 404:  # noqa: PLR2004 — the URL-shape signal this exists to catch
         return "not_found", f"HTTP 404, {size:,} b - check the path, not the vendor"
     if status >= 400:  # noqa: PLR2004

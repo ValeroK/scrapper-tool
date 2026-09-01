@@ -226,8 +226,12 @@ Auth: when `SCRAPPER_TOOL_HTTP_API_KEY` is set, the four POST endpoints require 
 ### Telling a block from a failure
 
 `blocked` (HTTP 422) means an anti-bot platform stopped us, and `challenge_detected`
-carries the evidence -- a vendor name, or `redirect` when the request finished on a
-page asking us to prove we are human.
+carries the evidence -- a vendor name, `redirect` when the request finished on a
+page asking us to prove we are human, or `host_titled_wall` for a document whose
+only heading is the site's own hostname and which says nothing else.
+
+`blocked=true` is guaranteed to carry a non-null `challenge_detected`: a block
+that cannot name its evidence is withdrawn rather than published.
 
 A tier of ours that timed out, crashed, or found no signal returns **HTTP 502
 `pattern_failed`** instead:

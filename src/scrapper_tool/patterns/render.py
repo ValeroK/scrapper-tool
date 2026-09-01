@@ -31,7 +31,12 @@ import re
 from dataclasses import dataclass, field, replace
 from typing import TYPE_CHECKING, Any
 
-from scrapper_tool._challenge import has_real_content, is_interstitial, landed_on_challenge
+from scrapper_tool._challenge import (
+    has_real_content,
+    is_interstitial,
+    landed_on_challenge,
+    looks_like_host_titled_wall,
+)
 from scrapper_tool._logging import get_logger
 from scrapper_tool._urlguard import assert_tier_allowed, check_url, url_guard_enabled
 from scrapper_tool.agent.backends.browser import (
@@ -176,7 +181,14 @@ async def _try_clear_challenge(
     # signal. Without it this gate silently disabled the whole solver on any wall
     # carrying no vendor signature — which is precisely the wall that most needed
     # solving, and the reason the reported captcha page was never even attempted.
-    if is_interstitial(html, status) is None and not landed_on_challenge(url, final_url, html):
+    if (
+        is_interstitial(html, status) is None
+        and not landed_on_challenge(url, final_url, html)
+        # The third detector, for a wall with no signature and no redirect. Left
+        # out, this gate keeps the solver switched off on exactly the pages that
+        # most need it -- the coupling reported twice now.
+        and not looks_like_host_titled_wall(html, final_url or url)
+    ):
         return html
     try:
         from scrapper_tool.agent.backends import get_captcha_solver  # noqa: PLC0415

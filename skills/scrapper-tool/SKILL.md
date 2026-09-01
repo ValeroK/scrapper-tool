@@ -346,6 +346,12 @@ that answer -- the same vendor can serve one path clean HTML and hand another a
 captcha in the same minute, which is not the same thing as "this vendor blocks
 us".
 
+**A page can be a wall without saying so.** `challenge_detected:
+"host_titled_wall"` means the document's only heading was the site's own
+hostname and it had almost no other text -- a bot wall that carries no challenge
+vocabulary at all. These are returned as blocked rather than as an empty page,
+because "walked it, found nothing" and "never saw it" are not the same result.
+
 **`blocked` now means one thing only.** It is true only on *evidence* of
 blocking: a vendor signature, a challenge redirect, a known-hostile status. A
 tier of ours that timed out, crashed or found nothing returns HTTP 502
