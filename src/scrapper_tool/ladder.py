@@ -57,7 +57,7 @@ from curl_cffi.requests import AsyncSession as _CurlCffiAsyncSession
 
 from scrapper_tool._logging import get_logger
 from scrapper_tool._urlguard import assert_tier_allowed, assert_url_allowed_nodns
-from scrapper_tool.errors import BlockedError, VendorHTTPError
+from scrapper_tool.errors import BlockedError, ConfigurationError, VendorHTTPError
 from scrapper_tool.http import request_with_retry
 from scrapper_tool.proxy import resolve_proxy
 
@@ -121,6 +121,50 @@ _logger = get_logger(__name__)
 # (although 5xx normally retries within the same profile via
 # request_with_retry — we treat 503 as ambiguous and rotate too).
 _ROTATE_STATUS_CODES: frozenset[int] = frozenset({403, 503})
+
+
+# Profiles the installed curl_cffi can actually execute. Read once from the
+# library rather than hardcoded, because the whole failure this guards against is
+# our list and the runtime's list drifting apart.
+#
+# An empty set means "we could not find out", and every profile is then treated
+# as supported -- the pre-existing behaviour, and the only safe default: refusing
+# to try a profile we cannot verify would turn an introspection change in
+# curl_cffi into a total outage.
+def _supported_profiles() -> frozenset[str]:
+    try:
+        import typing  # noqa: PLC0415
+
+        from curl_cffi.requests.impersonate import BrowserTypeLiteral  # noqa: PLC0415
+
+        return frozenset(str(v) for v in typing.get_args(BrowserTypeLiteral))
+    except Exception:
+        return frozenset()
+
+
+def _profile_is_supported(profile: str) -> bool:
+    """Whether the installed curl_cffi knows this impersonation profile.
+
+    ``pyproject.toml`` cannot fully guarantee this: a floor pin admits a range of
+    curl_cffi versions and the newest profile in our ladder only exists above
+    some point in that range. So the ladder checks rather than assumes.
+    """
+    known = _supported_profiles()
+    return not known or profile in known
+
+
+_UNSUPPORTED_PROFILE_MARKER = "is not supported"
+
+
+def _is_unsupported_profile_error(exc: BaseException) -> bool:
+    """Is this failure about our runtime rather than about the target?
+
+    curl_cffi reports an unknown profile as a *transport* error, which is
+    indistinguishable at the type level from "the host refused the connection".
+    Matching the message is unpleasant but it is the only signal available, and
+    the cost of a false match is one skipped rung out of five.
+    """
+    return _UNSUPPORTED_PROFILE_MARKER in str(exc).lower()
 
 
 @asynccontextmanager
@@ -265,7 +309,22 @@ async def request_with_ladder(
 
     last_status: int | None = None
     last_error: VendorHTTPError | None = None
+    skipped_profiles: list[str] = []
     for profile in ladder:
+        # A profile this curl_cffi cannot execute is skipped before any request
+        # is issued. Previously it raised a transport error, `request_with_retry`
+        # retried the identical impossible call three times, and the ladder then
+        # gave up -- so a purely local packaging mismatch presented as the target
+        # refusing us, and the rungs that would have worked were never reached.
+        if not _profile_is_supported(profile):
+            skipped_profiles.append(profile)
+            _logger.warning(
+                "ladder.profile_unsupported",
+                profile=profile,
+                detail="installed curl_cffi cannot execute this profile; skipping the rung",
+                remedy="upgrade curl-cffi, or drop the profile from the ladder",
+            )
+            continue
         # Fresh IP per rung when a pool is configured; an explicit proxy wins.
         attempt_proxy, managed_pool = resolve_proxy(proxy_pool, proxy)
         try:
@@ -284,6 +343,19 @@ async def request_with_ladder(
                     **kwargs,
                 )
         except VendorHTTPError as exc:
+            # A runtime that rejects the profile is a fact about US, so it can
+            # never justify ending the walk -- with or without a proxy pool. The
+            # up-front probe catches this for every curl_cffi that exposes its
+            # profile list; this is the net for one that does not.
+            if _is_unsupported_profile_error(exc):
+                skipped_profiles.append(profile)
+                _logger.warning(
+                    "ladder.profile_unsupported",
+                    profile=profile,
+                    detail=str(exc)[:160],
+                    remedy="upgrade curl-cffi, or drop the profile from the ladder",
+                )
+                continue
             # Transport exhaustion. When we're going through a pooled proxy this is
             # almost always the *proxy* being dead/unable to CONNECT-tunnel, not the
             # target being down — so penalise that proxy and try the next rung
@@ -339,6 +411,19 @@ async def request_with_ladder(
             proxied=attempt_proxy is not None,
         )
         return resp, profile
+
+    # Nothing was even attempted: every rung named a profile this runtime cannot
+    # execute. That is a local packaging fault, and reporting it as a block --
+    # which is what the generic message below would do -- is how a `curl-cffi`
+    # too old for the ladder's leading profile came to look like a vendor
+    # refusing every request. ConfigurationError, because the fix is here.
+    if skipped_profiles and last_status is None and last_error is None:
+        msg = (
+            f"None of the {len(ladder)} ladder profiles are supported by the installed "
+            f"curl_cffi ({', '.join(skipped_profiles)}). No request was issued, so this "
+            f"is NOT a block. Upgrade curl-cffi, or pass a ladder of profiles it knows."
+        )
+        raise ConfigurationError(msg)
 
     # Every rung failed. If they failed at the transport layer through pooled
     # proxies, say so — "all profiles were blocked" would be misleading when the

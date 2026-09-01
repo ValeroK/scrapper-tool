@@ -7198,7 +7198,7 @@ requires-dist = [
     { name = "browserforge", marker = "extra == 'llm-agent'", specifier = ">=1.2" },
     { name = "camoufox", extras = ["geoip"], marker = "extra == 'llm-agent'", specifier = ">=0.5,<0.6" },
     { name = "crawl4ai", marker = "extra == 'llm-agent'", specifier = ">=0.9" },
-    { name = "curl-cffi", specifier = ">=0.7" },
+    { name = "curl-cffi", specifier = ">=0.16.2" },
     { name = "extruct", specifier = ">=0.18" },
     { name = "fastapi", marker = "extra == 'http'", specifier = ">=0.115" },
     { name = "httpx", specifier = ">=0.27" },

@@ -28,7 +28,14 @@ classifiers = [
 ]
 dependencies = [
     "httpx>=0.27",
-    "curl-cffi>=0.7",
+    # Floor set by the LADDER, not by the API we use. IMPERSONATE_LADDER leads
+    # with chrome150, which curl_cffi only knows from 0.16.x; 0.15.0 tops out at
+    # chrome146. The old >=0.7 floor was honest about the API surface and silent
+    # about the profiles, so an ordinary install could satisfy the pin and still
+    # fail on rung one -- reported as a vendor block, because that is what an
+    # exhausted ladder looks like from outside. If a newer profile is ever
+    # promoted to the ladder, this floor moves with it.
+    "curl-cffi>=0.16.2",
     "selectolax>=0.3.21",
     "extruct>=0.18",
     "pydantic>=2.5",
