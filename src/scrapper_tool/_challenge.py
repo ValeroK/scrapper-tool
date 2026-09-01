@@ -376,6 +376,30 @@ def looks_unhydrated(html: str) -> bool:
     return (hits / len(headings)) > _MAX_PLACEHOLDER_HEADING_RATIO
 
 
+def block_evidence(text: str) -> str | None:
+    """What in ``text`` suggests a block, or None if nothing does.
+
+    The evidence half of :func:`looks_like_block_message`. That function answers
+    "is this a block?" and throws away *why*, which turned out to be the half
+    callers actually need: a result carrying ``blocked=True`` and no named cause
+    asserts a wall while naming no evidence of one, and a consumer cannot act on
+    it. Returning the reason makes the claim checkable.
+
+    A vendor name wins over a generic term when both match, because "datadome" is
+    strictly more useful to a caller than "captcha".
+    """
+    if not text:
+        return None
+    lowered = text.lower()
+    for vendor, signatures in _VENDOR_SIGNATURES.items():
+        if any(sig in lowered for sig in signatures):
+            return vendor
+    for term in _BLOCK_MESSAGE_TERMS:
+        if term in lowered:
+            return term
+    return None
+
+
 def looks_like_block_message(text: str) -> bool:
     """Whether an *error message* suggests an anti-bot block rather than a bug.
 
@@ -391,12 +415,7 @@ def looks_like_block_message(text: str) -> bool:
     under-matching means a blocked page is reported as a crash, so the generic
     terms below are kept broad on purpose.
     """
-    if not text:
-        return False
-    lowered = text.lower()
-    if any(term in lowered for term in _BLOCK_MESSAGE_TERMS):
-        return True
-    return any(sig in lowered for sigs in _VENDOR_SIGNATURES.values() for sig in sigs)
+    return block_evidence(text) is not None
 
 
 # Generic wording that shows up in anti-bot failures across libraries. Kept
@@ -437,6 +456,7 @@ def has_real_content(html: str, status_code: int = 200) -> bool:
 
 
 __all__ = [
+    "block_evidence",
     "has_real_content",
     "is_cf_challenge_body",
     "is_interstitial",

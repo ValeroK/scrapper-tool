@@ -692,7 +692,11 @@ def _build_app(  # noqa: PLR0915 - one statement per route; splitting hides the 
                 "challenge_detected": (
                     "vendor name, or 'redirect' when we finished on a challenge page"
                 ),
-                "blocked": "true ONLY on evidence of blocking, never on our own failures",
+                "blocked": (
+                    "true ONLY on evidence of blocking, never on our own failures. "
+                    "Guaranteed: blocked=true always carries a non-null "
+                    "challenge_detected naming the evidence, so the claim is checkable"
+                ),
                 "intermediate_raw_text": (
                     "the best pre-LLM HTML any tier captured, including A/B/C's body "
                     "when the fetch worked but nothing extractable was in it"
@@ -1733,6 +1737,52 @@ def _learn_recipe(req: Any, html: str, data: Any, *, source_tier: str) -> None:
             log.append(_build_log_entry("recipe", outcome="won", reason="learned", duration_s=0.0))
     except Exception as exc:  # an optimisation for next time; never fail now
         _logger.debug("scrape.learn.failed", url=req.url, error=str(exc)[:160])
+
+
+def _enforce_blocked_invariant(payload: dict[str, Any], req: Any) -> None:
+    """``blocked=True`` must name its evidence, or it is not a block.
+
+    ``/capabilities`` states that `blocked` is "true ONLY on evidence of
+    blocking" and that `challenge_detected` carries the evidence. Those two
+    sentences are a contract, and a payload asserting a wall while naming no
+    cause breaks it -- which is exactly what a consumer reported: a page whose
+    body carried the requested content, `blocked=True`, `challenge_detected`
+    empty, no redirect. They had to treat the flag as advisory and re-derive the
+    answer themselves, which is the flag failing at its only job.
+
+    So the contradiction is no longer emittable. A last-resort look at the error
+    text recovers evidence the tier forgot to record; if even that finds nothing,
+    the claim has nothing behind it and is withdrawn rather than published.
+
+    Withdrawing is the safe direction here *because* the tiers now judge on
+    outcome rather than prose: reaching this with no evidence means no tier saw a
+    wall, and the alternative -- publishing an unfounded block -- is the failure
+    being fixed. It is logged at warning level, because arriving here at all
+    means some tier set the flag without recording why, and that is a bug in the
+    tier rather than in this function.
+    """
+    if not payload.get("blocked"):
+        return
+    if payload.get("challenge_detected"):
+        return
+
+    from scrapper_tool._challenge import block_evidence  # noqa: PLC0415
+
+    recovered = block_evidence(str(payload.get("error") or ""))
+    if recovered is not None:
+        payload["challenge_detected"] = recovered
+        if req is not None:
+            req.__dict__["_challenge_detected"] = recovered
+        return
+
+    _logger.warning(
+        "scrape.blocked_without_evidence",
+        url=payload.get("requested_url") or payload.get("url"),
+        pattern=payload.get("pattern_used"),
+        detail="blocked=True named no evidence; withdrawing the claim",
+        remedy="the tier that set blocked should record challenge_vendor",
+    )
+    payload["blocked"] = False
 
 
 def _egress_report(req: Any) -> dict[str, Any]:
@@ -2973,6 +3023,7 @@ async def _do_scrape(req: Any) -> dict[str, Any]:
         # Surfaced here rather than in each tier's return: the vendor that
         # walled us is worth reporting no matter which tier eventually won.
         payload["challenge_detected"] = req.__dict__.get("_challenge_detected")
+        _enforce_blocked_invariant(payload, req)
         # Where we were standing, and what we actually asked for.
         #
         # A vendor served the host 74 KB of clean HTML and handed the container a
@@ -3348,6 +3399,12 @@ def _scrape_response_from_agent(
     # Prefer the render tier's HTML when it ran — it's strictly richer than D's
     # (rendered DOM vs a possibly-unhydrated fetch), and it's the debugging
     # artefact you want when the LLM tier is being asked why it was needed.
+    # An E-tier block names its own evidence; hand it to the same field the
+    # A/B/C path populates, so `challenge_detected` means one thing whichever
+    # tier produced it.
+    if req is not None and getattr(result, "challenge_vendor", None):
+        req.__dict__.setdefault("_challenge_detected", result.challenge_vendor)
+
     intermediate = None
     if req is not None:
         intermediate = (

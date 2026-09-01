@@ -24,7 +24,7 @@ from typing import Any, cast
 
 from pydantic import BaseModel, ValidationError
 
-from scrapper_tool._challenge import looks_like_block_message
+from scrapper_tool._challenge import block_evidence, looks_like_block_message
 from scrapper_tool._logging import get_logger
 from scrapper_tool.agent.backends import (
     get_behavior_policy,
@@ -384,9 +384,29 @@ def _crawl4ai_result_to_agent(
     )
 
     blocked = False
+    challenge_vendor: str | None = None
     if not success:
         msg = (getattr(result, "error_message", "") or "").lower()
-        blocked = any(needle in msg for needle in ("block", "cloudflare", "challenge", "captcha"))
+        # Content in hand outranks anything the message says.
+        #
+        # Crawl4AI reports success=False for a document the anti-bot 403'd and
+        # JavaScript then rendered anyway -- the store.mopar.com case documented
+        # in `_challenge` -- and its message names the vendor. Judging on that
+        # message alone returned blocked=True on a 27 KB page carrying exactly
+        # the content that was asked for, so a consumer honouring the flag threw
+        # away a page it was already holding. Same shape as the E2 bug fixed in
+        # 3.2.0, reached by a different route: a verdict drawn from prose while
+        # the evidence sits in the payload.
+        #
+        # "Came back with nothing" means no EXTRACTED DATA, deliberately -- not
+        # merely an empty body. A challenge page has a body too, and markdown of
+        # it is not evidence we got what we asked for; treating any non-empty
+        # body as success would let a wall through as content, which is the
+        # opposite failure and the worse one. But the requested schema cannot be
+        # extracted from a challenge page, so data in hand settles it.
+        if not data:
+            challenge_vendor = block_evidence(msg)
+            blocked = challenge_vendor is not None
         error = error or msg or "crawl4ai-failure"
 
     trace = ActionTrace(
@@ -407,6 +427,7 @@ def _crawl4ai_result_to_agent(
         actions=[trace],
         tokens_used=0,
         blocked=blocked,
+        challenge_vendor=challenge_vendor,
         error=error,
         duration_s=duration_s,
         steps_used=1,

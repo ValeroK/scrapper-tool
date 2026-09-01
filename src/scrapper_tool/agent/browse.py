@@ -23,7 +23,7 @@ from typing import Any, cast
 
 from pydantic import BaseModel, ValidationError
 
-from scrapper_tool._challenge import looks_like_block_message
+from scrapper_tool._challenge import block_evidence, looks_like_block_message
 from scrapper_tool._logging import get_logger
 from scrapper_tool.agent.backends import (
     BrowserHandle,
@@ -356,7 +356,9 @@ def _history_to_agent_result(
 
     final_result = _final_result(history)
     final_url = _final_url(history) or url
-    blocked = _detect_block(history)
+    # Same discipline as E1: name the evidence, never just assert the verdict.
+    challenge_vendor = _block_evidence(history)
+    blocked = challenge_vendor is not None
 
     data, error = _coerce_final(final_result, schema=schema)
     if not data and not error:
@@ -373,6 +375,7 @@ def _history_to_agent_result(
         actions=actions,
         tokens_used=_tokens_used(history),
         blocked=blocked,
+        challenge_vendor=challenge_vendor,
         error=error,
         duration_s=duration_s,
         steps_used=len(actions),
@@ -466,6 +469,20 @@ def _step_errors(history: Any) -> list[str]:
         if err:
             out.append(str(err))
     return out
+
+
+def _block_evidence(history: Any) -> str | None:
+    """What in this run's step errors indicates a wall, or None.
+
+    The evidence-carrying form of :func:`_detect_block`. ``blocked`` without a
+    named cause is a verdict a caller can neither act on nor check, so the two
+    are produced together.
+    """
+    for message in _step_errors(history):
+        evidence = block_evidence(message)
+        if evidence is not None:
+            return evidence
+    return None
 
 
 def _detect_block(history: Any) -> bool:

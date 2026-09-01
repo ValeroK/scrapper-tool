@@ -66,6 +66,12 @@ class AgentResult(BaseModel):
     actions: list[ActionTrace] = Field(default_factory=list)
     tokens_used: int = 0
     blocked: bool = False
+    challenge_vendor: str | None = None
+    """What made us say ``blocked`` -- a vendor name, or the term that matched.
+
+    ``blocked`` without this is a verdict with no evidence behind it, which a
+    caller cannot act on and cannot check. The two travel together so the claim
+    stays falsifiable; see :func:`~scrapper_tool._challenge.block_evidence`."""
     error: str | None = None
     """Recoverable error category — ``schema-validation-failed`` /
     ``no-match`` / ``captcha-encountered`` (when no solver). Hard
