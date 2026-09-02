@@ -2,6 +2,72 @@
 
 All notable changes to `scrapper-tool` are recorded here. Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning follows [SemVer](https://semver.org/).
 
+## [4.1.0] - 2026-09-02
+
+Three issues filed from one 2.1.0/3.0.0 -> 4.0.0 upgrade, plus a contract bug of
+our own that the same reporter caught. All four are fixes; the bump is a minor
+rather than a patch because the `curl-cffi` floor moves and `AgentResult` gains a
+public field.
+
+### Fixed
+
+- **The ladder ended the walk on a profile this runtime cannot execute** (#31).
+  `IMPERSONATE_LADDER` leads with `chrome150`, the pin was `curl-cffi>=0.7`, and
+  chrome150 only exists from 0.16.x -- so an ordinary install could satisfy the
+  pin and fail on rung one. curl_cffi reports an unknown profile as a *transport*
+  error, indistinguishable at the type level from a refused connection, so the
+  ladder retried the identical impossible call three times and gave up without
+  ever trying chrome146. The visible outcome was "all profiles failed", i.e. a
+  vendor blocking every request from this host.
+
+  Unsupported rungs are now skipped before any request is issued, and the probe
+  **fails open**: if curl_cffi ever stops exposing its profile list, every profile
+  is treated as supported, because refusing what we cannot verify would turn an
+  introspection change into a total outage. When *every* rung is unsupported the
+  result is now a `ConfigurationError` saying no request was issued and this is
+  not a block -- previously it claimed "All N ladder profiles returned 403/503",
+  naming a status nothing had returned.
+- **E1 reported `blocked=True` on pages it had successfully extracted** (#30).
+  Crawl4AI returns `success=False` for a document the anti-bot 403'd and
+  JavaScript then rendered, and its message names the vendor; E1 judged on that
+  message. Same shape as the E2 bug fixed in 3.2.0, reached by a different route.
+  Only a run that produced no extracted *data* can now be blocked -- data, not
+  body, because a challenge page has a body too and treating any non-empty one as
+  success would let a wall through as content.
+- **`blocked=True` could name no evidence**, contradicting what `/capabilities`
+  promises about it. `block_evidence` now returns *what* indicates a block rather
+  than merely whether one does, `looks_like_block_message` is reimplemented on top
+  of it so the two cannot drift, and both E tiers carry the evidence out. At the
+  single payload exit a block with no named cause is recovered from the error text
+  or, failing that, **withdrawn and logged** -- safe in that direction only
+  because the tiers now judge on outcome rather than prose.
+- **A Cloudflare interstitial no detector could see** (#29), returned as a clean
+  success -- so a consumer recorded "walked it, found nothing" for a page it never
+  saw, which in a catalog is indistinguishable from an empty category. It beat
+  both heuristics in opposite directions: no challenge vocabulary at all, and at
+  ~29 KB far too *large* for every small-body gate. `looks_like_host_titled_wall`
+  catches a document whose only heading is its own hostname and which says nothing
+  else, measured on **visible text rather than bytes** so padding with inline
+  script cannot hide it. Structured data vetoes it outright.
+- **`/capabilities` described `solve_cloudflare` as a plain boolean** defaulting
+  to `false`, while the field is `bool | Literal["auto"]` defaulting to `"auto"` --
+  wrong in both halves, in the endpoint whose purpose is to state the contract.
+  Three tests now check that block against the model rather than against a second
+  hand-written list.
+
+### Added
+
+- **`AgentResult.challenge_vendor`** -- what made a tier say `blocked`, so the
+  claim is checkable rather than merely asserted.
+- **`challenge_detected: "host_titled_wall"`**, the new evidence value.
+
+### Changed
+
+- **`curl-cffi` floor raised to `>=0.16.2`**, set by the ladder rather than by the
+  API surface we call. A test asserts every shipped rung is executable by the
+  installed curl_cffi, so promoting a newer profile without moving the floor fails
+  in CI rather than in a consumer's logs.
+
 ## [4.0.0] - 2026-08-30
 
 A second field report, from the same harvest. Its headline is the exact inverse
