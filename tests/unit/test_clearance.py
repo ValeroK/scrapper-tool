@@ -15,7 +15,7 @@ from __future__ import annotations
 
 import os
 import time
-from pathlib import Path
+from typing import TYPE_CHECKING
 
 import pytest
 
@@ -26,6 +26,9 @@ from scrapper_tool.clearance import (
     clearance_ttl_s,
     touch,
 )
+
+if TYPE_CHECKING:
+    from pathlib import Path
 
 _URL = "https://www.vendor.test/parts/68001234AA"
 _OTHER = "https://other.test/p"
