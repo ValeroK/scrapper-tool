@@ -2,6 +2,68 @@
 
 All notable changes to `scrapper-tool` are recorded here. Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning follows [SemVer](https://semver.org/).
 
+## [Unreleased]
+
+Detection and clearing, rebuilt after research rather than patched again. Three
+times a new kind of wall had been met with a new hand-written detector, and twice
+that detector was then forgotten somewhere it mattered.
+
+### Fixed
+
+- **Three of seven gates were two detectors behind**, and had been since 4.1.0
+  shipped. Proxy health was marking a burned IP healthy after walking into a wall
+  (so it stayed in rotation to burn the next request), the MCP surface was blind
+  to both walls found that month, and the captcha DOM probe could not see the
+  wall it exists to clear. `classify_wall` is now the only verdict, and a guard
+  test fails if any module outside `_challenge` reaches around it.
+- **The Turnstile capability probe named a module that does not exist.** It
+  looked for `theyka`, the upstream project's name; the distribution is
+  `turnstile-solver` and it ships `turnstile_solver`, pulled in by `[full]` and
+  present all along. The matrix reported Cloudflare's captcha as settle-only on
+  installs that had the solver -- a report that under-claims sends an operator
+  shopping for a key they do not need.
+- **A solve was believed rather than verified.** The in-page recheck asks a DOM
+  widget probe, which cannot see any of the walls that motivated this work. A
+  solve now has to survive re-reading the document through the full verdict, a
+  check that the page changed at all, and -- where a model exists -- looking at
+  it. A false clear stops the cascade escalating and hands back an interstitial.
+
+### Added
+
+- **Vision as a second opinion on rendered pages.** Measured before being
+  trusted: markup scores 6/6 on the labelled corpus and the model scores 2
+  correct, 3 abstentions and 1 miss, so the model is NOT the primary detector and
+  never overrides markup. It is asked only where markup found no signature --
+  precisely where a signature must fail -- and the argument for it is
+  generalisation, not accuracy: it identified the reported host-titled
+  interstitial cold, from a prompt naming no vendor, class or phrase.
+
+  `BLANK` is a first-class verdict. Three of six fixtures painted nothing at all,
+  because a JS-driven wall and an unhydrated app shell are the same blank frame;
+  a binary prompt was confidently wrong on all three. The render tier is now a
+  loop that waits for paint and asks again.
+- **Per-domain clearance profiles.** Clearing a wall is the most expensive thing
+  this tool does (~70 s for a local vision solve) and the cookie it bought was
+  discarded when the browser closed. Kept for ~30 minutes per domain, `0700`
+  under the user's cache, deleted when stale. Identity is the gate: never reused
+  for a request carrying caller cookies, because that request is acting as
+  somebody and the worst case of a successful read is impersonating them.
+- **A captcha capability matrix** in `/capabilities` and `doctor`, computed from
+  the installed cascade. `recaptcha-v3` is reported unsolvable rather than as a
+  gap -- invisible and score-based, so no key helps and listing it as a gap would
+  imply one would.
+- **A labelled detection corpus, scored every run.** Precision and recall over
+  every fixture, with the unhydrated shell pinned as a hard negative. Three
+  detectors had been merged on a green suite that could not go red, because
+  nothing asked what a new rule did to the older pages.
+
+### Changed
+
+- `SCRAPPER_TOOL_VISION_WALL_DETECT`, `SCRAPPER_TOOL_CLEARANCE_REUSE`,
+  `SCRAPPER_TOOL_CLEARANCE_TTL_S` and `SCRAPPER_TOOL_CLEARANCE_DIR` are new. Every
+  one defaults to the accurate behaviour and can be switched off; with no model
+  at all, markup still scores 6/6 and nothing breaks.
+
 ## [4.1.0] - 2026-09-02
 
 Three issues filed from one 2.1.0/3.0.0 -> 4.0.0 upgrade, plus a contract bug of

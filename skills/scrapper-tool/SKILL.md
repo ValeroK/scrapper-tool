@@ -346,6 +346,16 @@ that answer -- the same vendor can serve one path clean HTML and hand another a
 captcha in the same minute, which is not the same thing as "this vendor blocks
 us".
 
+**A solved wall stays solved.** A clearance is kept per domain for about half an
+hour, so a hard site costs one expensive solve rather than one per page. It is
+never shared by a request that carried your cookies -- that request is acting as
+someone, and its profile is a session.
+
+**Check what can actually be cleared before assuming.** `GET /capabilities`
+reports, per captcha kind, which strategies this deployment has. `recaptcha-v3`
+is listed as unsolvable rather than missing: it is invisible and score-based, so
+there is nothing to solve and no key or model changes that.
+
 **A page can be a wall without saying so.** `challenge_detected:
 "host_titled_wall"` means the document's only heading was the site's own
 hostname and it had almost no other text -- a bot wall that carries no challenge

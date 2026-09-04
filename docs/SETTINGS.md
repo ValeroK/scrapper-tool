@@ -311,6 +311,10 @@ E2     browser-use agent            -> priciest, reached automatically (see belo
 | `SCRAPPER_TOOL_RENDER_MAX_BACKENDS` | `2` | How many browser backends the render tier may try on one URL before giving up on the tier. A *wall* triggers the retry, and only a wall — see below. |
 | `SCRAPPER_TOOL_RENDER_SOLVE_CAPTCHA` | `1` (on) | Let the render tier clear a detected captcha in-page. Costs nothing on a page with no challenge on it. Set `0` to leave captchas to the LLM tiers. |
 | `SCRAPPER_TOOL_SKILL_PATH` | bundled | Path to the skill served at `GET /skill` and the `skill://scrapper-tool` MCP resource. Override to vendor house rules on top of the shipped manual. |
+| `SCRAPPER_TOOL_VISION_WALL_DETECT` | `1` (on) | Ask the local vision model about a rendered page when no markup signature matched. Costs one inference (~3.6 s measured) only on a signature-less page. Set `0` to run the solver without it. |
+| `SCRAPPER_TOOL_CLEARANCE_REUSE` | `1` (on) | Reuse a per-domain browser profile so a solved wall stays solved. Never used for a request carrying caller cookies. |
+| `SCRAPPER_TOOL_CLEARANCE_TTL_S` | `1800` | How long a shared clearance profile may be reused. Matched to a `cf_clearance`, not to the recipe store's 14 days. |
+| `SCRAPPER_TOOL_CLEARANCE_DIR` | `~/.cache/scrapper-tool/clearance` | Where those profiles live. Created `0700`. |
 
 ### Diagnosing one URL
 
@@ -327,6 +331,32 @@ verdict:  wrong_url
 
 Exit 0 when the page is reachable, 1 otherwise, `--json` for machine use. It
 obeys the URL guard like every other tier.
+
+### Detecting a wall, and clearing it
+
+Two separate steps, and they fail for unrelated reasons.
+
+**Detection** goes through one function. `classify_wall` is the only verdict, and
+a guard test fails if any module reaches around it for an individual detector --
+three gates had silently fallen two detectors behind before that existed. Markup
+answers first; where no signature matches and a vision model is available, the
+model looks at the rendered page. It never overrides markup, and it can answer
+"nothing has painted yet", in which case the page is given time and asked once
+more.
+
+Without a model, markup stands alone and scores 6/6 on the labelled corpus. What
+you lose with no GPU is generalisation to walls nobody has written a signature
+for, not accuracy on the ones we know.
+
+**Clearing** is reported rather than assumed. `GET /capabilities` and
+`scrapper-tool doctor` publish, per captcha kind, which strategies this install
+actually has -- so a gap is visible before a live target finds it. `recaptcha-v3`
+is reported as unsolvable rather than as a gap: it is invisible and score-based,
+so no key and no model helps, and the lever is fingerprint or egress IP.
+
+A won clearance is kept per domain for ~30 minutes, so an expensive solve is paid
+once instead of once per request. Never for a request carrying caller cookies --
+that request is acting as somebody, and its profile is a session.
 
 ### Asking what this deployment can do
 

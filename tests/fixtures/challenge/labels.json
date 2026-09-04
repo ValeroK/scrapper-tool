@@ -1,0 +1,54 @@
+{
+  "_README": [
+    "The labelled corpus for wall detection. Every fixture is either a wall or",
+    "content, and `test_detection_corpus.py` scores classify_wall against all of",
+    "them on every run.",
+    "",
+    "Why this exists: three detectors were each written against a single reported",
+    "page and merged because the suite stayed green -- and the suite could not go",
+    "red, because nothing asked what the new rule did to the other fixtures. A",
+    "rule that gains one wall and loses one real page looked identical to a rule",
+    "that only gains.",
+    "",
+    "Adding a wall means adding a fixture here, not only a detector. `status` is",
+    "the HTTP status the page was served with, which several detectors read.",
+    "`url` matters for the redirect and host-titled evidence."
+  ],
+  "fixtures": [
+    {
+      "file": "akamai_behavioral_200.html",
+      "wall": true,
+      "status": 200,
+      "url": "https://www.dickssportinggoods.com/p/item",
+      "note": "Akamai behavioural tile challenge, served 200"
+    },
+    {
+      "file": "akamai_maintenance_403.html",
+      "wall": true,
+      "status": 403,
+      "url": "https://www.dickssportinggoods.com/p/item",
+      "note": "Access Denied reference page; readable text that says no"
+    },
+    {
+      "file": "radware_wall_large_200.html",
+      "wall": true,
+      "status": 200,
+      "url": "https://www.yad2.co.il/listing",
+      "note": "118 KB Radware wall, padded with obfuscated JS. Too LARGE for a size gate"
+    },
+    {
+      "file": "akamai_protected_real_shell_200.html",
+      "wall": false,
+      "status": 200,
+      "url": "https://www.dickssportinggoods.com/",
+      "note": "Legitimate Angular shell. Structurally identical to a wall: 69 chars of text, no semantic elements. The hard negative"
+    },
+    {
+      "file": "radware_protected_real_page.html",
+      "wall": false,
+      "status": 200,
+      "url": "https://www.yad2.co.il/listing",
+      "note": "Real page that carries the site's own Radware script, so a naive signature match condemns it"
+    }
+  ]
+}
