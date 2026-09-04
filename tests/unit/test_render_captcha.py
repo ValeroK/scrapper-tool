@@ -20,15 +20,19 @@ _CLEARED = "<html><head><title>Real page</title></head><body><p>the goods</p></b
 
 
 class _Page:
-    """The two things ``_try_clear_challenge`` asks of a page."""
+    """The three things ``_try_clear_challenge`` asks of a page."""
 
-    def __init__(self, after: str) -> None:
+    def __init__(self, after: str, url: str = "https://v.test/p") -> None:
         self._after = after
+        self.url = url
         self.content_calls = 0
 
     async def content(self) -> str:
         self.content_calls += 1
         return self._after
+
+    async def screenshot(self, **_: Any) -> bytes:
+        return b"png"
 
 
 class TestCaptchaSolvingToggle:
@@ -184,3 +188,107 @@ class TestRedirectOpensTheGate:
         )
         assert out == _CLEARED
         assert page.content_calls == 0
+
+
+class TestSolveVerification:
+    """ "The solver applied something" is not "the wall is gone".
+
+    The in-page recheck asks `detect_challenge`, a DOM widget probe -- and a
+    widget probe cannot see the walls that motivated all of this: one had
+    obfuscated class names, one existed only as a redirect, one carried no widget
+    at all. So a solve is verified through the same facade the cascade uses.
+
+    A false clear is the expensive direction: it stops the cascade escalating and
+    hands the caller an interstitial as content.
+    """
+
+    _WALL_AFTER = (
+        "<html><head><title>Just a moment...</title></head><body>cf-chl-bypass</body></html>"
+    )
+
+    @staticmethod
+    def _solver(monkeypatch: pytest.MonkeyPatch, *, solved: bool) -> None:
+        async def fake_solve(page: Any, solver: Any, url: str, **kwargs: Any) -> bool:
+            return solved
+
+        monkeypatch.setattr("scrapper_tool.agent.backends.captcha_dom.solve_on_page", fake_solve)
+        monkeypatch.setattr(
+            "scrapper_tool.agent.backends.llm.get_vision_backend", _async_return(None)
+        )
+
+    @pytest.mark.asyncio
+    async def test_a_solve_onto_another_wall_is_not_a_clear(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The solver said yes and the page still shows a wall."""
+        self._solver(monkeypatch, solved=True)
+        page = _Page(self._WALL_AFTER)
+
+        out = await render_mod._try_clear_challenge(
+            page, "https://v.test/p", _WALL, 403, final_url="https://v.test/p"
+        )
+
+        assert out == _WALL, "a page still showing a wall was reported as cleared"
+
+    @pytest.mark.asyncio
+    async def test_an_unchanged_page_is_not_a_clear(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Byte-identical after a solve that claimed success means nothing happened."""
+        self._solver(monkeypatch, solved=True)
+
+        out = await render_mod._try_clear_challenge(
+            _Page(_WALL), "https://v.test/p", _WALL, 403, final_url="https://v.test/p"
+        )
+
+        assert out == _WALL
+
+    @pytest.mark.asyncio
+    async def test_a_genuine_clear_returns_the_new_document(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        self._solver(monkeypatch, solved=True)
+
+        out = await render_mod._try_clear_challenge(
+            _Page(_CLEARED), "https://v.test/p", _WALL, 403, final_url="https://v.test/p"
+        )
+
+        assert out == _CLEARED
+
+    @pytest.mark.asyncio
+    async def test_the_page_is_read_once(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Verification hands back what it read rather than re-reading it."""
+        self._solver(monkeypatch, solved=True)
+        page = _Page(_CLEARED)
+
+        await render_mod._try_clear_challenge(
+            page, "https://v.test/p", _WALL, 403, final_url="https://v.test/p"
+        )
+
+        assert page.content_calls == 1
+
+    @pytest.mark.asyncio
+    async def test_the_model_can_veto_a_clear_markup_accepted(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The page changed and carries no signature, but still shows a wall."""
+        self._solver(monkeypatch, solved=True)
+
+        class _Seeing:
+            model = "vlm"
+
+            async def complete_vision(self, *a: Any, **k: Any) -> str:
+                return "WALL"
+
+        async def _backend() -> Any:
+            return _Seeing()
+
+        monkeypatch.setattr(render_mod, "_vision_backend", _backend)
+        unknown_after = (
+            '<html><head><title>Checking</title></head><body><div class="Zz1">'
+            "<p>One moment.</p></div></body></html>"
+        )
+
+        out = await render_mod._try_clear_challenge(
+            _Page(unknown_after), "https://v.test/p", _WALL, 403, final_url="https://v.test/p"
+        )
+
+        assert out == _WALL, "the model saw a wall and the clear was accepted anyway"

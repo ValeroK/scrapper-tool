@@ -243,6 +243,63 @@ def _vision_detection_enabled() -> bool:
     return raw.strip().lower() in {"1", "true", "yes", "on"}
 
 
+async def _wall_is_gone(  # noqa: PLR0911 - one return per way a clear can be false
+    page: Any, url: str, before: str
+) -> str | None:
+    """Did the solve actually work? Asked of the page, not of the solver.
+
+    A solver returning True means "I applied something", which is a different
+    claim from "the wall is gone". The existing in-page recheck asks
+    `detect_challenge`, i.e. the DOM widget probe -- and a widget probe cannot
+    see the walls that motivated all of this: one had obfuscated class names, one
+    was only visible as a redirect, one carried no widget at all.
+
+    So verification asks the same question the cascade asks, through the same
+    facade: re-read the document, run every detector, and where a model is
+    available look at the page as well. A solve that "succeeded" onto a page
+    still showing a wall is a false clear, and a false clear is the expensive
+    kind -- it stops the cascade escalating and hands the caller an interstitial.
+
+    Returns the cleared document, or None if the wall is still there. Returning
+    the HTML rather than a bool means the caller does not re-read a page this
+    function has already read.
+
+    ``before`` is only used to notice that nothing changed at all, which is the
+    common shape of a solve that did nothing.
+    """
+    from scrapper_tool._challenge import classify_wall  # noqa: PLC0415
+
+    try:
+        after = str(await page.content())
+    except Exception as exc:
+        _logger.debug("patterns.render.verify_read_failed", error=str(exc)[:160])
+        return None
+
+    final_url = str(getattr(page, "url", url) or url)
+    if classify_wall(after, 200, requested_url=url, final_url=final_url).walled:
+        _logger.info("patterns.render.solve_did_not_clear", url=url, reason="markup")
+        return None
+
+    if after == before:
+        # Byte-identical after a solve that claimed success. Nothing happened.
+        _logger.info("patterns.render.solve_did_not_clear", url=url, reason="unchanged")
+        return None
+
+    if not _vision_detection_enabled():
+        return after
+    backend = await _vision_backend()
+    if backend is None:
+        return after
+
+    from scrapper_tool.agent.backends.wall_vision import look_at_page  # noqa: PLC0415
+
+    seen = await look_at_page(await _screenshot(page), backend)
+    if seen == "WALL":
+        _logger.info("patterns.render.solve_did_not_clear", url=url, reason="vision")
+        return None
+    return after
+
+
 async def _try_clear_challenge(
     page: Any,
     url: str,
@@ -304,8 +361,14 @@ async def _try_clear_challenge(
     if not solved:
         _logger.info("patterns.render.captcha_unsolved", url=url)
         return html
+    # "The solver applied something" is not "the wall is gone". A false clear
+    # stops the cascade escalating and hands the caller an interstitial, which is
+    # the expensive direction to be wrong in.
+    cleared = await _wall_is_gone(page, url, html)
+    if cleared is None:
+        return html
     _logger.info("patterns.render.captcha_cleared", url=url)
-    return str(await page.content())
+    return cleared
 
 
 async def render_html(
