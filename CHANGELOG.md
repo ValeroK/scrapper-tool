@@ -2,7 +2,7 @@
 
 All notable changes to `scrapper-tool` are recorded here. Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning follows [SemVer](https://semver.org/).
 
-## [Unreleased]
+## [4.2.0] - 2026-09-04
 
 Detection and clearing, rebuilt after research rather than patched again. Three
 times a new kind of wall had been met with a new hand-written detector, and twice
