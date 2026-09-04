@@ -685,6 +685,7 @@ def _build_app(  # noqa: PLR0915 - one statement per route; splitting hides the 
             "configured_browser": configured_browser,
             "tiers": _tier_capabilities_payload(),
             "render_max_backends": _max_render_backends(),
+            "captcha": await _captcha_capabilities_payload(),
             "result_fields": {
                 "requested_url": "what was asked for; compare against `url` to spot a redirect",
                 "url": "where the request actually finished",
@@ -2309,6 +2310,33 @@ def _harvest_cookies(req: Any, harvested: Any, *, tier: str) -> None:
         tier=tier,
         count=len(incoming),
     )
+
+
+async def _captcha_capabilities_payload() -> dict[str, Any]:
+    """What this deployment can actually clear, per captcha kind.
+
+    Computed from the installed cascade, not from documentation. An operator
+    running with no paid key and without the [turnstile-solver] extra has, for
+    Turnstile, exactly one strategy -- wait and reload -- and until now the only
+    way to discover that was to fail on a live target.
+    """
+    try:
+        from scrapper_tool.agent.backends.captcha import captcha_capabilities  # noqa: PLC0415
+        from scrapper_tool.agent.backends.llm import get_vision_backend  # noqa: PLC0415
+        from scrapper_tool.agent.types import AgentConfig  # noqa: PLC0415
+    except ImportError:
+        return {"available": False, "reason": "requires the [llm-agent] extra", "kinds": []}
+
+    cfg = AgentConfig.from_env()
+    try:
+        vision = await get_vision_backend(cfg) is not None
+    except Exception:
+        vision = False
+    return {
+        "available": True,
+        "vision_grid": vision,
+        "kinds": captcha_capabilities(cfg, vision_available=vision),
+    }
 
 
 def _backend_capabilities_payload() -> list[dict[str, Any]]:

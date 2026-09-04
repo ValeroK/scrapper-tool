@@ -23,7 +23,7 @@ as user-runnable adjuncts but are NOT part of the initial implementation.
 from __future__ import annotations
 
 import asyncio
-from typing import TYPE_CHECKING, Literal, Protocol
+from typing import TYPE_CHECKING, Any, Literal, Protocol, get_args
 
 import httpx
 
@@ -653,6 +653,92 @@ class AutoCascadeSolver:
 # --- Resolver -------------------------------------------------------------
 
 
+#: Kinds that no interaction can clear, whatever is installed. reCAPTCHA v3 is
+#: invisible and score-based -- there is no challenge to answer, so a solver
+#: cascade cannot help and neither can a vision model. The lever is fingerprint
+#: and IP reputation, and saying so beats failing slowly.
+UNSOLVABLE_KINDS: frozenset[CaptchaKind] = frozenset({"recaptcha-v3"})
+
+#: Strategies that need no API key and no optional extra.
+_FREE_DOM_STRATEGIES: dict[str, frozenset[CaptchaKind]] = {
+    # A stealth browser clears most Turnstile challenges by waiting. It solves
+    # nothing; it settles and reloads.
+    "settle": frozenset({"turnstile"}),
+    # reCAPTCHA v2 and hCaptcha both start as a checkbox that frequently passes
+    # outright on a good fingerprint.
+    "checkbox": frozenset({"recaptcha-v2", "hcaptcha"}),
+    # A gap has an exact answer, so this needs no model at all.
+    "slider": frozenset({"geetest", "datadome"}),
+}
+
+
+def captcha_capabilities(
+    config: AgentConfig, *, vision_available: bool = False
+) -> list[dict[str, Any]]:
+    """Per captcha kind, what this deployment can actually do about it.
+
+    Computed from the installed cascade rather than from documentation, because
+    the two disagree: an operator running without a paid key and without the
+    ``[turnstile-solver]`` extra has, for Turnstile, exactly one strategy -- wait
+    eight seconds and reload. Nothing said so, and the only way to find out was
+    to fail on a live target.
+
+    ``vision_available`` is passed in rather than probed here: establishing it
+    costs a real inference call, the caller usually already knows, and this
+    module must stay importable without the LLM extra.
+    """
+    from scrapper_tool._extras import agent_available  # noqa: PLC0415
+
+    # Read defensively: `doctor` builds this report from whatever config object
+    # it managed to load, including a partial one after a config error, and a
+    # capability REPORT that crashes is strictly worse than one that under-claims.
+    has_key = bool(getattr(config, "captcha_api_key", None))
+    solver_name = getattr(config, "captcha_solver", "auto")
+    browser_tiers = agent_available() and solver_name != "none"
+
+    rows: list[dict[str, Any]] = []
+    for kind in get_args(CaptchaKind):
+        strategies: list[str] = []
+        if browser_tiers:
+            strategies.extend(name for name, kinds in _FREE_DOM_STRATEGIES.items() if kind in kinds)
+            if kind == "turnstile" and _theyka_installed():
+                strategies.append("theyka")
+            if vision_available and kind in _VISION_GRID_KINDS:
+                strategies.append("vision-grid")
+        if has_key and solver_name != "none":
+            strategies.append("paid")
+
+        unsolvable = kind in UNSOLVABLE_KINDS
+        rows.append(
+            {
+                "kind": kind,
+                "strategies": strategies,
+                "solvable": bool(strategies) and not unsolvable,
+                "note": (
+                    "invisible and score-based; nothing to solve. Improve the "
+                    "fingerprint or the egress IP instead"
+                    if unsolvable
+                    else (
+                        "no free strategy; set SCRAPPER_TOOL_CAPTCHA_KEY" if not strategies else ""
+                    )
+                ),
+            }
+        )
+    return rows
+
+
+#: reCAPTCHA v2 and hCaptcha escalate from a checkbox to an image grid, which is
+#: what the local vision solver reads.
+_VISION_GRID_KINDS: frozenset[CaptchaKind] = frozenset({"recaptcha-v2", "hcaptcha"})
+
+
+def _theyka_installed() -> bool:
+    """Whether the free Turnstile solver's extra is present."""
+    import importlib.util  # noqa: PLC0415
+
+    return importlib.util.find_spec("theyka") is not None
+
+
 def get_captcha_solver(config: AgentConfig) -> CaptchaSolver:  # noqa: PLR0911, PLR0912
     """Build a captcha solver from config.
 
@@ -700,6 +786,7 @@ def get_captcha_solver(config: AgentConfig) -> CaptchaSolver:  # noqa: PLR0911, 
 
 
 __all__ = [
+    "UNSOLVABLE_KINDS",
     "AutoCascadeSolver",
     "CamoufoxAutoSolver",
     "CapSolverSolver",
@@ -709,5 +796,6 @@ __all__ = [
     "NopechaSolver",
     "TheykaSolver",
     "TwoCaptchaSolver",
+    "captcha_capabilities",
     "get_captcha_solver",
 ]

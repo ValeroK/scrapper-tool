@@ -315,6 +315,26 @@ def _environment_checks(cfg: Any) -> tuple[dict[str, Any], list[str]]:
     return checks, fixes
 
 
+def _uncoverable_captcha_kinds(cfg: Any, vision_ok: bool) -> list[str]:
+    """Captcha kinds with no strategy at all in this configuration.
+
+    Excludes the ones that are unsolvable by nature -- reCAPTCHA v3 is invisible
+    and score-based, so listing it as a gap would imply a key would fix it.
+    """
+    try:
+        from scrapper_tool.agent.backends.captcha import (  # noqa: PLC0415
+            UNSOLVABLE_KINDS,
+            captcha_capabilities,
+        )
+    except ImportError:
+        return []
+    return [
+        row["kind"]
+        for row in captcha_capabilities(cfg, vision_available=vision_ok)
+        if not row["strategies"] and row["kind"] not in UNSOLVABLE_KINDS
+    ]
+
+
 async def _captcha_vision_state(  # noqa: PLR0911 — one return per probe outcome
     cfg: Any,
 ) -> tuple[str | None, str]:
@@ -467,6 +487,22 @@ async def run_doctor(*, require_tier: str | None = None) -> dict[str, Any]:
         checks["captcha_vision_model"] = vision_state
     if vision_fix:
         env_fixes.append(vision_fix)
+
+    # Which captcha kinds this install can actually clear. Reported at install
+    # time rather than discovered by failing on a live target: with no paid key
+    # and no [turnstile-solver] extra, Turnstile has exactly one strategy --
+    # wait and reload -- and nothing said so.
+    # Reported, never nagged about. Running without a paid key is a legitimate
+    # and common choice, so this belongs in `checks` -- where it is visible at
+    # install time instead of being discovered on a live target -- and NOT in
+    # `fixes`, which would put a permanent item in front of every keyless
+    # install for a decision they already made.
+    uncoverable = _uncoverable_captcha_kinds(cfg, vision_state == "ok")
+    checks["captcha_coverage"] = (
+        "free tiers only; no strategy for " + ", ".join(uncoverable)
+        if uncoverable
+        else "all solvable kinds covered"
+    )
 
     # De-duplicate fixes while preserving first-seen order: the same
     # `pip install` line is often the remedy for several tiers at once, and a
