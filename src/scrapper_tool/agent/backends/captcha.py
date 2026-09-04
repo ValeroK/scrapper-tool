@@ -701,8 +701,8 @@ def captcha_capabilities(
         strategies: list[str] = []
         if browser_tiers:
             strategies.extend(name for name, kinds in _FREE_DOM_STRATEGIES.items() if kind in kinds)
-            if kind == "turnstile" and _theyka_installed():
-                strategies.append("theyka")
+            if kind == "turnstile" and _turnstile_solver_installed():
+                strategies.append("turnstile-solver")
             if vision_available and kind in _VISION_GRID_KINDS:
                 strategies.append("vision-grid")
         if has_key and solver_name != "none":
@@ -732,11 +732,19 @@ def captcha_capabilities(
 _VISION_GRID_KINDS: frozenset[CaptchaKind] = frozenset({"recaptcha-v2", "hcaptcha"})
 
 
-def _theyka_installed() -> bool:
-    """Whether the free Turnstile solver's extra is present."""
+def _turnstile_solver_installed() -> bool:
+    """Whether the free Turnstile solver's extra is present.
+
+    The distribution is ``turnstile-solver`` and the module it provides is
+    ``turnstile_solver``. An earlier version of this probed for ``theyka`` -- the
+    upstream project's name, and the one this codebase calls the tier -- which is
+    not importable, so the matrix reported Turnstile as settle-only even on an
+    install that had the solver. A capability report that under-claims sends an
+    operator shopping for a paid key they do not need.
+    """
     import importlib.util  # noqa: PLC0415
 
-    return importlib.util.find_spec("theyka") is not None
+    return importlib.util.find_spec("turnstile_solver") is not None
 
 
 def get_captcha_solver(config: AgentConfig) -> CaptchaSolver:  # noqa: PLR0911, PLR0912

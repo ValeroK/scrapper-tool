@@ -1,12 +1,13 @@
 """What this deployment can actually clear, reported before a live target proves it.
 
-Ten captcha kinds are modelled. With no paid key and without the
-``[turnstile-solver]`` extra, Turnstile -- which is what Cloudflare serves -- has
-exactly one strategy: wait eight seconds and reload. Nothing said so, and the
-only way to discover it was to fail slowly on a real page.
+Ten captcha kinds are modelled and nothing said which of them an install could
+do anything about. The matrix is computed from the installed cascade rather than
+from documentation, because the two disagreed -- in both directions.
 
-The matrix is computed from the installed cascade rather than from documentation,
-because the two disagreed.
+It under-claimed too, which is its own failure mode: the Turnstile probe looked
+for a module name that does not exist, so it reported Cloudflare's captcha as
+settle-only on installs that had the solver all along. A report that
+under-claims sends an operator shopping for a key they do not need.
 """
 
 from __future__ import annotations
@@ -48,13 +49,27 @@ class TestTheFreeMatrix:
             "datadome",
         }
 
-    def test_turnstile_has_only_the_settle(self, rows: dict[str, dict[str, Any]]) -> None:
-        """The Cloudflare row, and the reason a reported target never cleared.
+    def test_turnstile_reports_the_solver_when_it_is_installed(
+        self, rows: dict[str, dict[str, Any]]
+    ) -> None:
+        """The Cloudflare row, and a correction worth keeping.
 
-        `settle` solves nothing -- it waits and reloads. Reporting that honestly
-        is the point of this whole matrix.
+        `settle` solves nothing -- it waits and reloads -- so for a while this
+        was believed to be Turnstile's only free strategy. It was not: the
+        distribution is `turnstile-solver` and the module is `turnstile_solver`,
+        while the probe looked for `theyka`, the upstream project's name and the
+        one this codebase calls the tier. The solver was installed the whole time
+        via the [full] extra.
+
+        A capability report that UNDER-claims is its own failure: it sends an
+        operator shopping for a paid key they already do not need.
         """
-        assert rows["turnstile"]["strategies"] == ["settle"]
+        import importlib.util
+
+        expected = ["settle"]
+        if importlib.util.find_spec("turnstile_solver") is not None:
+            expected.append("turnstile-solver")
+        assert rows["turnstile"]["strategies"] == expected
 
     def test_the_checkbox_and_slider_kinds_are_covered(
         self, rows: dict[str, dict[str, Any]]
