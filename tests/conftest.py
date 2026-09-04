@@ -89,6 +89,11 @@ def _isolate_recipe_cache(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> No
     populates it deliberately.
     """
     monkeypatch.setenv("SCRAPPER_TOOL_RECIPE_DIR", str(tmp_path / "recipes"))
+    # Per-domain clearance profiles are default-ON and live under the user's real
+    # cache. Without this, a test scraping "example.com" writes a browser profile
+    # into ~/.cache and a later test (or a real local run) reuses it. Caught the
+    # hard way: the first run of this feature left eight fake domains behind.
+    monkeypatch.setenv("SCRAPPER_TOOL_CLEARANCE_DIR", str(tmp_path / "clearance"))
     set_store(None)  # drop the process-wide handle so the new dir takes effect
     # The per-domain tier policy (F2) lives under the same cache dir and is also
     # default-ON; reset its process-wide handle for the same reason, else a

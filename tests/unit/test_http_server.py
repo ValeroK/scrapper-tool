@@ -3013,11 +3013,21 @@ class TestPatternDNetworkIdle:
 
 
 class TestSharedProfileDir:
-    """v1.3.0 - cascade allocates per-request user_data_dir for shared CF clearance.
+    """The cascade allocates a user_data_dir so a CF clearance survives the walk.
 
-    Default: ephemeral mkdtemp + rmtree on every exit path.
-    Opt-in: persist_browser_profile_dir lets the caller own the lifecycle.
+    Three sources, in precedence: a caller-owned `persist_browser_profile_dir`;
+    the per-domain clearance profile (default since the clearance work, so a
+    solve is paid for once per domain rather than once per request); and an
+    ephemeral mkdtemp, which is now the fallback when reuse is switched off or
+    the request carries caller cookies.
+
+    These tests pin the ephemeral path, so they disable reuse explicitly rather
+    than relying on it being the default -- which it no longer is.
     """
+
+    @pytest.fixture(autouse=True)
+    def _no_reuse(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setenv("SCRAPPER_TOOL_CLEARANCE_REUSE", "0")
 
     @pytest.mark.asyncio
     async def test_ephemeral_dir_created_and_cleaned_on_success(

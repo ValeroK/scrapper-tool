@@ -2052,6 +2052,25 @@ def _record_e2_attempt(req: Any, *, won: bool) -> None:
         _logger.debug("scrape.e2_attempt.record_failed", url=req.url, error=str(exc)[:120])
 
 
+def _touch_clearance(payload: dict[str, Any] | None, req: Any) -> None:
+    """Restart the shared profile's TTL after a request that reached content.
+
+    Without this a domain under continuous crawl loses its clearance to
+    wall-clock age alone, halfway through, and pays for a fresh solve for no
+    reason. A blocked result deliberately does NOT refresh it -- if the profile
+    is no longer getting us through, letting it expire is the correct outcome.
+    """
+    path = req.__dict__.get("_clearance_dir")
+    if path is None or payload is None or payload.get("blocked"):
+        return
+    try:
+        from scrapper_tool.clearance import touch  # noqa: PLC0415
+
+        touch(path)
+    except Exception as exc:
+        _logger.debug("scrape.clearance_touch_failed", error=str(exc)[:160])
+
+
 def _record_policy(payload: dict[str, Any] | None, req: Any) -> None:
     """After a scrape, remember which tier reached content on this domain.
 
@@ -3010,10 +3029,36 @@ def _resolve_profile_dir(req: Any) -> tuple[str | None, str | None]:
     # tied to D's availability for now. Direct E-tier modes (extract /
     # browse) honor only the caller-provided dir.
     if req.mode in ("auto", "hostile") and _hostile_available():
+        # A per-DOMAIN profile before an ephemeral one, so a clearance won here
+        # is still here on the next request. Clearing a wall is the most
+        # expensive thing this tool does -- ~70s of local inference for a vision
+        # solve -- and the credential it buys was previously discarded when the
+        # browser closed, making every request re-fight the same wall.
+        #
+        # Never for a request carrying the caller's cookies: that request is
+        # acting as somebody, its profile is a session, and sharing it would
+        # risk impersonating the wrong user. Anonymous clearances only.
+        shared = _shared_clearance_dir(req)
+        if shared is not None:
+            return str(shared), None
         ephemeral = tempfile.mkdtemp(prefix="scrapper-cascade-")
         return ephemeral, ephemeral
 
     return None, None
+
+
+def _shared_clearance_dir(req: Any) -> Any:
+    """The per-domain profile for this request, or None to fall back to ephemeral."""
+    try:
+        from scrapper_tool.clearance import clearance_dir_for  # noqa: PLC0415
+
+        path = clearance_dir_for(req.url, has_caller_cookies=bool(_request_cookies(req)))
+    except Exception as exc:
+        _logger.debug("scrape.clearance_unavailable", error=str(exc)[:160])
+        return None
+    if path is not None:
+        req.__dict__["_clearance_dir"] = path
+    return path
 
 
 async def _do_scrape(req: Any) -> dict[str, Any]:
@@ -3083,6 +3128,7 @@ async def _do_scrape(req: Any) -> dict[str, Any]:
         # F2: remember which tier reached content so the next request for this
         # domain can start there. One place, so every winning tier is recorded.
         _record_policy(payload, req)
+        _touch_clearance(payload, req)
         return payload
     except BaseException:
         raised = True
