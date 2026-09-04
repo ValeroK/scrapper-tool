@@ -152,8 +152,105 @@ def _captcha_solving_enabled() -> bool:
     return raw.strip().lower() in {"1", "true", "yes", "on"}
 
 
+#: How long to wait for a page that has painted nothing, before looking again.
+#: A JS-driven wall and an unhydrated app shell are the same blank frame; the
+#: only way to tell them apart is to let one of them finish.
+_REPAINT_WAIT_MS = 3_000
+
+
+async def _screenshot(page: Any) -> bytes:
+    """A PNG of the viewport, or empty bytes if the page cannot give one."""
+    try:
+        shot = await page.screenshot(type="png")
+    except Exception as exc:
+        _logger.debug("patterns.render.screenshot_failed", error=str(exc)[:160])
+        return b""
+    return bytes(shot) if shot else b""
+
+
+async def _second_opinion(page: Any, url: str, html: str, status: int) -> str | None:
+    """Wall evidence for this page, asking the model only if markup found none.
+
+    Order matters and is not arbitrary. Markup is consulted first because it is
+    measurably better on every wall we have a signature for -- 6 of 6 against the
+    model's 2 -- and because it costs nothing. The model is consulted second
+    because markup's score is a memorisation score: three of its detectors were
+    written after the exact pages they now catch, so it cannot be expected to
+    recognise the next one.
+
+    A ``BLANK`` verdict is not a "no". It means nothing had painted yet, which a
+    JS-driven wall and a still-loading app shell both look like, so the page is
+    given time and asked once more. Only a second BLANK is treated as "no
+    opinion".
+
+    Returns the evidence string, or None when nothing indicates a wall. Never
+    raises: this is an enrichment on top of a render that already happened.
+    """
+    from scrapper_tool._challenge import classify_wall  # noqa: PLC0415
+
+    final_url = str(getattr(page, "url", url) or url)
+    verdict = classify_wall(html, status, requested_url=url, final_url=final_url)
+    if verdict.walled:
+        return verdict.evidence
+
+    if not _vision_detection_enabled():
+        return None
+
+    backend = await _vision_backend()
+    if backend is None:
+        # No model, or none that can see. Markup stands alone, which is exactly
+        # the pre-vision behaviour and is 6-for-6 on everything known.
+        return None
+
+    from scrapper_tool.agent.backends.wall_vision import look_at_page  # noqa: PLC0415
+
+    seen = await look_at_page(await _screenshot(page), backend)
+    if seen == "BLANK":
+        await page.wait_for_timeout(_REPAINT_WAIT_MS)
+        seen = await look_at_page(await _screenshot(page), backend)
+    if seen == "WALL":
+        _logger.info(
+            "patterns.render.wall_seen",
+            url=url,
+            detail="no markup signature matched; the model saw a wall",
+        )
+        return "vision"
+    return None
+
+
+async def _vision_backend() -> Any:
+    """The verified vision backend, or None. Absence is normal, not an error."""
+    try:
+        from scrapper_tool.agent.backends.llm import get_vision_backend  # noqa: PLC0415
+        from scrapper_tool.agent.types import AgentConfig  # noqa: PLC0415
+
+        return await get_vision_backend(AgentConfig.from_env())
+    except Exception as exc:
+        _logger.debug("patterns.render.vision_unavailable", error=str(exc)[:160])
+        return None
+
+
+def _vision_detection_enabled() -> bool:
+    """On by default; ``SCRAPPER_TOOL_VISION_WALL_DETECT=0`` disables.
+
+    Worth a switch of its own rather than riding on the captcha toggle: an
+    operator may want the solver without paying a few seconds of inference on
+    every signature-less render.
+    """
+    raw = os.environ.get("SCRAPPER_TOOL_VISION_WALL_DETECT")
+    if raw is None or not raw.strip():
+        return True
+    return raw.strip().lower() in {"1", "true", "yes", "on"}
+
+
 async def _try_clear_challenge(
-    page: Any, url: str, html: str, status: int, *, final_url: str = ""
+    page: Any,
+    url: str,
+    html: str,
+    status: int,
+    *,
+    final_url: str = "",
+    known_wall: bool = False,
 ) -> str:
     """Attempt to clear a bot wall on a live render, returning the resulting HTML.
 
@@ -179,7 +276,14 @@ async def _try_clear_challenge(
     # One verdict, so this gate can never fall behind the detectors again. Left
     # out of step, it keeps the solver switched off on exactly the pages that
     # most need it -- the coupling reported twice now.
-    if not classify_wall(html, status, requested_url=url, final_url=final_url).walled:
+    # ``known_wall`` carries a verdict the caller already reached -- including
+    # one the model reached and markup could not. Without it the solver would
+    # stay switched off on exactly the pages vision exists to catch, which is the
+    # same coupling that has now been reported twice.
+    if (
+        not known_wall
+        and not classify_wall(html, status, requested_url=url, final_url=final_url).walled
+    ):
         return html
     try:
         from scrapper_tool.agent.backends import get_captcha_solver  # noqa: PLC0415
@@ -313,12 +417,24 @@ async def render_html(
 
         html = await page.content()
         status = int(getattr(response, "status", 200) or 200)
+
+        # A wall no signature describes is still a wall. Markup answers first --
+        # it is faster, deterministic and better on everything we have a
+        # signature for -- and the model is asked only when markup found nothing,
+        # which is precisely where a signature must fail.
+        wall_evidence = await _second_opinion(page, url, html, status)
+
         # Before the cookies are harvested, so a clearance won here flows out on
         # RenderResult and the tiers above inherit it instead of re-fighting the
         # same wall from scratch.
         if solve_captcha if solve_captcha is not None else _captcha_solving_enabled():
             html = await _try_clear_challenge(
-                page, url, html, status, final_url=str(getattr(page, "url", url) or url)
+                page,
+                url,
+                html,
+                status,
+                final_url=str(getattr(page, "url", url) or url),
+                known_wall=wall_evidence is not None,
             )
         final_url = str(getattr(page, "url", url) or url)
         # Named `harvested` rather than `cookies` to keep it distinct from the
