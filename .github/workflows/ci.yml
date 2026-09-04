@@ -196,8 +196,15 @@ jobs:
         # Without --strict, pip-audit still exits non-zero on actual
         # CVE findings — the warning behaviour we trade away is for
         # "package not found on PyPI" cases, which is what we want.
-        run: uv run pip-audit --skip-editable
-        continue-on-error: false   # fail the build on any new CVE
+        #
+        # --ignore-vuln PYSEC-2026-3740: nltk, reached only through crawl4ai.
+        # 3.10.3 is the LATEST release -- upstream has published no fix, so there
+        # is nothing to upgrade to and the alternative is a permanently red audit
+        # job that everyone learns to ignore, which is worse than one documented
+        # exception. Revisit when nltk ships a fixed version: drop this line and
+        # let the job tell you whether it is still needed.
+        run: uv run pip-audit --skip-editable --ignore-vuln PYSEC-2026-3740
+        continue-on-error: false   # fail the build on any OTHER new CVE
 
   mcp-tool-surface-check:
     name: MCP tool surface is up-to-date

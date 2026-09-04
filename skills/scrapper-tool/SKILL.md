@@ -356,11 +356,18 @@ reports, per captcha kind, which strategies this deployment has. `recaptcha-v3`
 is listed as unsolvable rather than missing: it is invisible and score-based, so
 there is nothing to solve and no key or model changes that.
 
-**A page can be a wall without saying so.** `challenge_detected:
-"host_titled_wall"` means the document's only heading was the site's own
-hostname and it had almost no other text -- a bot wall that carries no challenge
-vocabulary at all. These are returned as blocked rather than as an empty page,
-because "walked it, found nothing" and "never saw it" are not the same result.
+**A page can be a wall without saying so.** `challenge_detected` names what
+proved it: a vendor, `redirect` (we finished on a challenge page), or
+`host_titled_wall` (the only heading was the site's own hostname, with almost no
+other text). A fourth value, `vision`, means no markup signature matched and the
+local model recognised a wall on the rendered page -- that is how a wall nobody
+has written a signature for gets caught. All of these come back as blocked
+rather than as an empty page, because "walked it, found nothing" and "never saw
+it" are not the same result.
+
+`GET /capabilities` reports under `wall_detection` whether the vision half is
+active. When it is not, walls with no known signature will be missed, and a page
+that is really a wall can come back as an empty result.
 
 **`blocked` now means one thing only.** It is true only on *evidence* of
 blocking: a vendor signature, a challenge redirect, a known-hostile status. A

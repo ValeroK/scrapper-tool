@@ -686,14 +686,16 @@ def _build_app(  # noqa: PLR0915 - one statement per route; splitting hides the 
             "tiers": _tier_capabilities_payload(),
             "render_max_backends": _max_render_backends(),
             "captcha": await _captcha_capabilities_payload(),
+            "wall_detection": await _wall_detection_payload(),
             "result_fields": {
                 "requested_url": "what was asked for; compare against `url` to spot a redirect",
                 "url": "where the request actually finished",
                 "egress": "which network path was used ({via, proxy})",
                 "challenge_detected": (
-                    "what proved a block: a vendor name, 'redirect' when we finished on a "
-                    "challenge page, or 'host_titled_wall' for a page whose only heading is "
-                    "the hostname"
+                    "what proved a block: a vendor name; 'redirect' when we finished on a "
+                    "challenge page; 'host_titled_wall' for a page whose only heading is the "
+                    "hostname; or 'vision' when no markup signature matched and the local "
+                    "model recognised a wall on the rendered page"
                 ),
                 "blocked": (
                     "true ONLY on evidence of blocking, never on our own failures. "
@@ -2329,6 +2331,42 @@ def _harvest_cookies(req: Any, harvested: Any, *, tier: str) -> None:
         tier=tier,
         count=len(incoming),
     )
+
+
+async def _wall_detection_payload() -> dict[str, Any]:
+    """How walls are detected here, and what is switched off.
+
+    Absence has to be *reported*, not inferred. The 3.2.0 lesson was that a
+    vision tier can be off for months without anyone noticing; a client should be
+    able to read "unknown walls will not be caught" at startup rather than deduce
+    it from a scrape that quietly missed one.
+    """
+    from scrapper_tool.patterns.render import _vision_detection_enabled  # noqa: PLC0415
+
+    enabled = _vision_detection_enabled()
+    model = False
+    if enabled:
+        try:
+            from scrapper_tool.agent.backends.llm import get_vision_backend  # noqa: PLC0415
+            from scrapper_tool.agent.types import AgentConfig  # noqa: PLC0415
+
+            model = await get_vision_backend(AgentConfig.from_env()) is not None
+        except Exception:
+            model = False
+    return {
+        "markup": True,
+        "evidence_values": ["<vendor>", "redirect", "host_titled_wall", "vision"],
+        "vision": {
+            "enabled": enabled,
+            "model_available": model,
+            "active": enabled and model,
+            "note": (
+                "asked only when no markup signature matched, on a rendered page"
+                if enabled and model
+                else "OFF: walls with no known signature will not be caught"
+            ),
+        },
+    }
 
 
 async def _captcha_capabilities_payload() -> dict[str, Any]:

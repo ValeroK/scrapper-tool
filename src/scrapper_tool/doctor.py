@@ -315,6 +315,38 @@ def _environment_checks(cfg: Any) -> tuple[dict[str, Any], list[str]]:
     return checks, fixes
 
 
+def _vision_probe_succeeded(state: str | None) -> bool:
+    """Did the vision probe come back usable?
+
+    ``_captcha_vision_state`` returns a human sentence -- "<model> ok",
+    "<model> (probe failed)", "<model> NOT AVAILABLE" -- because it is written to
+    be read in a report. Comparing it to the bare literal "ok" was therefore
+    always False, and the coverage figures were computed as if no model existed
+    even on a host serving one.
+
+    It stayed invisible in the captcha matrix because vision only adds a
+    `vision-grid` tier to kinds that already have `checkbox`, so the list of
+    UNCOVERABLE kinds did not move. It became visible the moment wall detection
+    reported the same flag directly.
+    """
+    return state is not None and state.endswith(" ok")
+
+
+def _wall_detection_state(vision_ok: bool) -> str:
+    """What can and cannot be detected in this configuration."""
+    try:
+        from scrapper_tool.patterns.render import _vision_detection_enabled  # noqa: PLC0415
+
+        enabled = _vision_detection_enabled()
+    except ImportError:
+        enabled = False
+    if enabled and vision_ok:
+        return "markup + vision (unknown walls can be caught)"
+    if not enabled:
+        return "markup only (vision disabled by SCRAPPER_TOOL_VISION_WALL_DETECT)"
+    return "markup only (no vision model; walls with no known signature will be missed)"
+
+
 def _uncoverable_captcha_kinds(cfg: Any, vision_ok: bool) -> list[str]:
     """Captcha kinds with no strategy at all in this configuration.
 
@@ -497,7 +529,13 @@ async def run_doctor(*, require_tier: str | None = None) -> dict[str, Any]:
     # install time instead of being discovered on a live target -- and NOT in
     # `fixes`, which would put a permanent item in front of every keyless
     # install for a decision they already made.
-    uncoverable = _uncoverable_captcha_kinds(cfg, vision_state == "ok")
+    # Whether unknown walls can be caught at all. Reported for the same reason
+    # the captcha coverage is: a detector that is off should be legible at
+    # install time, not deduced from a scrape that quietly returned a wall.
+    vision_ok = _vision_probe_succeeded(vision_state)
+    checks["wall_detection"] = _wall_detection_state(vision_ok)
+
+    uncoverable = _uncoverable_captcha_kinds(cfg, vision_ok)
     checks["captcha_coverage"] = (
         "free tiers only; no strategy for " + ", ".join(uncoverable)
         if uncoverable

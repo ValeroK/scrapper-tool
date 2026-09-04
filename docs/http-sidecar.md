@@ -227,8 +227,13 @@ Auth: when `SCRAPPER_TOOL_HTTP_API_KEY` is set, the four POST endpoints require 
 
 `blocked` (HTTP 422) means an anti-bot platform stopped us, and `challenge_detected`
 carries the evidence -- a vendor name, `redirect` when the request finished on a
-page asking us to prove we are human, or `host_titled_wall` for a document whose
-only heading is the site's own hostname and which says nothing else.
+page asking us to prove we are human, `host_titled_wall` for a document whose
+only heading is the site's own hostname and which says nothing else, or `vision`
+when no markup signature matched and the local model recognised a wall on the
+rendered page.
+
+`GET /capabilities` reports under `wall_detection` whether that last one is
+active. With no vision model, walls carrying no known signature are not caught.
 
 `blocked=true` is guaranteed to carry a non-null `challenge_detected`: a block
 that cannot name its evidence is withdrawn rather than published.

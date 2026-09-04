@@ -142,3 +142,65 @@ class TestDoctorReportsCoverage:
         from scrapper_tool.doctor import _uncoverable_captcha_kinds
 
         assert _uncoverable_captcha_kinds(AgentConfig(captcha_api_key="k"), vision_ok=True) == []
+
+
+class TestVisionProbeResultIsParsedNotCompared:
+    """`_captcha_vision_state` returns a sentence, not a status token.
+
+    It is written to be read in a report -- "<model> ok", "<model> (probe
+    failed)", "<model> NOT AVAILABLE" -- so comparing it to the bare literal
+    "ok" was always False, and coverage was computed as if no model existed even
+    on a host serving one.
+
+    It hid in the captcha matrix because vision only adds a `vision-grid` tier to
+    kinds that already have `checkbox`, so the UNCOVERABLE list never moved. It
+    surfaced the moment wall detection reported the same flag directly, which is
+    an argument for reporting a derived value in more than one place.
+    """
+
+    @pytest.mark.parametrize(
+        ("state", "expected"),
+        [
+            ("qwen3.8-27b-apex ok", True),
+            ("reuses model (qwen3-vl:8b) ok", True),
+            ("gemma-4 (probe failed)", False),
+            ("gemma-4 NOT AVAILABLE", False),
+            ("gemma-4 (LLM unreachable)", False),
+            ("ok", False),
+            (None, False),
+            ("", False),
+        ],
+    )
+    def test_only_a_successful_probe_counts(self, state: str | None, expected: bool) -> None:
+        from scrapper_tool.doctor import _vision_probe_succeeded
+
+        assert _vision_probe_succeeded(state) is expected
+
+
+class TestWallDetectionIsReported:
+    """Absence must be legible at install time, not deduced from a missed wall.
+
+    The 3.2.0 lesson was that a vision tier can be switched off for months
+    without anyone noticing.
+    """
+
+    def test_both_halves_active(self) -> None:
+        from scrapper_tool.doctor import _wall_detection_state
+
+        assert "vision" in _wall_detection_state(vision_ok=True)
+
+    def test_no_model_says_what_will_be_missed(self) -> None:
+        from scrapper_tool.doctor import _wall_detection_state
+
+        state = _wall_detection_state(vision_ok=False)
+        assert "markup only" in state
+        assert "missed" in state
+
+    def test_switched_off_is_distinguished_from_unavailable(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """ "I turned it off" and "it could not start" need different fixes."""
+        from scrapper_tool.doctor import _wall_detection_state
+
+        monkeypatch.setenv("SCRAPPER_TOOL_VISION_WALL_DETECT", "0")
+        assert "disabled by" in _wall_detection_state(vision_ok=True)
