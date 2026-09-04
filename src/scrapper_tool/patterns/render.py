@@ -31,12 +31,7 @@ import re
 from dataclasses import dataclass, field, replace
 from typing import TYPE_CHECKING, Any
 
-from scrapper_tool._challenge import (
-    has_real_content,
-    is_interstitial,
-    landed_on_challenge,
-    looks_like_host_titled_wall,
-)
+from scrapper_tool._challenge import classify_wall
 from scrapper_tool._logging import get_logger
 from scrapper_tool._urlguard import assert_tier_allowed, check_url, url_guard_enabled
 from scrapper_tool.agent.backends.browser import (
@@ -181,14 +176,10 @@ async def _try_clear_challenge(
     # signal. Without it this gate silently disabled the whole solver on any wall
     # carrying no vendor signature — which is precisely the wall that most needed
     # solving, and the reason the reported captcha page was never even attempted.
-    if (
-        is_interstitial(html, status) is None
-        and not landed_on_challenge(url, final_url, html)
-        # The third detector, for a wall with no signature and no redirect. Left
-        # out, this gate keeps the solver switched off on exactly the pages that
-        # most need it -- the coupling reported twice now.
-        and not looks_like_host_titled_wall(html, final_url or url)
-    ):
+    # One verdict, so this gate can never fall behind the detectors again. Left
+    # out of step, it keeps the solver switched off on exactly the pages that
+    # most need it -- the coupling reported twice now.
+    if not classify_wall(html, status, requested_url=url, final_url=final_url).walled:
         return html
     try:
         from scrapper_tool.agent.backends import get_captcha_solver  # noqa: PLC0415
@@ -349,7 +340,11 @@ async def render_html(
         # Penalising the proxy there would poison the pool with false blocks on
         # every successful render. Conversely a bot-walled 200 is a failure.
         if managed_pool is not None:
-            if has_real_content(html, status):
+            # Proxy health on the SAME verdict every other gate uses. This
+            # line read `has_real_content(html, status)` and was two detectors
+            # behind, so a proxy that walked into a wall was recorded healthy
+            # and stayed in rotation to burn the next request too.
+            if not classify_wall(html, status, requested_url=url, final_url=final_url).walled:
                 managed_pool.mark_ok(attempt_proxy)
             else:
                 managed_pool.mark_blocked(attempt_proxy)

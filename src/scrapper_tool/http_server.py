@@ -1849,10 +1849,10 @@ def _failure_reason(error: object) -> str:
 
 
 def _landed_on_challenge(req: Any, final_url: str, html: str) -> bool:
-    """Did this request finish on a page asking us to prove we are human?"""
-    from scrapper_tool._challenge import landed_on_challenge  # noqa: PLC0415
+    """Did this request finish on a wall? Any kind, by any evidence."""
+    from scrapper_tool._challenge import classify_wall  # noqa: PLC0415
 
-    return landed_on_challenge(req.url, final_url, html)
+    return classify_wall(html, 200, requested_url=req.url, final_url=final_url).walled
 
 
 def _note_challenge(
@@ -1876,31 +1876,17 @@ def _note_challenge(
     recognisable signature passed both checks and was returned as content. See
     :func:`~scrapper_tool._challenge.landed_on_challenge`.
     """
-    from scrapper_tool._challenge import (  # noqa: PLC0415
-        is_interstitial,
-        landed_on_challenge,
-        looks_like_host_titled_wall,
-    )
+    from scrapper_tool._challenge import classify_wall  # noqa: PLC0415
 
-    vendor = is_interstitial(html, status_code)
-    if vendor is None and looks_like_host_titled_wall(html, final_url or req.url):
-        vendor = "host_titled_wall"
-        _logger.info(
-            "scrape.host_titled_wall",
-            url=req.url,
-            detail="the only heading is the hostname and there is no other text",
-        )
-    if vendor is None and final_url and landed_on_challenge(req.url, final_url, html):
-        vendor = "redirect"
-        req.__dict__["_challenge_redirect"] = final_url
-        _logger.info(
-            "scrape.challenge_redirect",
-            requested=req.url,
-            final_url=final_url,
-            detail="request finished on a page asking us to prove we are human",
-        )
-    if vendor is None:
+    verdict = classify_wall(
+        html, status_code, requested_url=req.url, final_url=final_url or req.url
+    )
+    if not verdict.walled:
         return None
+    vendor = verdict.evidence
+    if vendor == "redirect":
+        req.__dict__["_challenge_redirect"] = final_url
+    _logger.info("scrape.wall_detected", url=req.url, evidence=vendor, final_url=final_url)
     req.__dict__["_challenge_detected"] = vendor
     _logger.info("scrape.challenge_detected", url=req.url, vendor=vendor)
     log.append(
@@ -2422,22 +2408,11 @@ def _interstitial_vendor(
     needs to see, since landing on a captcha is exactly the verdict that another
     browser engine might not earn.
     """
-    from scrapper_tool._challenge import (  # noqa: PLC0415
-        is_interstitial,
-        landed_on_challenge,
-        looks_like_host_titled_wall,
-    )
+    from scrapper_tool._challenge import classify_wall  # noqa: PLC0415
 
-    vendor = is_interstitial(html, status_code)
-    if vendor is not None:
-        return vendor
-    if requested_url and landed_on_challenge(requested_url, final_url, html):
-        return "redirect"
-    # No signature, no redirect, and too large for every small-body gate: the
-    # page that introduces itself as the host and says nothing else.
-    if requested_url and looks_like_host_titled_wall(html, final_url or requested_url):
-        return "host_titled_wall"
-    return None
+    return classify_wall(
+        html, status_code, requested_url=requested_url, final_url=final_url
+    ).evidence
 
 
 def _render_backend_candidates(req: Any, cfg: Any) -> tuple[str, ...]:

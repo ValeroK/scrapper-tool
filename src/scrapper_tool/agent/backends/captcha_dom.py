@@ -28,7 +28,7 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Any, NamedTuple
 
-from scrapper_tool._challenge import is_interstitial
+from scrapper_tool._challenge import classify_wall
 from scrapper_tool._logging import get_logger
 from scrapper_tool.errors import CaptchaSolveError
 
@@ -574,7 +574,7 @@ async def _handle_widgetless_interstitial(page: Any, url: str, *, settle_s: floa
     # every interstitial this path cares about is identified by a body
     # signature, and the status only feeds the small-body fallback.
     status = getattr(page, "status", None)
-    vendor = is_interstitial(html, status if isinstance(status, int) else 200)
+    vendor = classify_wall(html, status if isinstance(status, int) else 200).evidence
     if vendor is None:
         return False
 
@@ -588,7 +588,7 @@ async def _handle_widgetless_interstitial(page: Any, url: str, *, settle_s: floa
                 html = str(await content() or "")
             except Exception as exc:  # pragma: no cover — defensive
                 _logger.debug("agent.captcha_dom.content_failed", error=str(exc))
-        cleared = is_interstitial(html, 200) is None
+        cleared = not classify_wall(html, 200).walled
     _logger.info(
         "agent.captcha_dom.interstitial_settle_result", vendor=vendor, url=url, cleared=cleared
     )

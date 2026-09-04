@@ -79,7 +79,7 @@ import sys
 from typing import TYPE_CHECKING, Any
 
 from scrapper_tool import __version__, _extras
-from scrapper_tool._challenge import is_interstitial
+from scrapper_tool._challenge import classify_wall
 from scrapper_tool._classify import classify_extraction_success
 from scrapper_tool._urlguard import assert_url_allowed
 from scrapper_tool.canary import run_canary
@@ -518,7 +518,15 @@ async def _try_a_b_c(
             )
         # Not a signal, so we escalate either way — but knowing *which* vendor
         # walled us decides whether Pattern D is worth attempting at all.
-        vendor = is_interstitial(text, resp.status_code)
+        # The MCP surface was blind to both walls found in 4.1.0 because this
+        # line named one detector. It now asks the same question every other
+        # gate asks.
+        vendor = classify_wall(
+            text,
+            resp.status_code,
+            requested_url=url,
+            final_url=str(getattr(resp, "url", url) or url),
+        ).evidence
         if vendor is not None:
             cascade_state["challenge_detected"] = vendor
     except BlockedError as exc:

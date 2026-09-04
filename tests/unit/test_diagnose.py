@@ -48,9 +48,15 @@ class TestDescribe:
         assert "cloudflare" in detail
 
     def test_a_captcha_redirect_is_a_challenge(self) -> None:
+        """The detail now names the EVIDENCE rather than the destination.
+
+        Every gate reports through one verdict since the facade landed, and that
+        verdict's vocabulary is the evidence kind -- which is what a caller can
+        branch on. The final URL is already its own field.
+        """
         outcome, detail = diag._describe(_CAPTCHA, 200, _URL, "https://vendor.test/captcha.html")
         assert outcome == "challenge"
-        assert "captcha.html" in detail
+        assert "redirect" in detail
 
     def test_a_thin_body_is_flagged_but_not_condemned(self) -> None:
         outcome, _ = diag._describe("<html>hi</html>", 200, _URL, _URL)

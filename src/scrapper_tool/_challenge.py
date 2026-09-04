@@ -32,6 +32,7 @@ text.
 from __future__ import annotations
 
 import re
+from dataclasses import dataclass
 from urllib.parse import urlsplit
 
 # Only the head of a document is scanned — challenge pages declare themselves early
@@ -526,7 +527,63 @@ _BLOCK_MESSAGE_TERMS: tuple[str, ...] = (
 )
 
 
-def has_real_content(html: str, status_code: int = 200) -> bool:
+@dataclass(frozen=True)
+class WallVerdict:
+    """Whether a response is a bot wall, and what proved it.
+
+    ``evidence`` is never ``None`` when ``walled`` is True. That is the invariant
+    shipped in 4.1.0 -- a block that cannot name its cause is not a block -- and
+    keeping the two in one object is what stops them drifting apart.
+    """
+
+    walled: bool
+    evidence: str | None = None
+
+
+def classify_wall(
+    html: str,
+    status_code: int = 200,
+    *,
+    requested_url: str = "",
+    final_url: str = "",
+) -> WallVerdict:
+    """THE wall verdict. Every gate calls this; nothing calls the detectors below.
+
+    Three times now a new kind of wall has been met with a new detector, and twice
+    that detector was then forgotten somewhere it mattered. At the time this was
+    written, three of seven gates were two detectors behind: proxy health was
+    marking a burned IP healthy, the MCP surface was blind to both walls found
+    that month, and the captcha DOM probe could not see the wall it was supposed
+    to clear.
+
+    That is a structural problem, not three oversights. Seven independent boolean
+    expressions answering one question cannot be kept in step by remembering, so
+    they are replaced by one function and a guard test that fails if any module
+    outside this one imports a detector directly.
+
+    The order is cheapest-and-most-precise first. A vendor signature is the
+    strongest evidence available; the redirect and host-titled checks exist for
+    walls that carry no signature at all, which is precisely where signatures must
+    fail.
+    """
+    vendor = is_interstitial(html, status_code)
+    if vendor is not None:
+        return WallVerdict(True, vendor)
+    if requested_url and final_url and landed_on_challenge(requested_url, final_url, html):
+        return WallVerdict(True, "redirect")
+    page_url = final_url or requested_url
+    if page_url and looks_like_host_titled_wall(html, page_url):
+        return WallVerdict(True, "host_titled_wall")
+    return WallVerdict(False)
+
+
+def has_real_content(
+    html: str,
+    status_code: int = 200,
+    *,
+    requested_url: str = "",
+    final_url: str = "",
+) -> bool:
     """Whether a fetch/render produced usable (non-walled) content.
 
     The success signal for the render tier and for proxy-health accounting —
@@ -541,11 +598,15 @@ def has_real_content(html: str, status_code: int = 200) -> bool:
     """
     if not html:
         return False
-    return is_interstitial(html, status_code) is None
+    return not classify_wall(
+        html, status_code, requested_url=requested_url, final_url=final_url
+    ).walled
 
 
 __all__ = [
+    "WallVerdict",
     "block_evidence",
+    "classify_wall",
     "has_real_content",
     "is_cf_challenge_body",
     "is_interstitial",
