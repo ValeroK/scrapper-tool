@@ -2534,7 +2534,33 @@ def _render_backend_candidates(req: Any, cfg: Any) -> tuple[str, ...]:
     return tuple(ordered[: _max_render_backends()])
 
 
-async def _do_render_step(  # noqa: PLR0915 - linear tier; the backend loop is the point
+def _wall_outranks_content(evidence: str, *, has_signal: bool) -> bool:
+    """Should a wall verdict reject a render that produced extractable content?
+
+    `classify_wall` answers one question with two grades of evidence, and only
+    one of them may overrule the page itself:
+
+    * A named vendor, a redirect onto a challenge, a host-titled wall -- an
+      affirmative identification. Nothing the body also happens to contain makes
+      it not a wall, so this always rejects.
+    * ``"unknown"`` -- inferred from a block status on a small body, or from a
+      content-free shell. That is an argument from *absence*, and it is wrong the
+      moment the page turns out to have something in it.
+
+    The second grade is not hypothetical. store.mopar.com serves a genuine
+    rendered DOM under HTTP 403 -- the anti-bot 403s the document, JS clears the
+    challenge, the real page paints -- and that is the exact case the render tier
+    exists to handle. Rejecting it on status alone would throw away the win.
+
+    So: affirmative evidence rejects unconditionally; ``"unknown"`` rejects only
+    when the page carries no signal either, where the two agree anyway.
+    """
+    return evidence != "unknown" or not has_signal
+
+
+async def _do_render_step(  # noqa: PLR0915, PLR0911 - linear tier; each return is a
+    # distinct verdict (config failed / no backend ran / walled / no signal / won), and
+    # collapsing them is what let the walled one be reached by falling through.
     req: Any,
     attempts: list[str],
     start: float,
@@ -2616,6 +2642,10 @@ async def _do_render_step(  # noqa: PLR0915 - linear tier; the backend loop is t
     candidates = _render_backend_candidates(req, cfg)
     result = None
     last_exc: BaseException | None = None
+    #: Wall verdict on whatever is currently in ``result``. Kept in step with it
+    #: -- a later attempt that CRASHES leaves both at the previous attempt, which
+    #: is the pair that would be returned.
+    walled_vendor: str | None = None
     for idx, backend_name in enumerate(candidates):
         is_last = idx == len(candidates) - 1
         attempt_start = time.perf_counter()
@@ -2653,6 +2683,11 @@ async def _do_render_step(  # noqa: PLR0915 - linear tier; the backend loop is t
             requested_url=req.url,
             final_url=attempt.final_url,
         )
+        walled_vendor = vendor
+        # `is_last` ends the SEARCH, not the verdict. Breaking here used to drop
+        # `vendor` on the floor, so the wall was acted on only while a spare
+        # engine existed -- and never at all when there was one candidate, which
+        # is what an explicit `browser=` or a cap of 1 produces. See below.
         if vendor is None or is_last:
             break
         _logger.info(
@@ -2687,6 +2722,57 @@ async def _do_render_step(  # noqa: PLR0915 - linear tier; the backend loop is t
     req.__dict__["_render_intermediate_html"] = html
 
     css_data, product, json_ld, microdata_price = _run_d_extractors(req, html, final_url)
+    has_signal = (
+        product is not None or microdata_price is not None or bool(json_ld) or bool(css_data)
+    )
+
+    # A wall on the last engine is still a wall.
+    #
+    # The loop above classified every attempt and then discarded the verdict
+    # whenever there was nothing left to try, so the tier returned a document it
+    # had just identified as an interstitial -- with `blocked=False` and
+    # `challenge_detected=None`, because the win path hard-codes both. Reported
+    # as scrapper-tool#32 against amayama.com: Camoufox correctly called the
+    # Cloudflare wall, Patchright returned the same wall, and being second made
+    # it the winner.
+    #
+    # The suite did not catch it because `_WALL` carries no extractable signal,
+    # so `_classify_extraction_success` rejected it a few lines further down for
+    # `no_signal` and the walled case passed for the wrong reason. Any caller
+    # whose accept rule is satisfied by a wall -- `mode="fetch"` accepts every
+    # page by definition -- walked straight through.
+    #
+    # Three further symptoms all resolve here, because each keys off the payload
+    # this used to emit: `_record_policy` trained `best_tier=render` on it (so
+    # later requests were pre-routed to the tier that returns interstitials, and
+    # E2 was never tried), `_touch_clearance` renewed the profile that had landed
+    # on the wall, and the cascade stopped climbing.
+    #
+    # Deliberately AFTER the harvest: a render that won a cf_clearance and then
+    # showed us a wall is exactly the case where E1 should inherit the cookie
+    # rather than re-fight from scratch.
+    if walled_vendor is not None and _wall_outranks_content(walled_vendor, has_signal=has_signal):
+        _note_challenge(req, log, result.html, result.status, final_url=result.final_url)
+        _logger.info(
+            "scrape.render.walled",
+            url=req.url,
+            vendor=walled_vendor,
+            backend=req.__dict__.get("_render_backend_used"),
+        )
+        log.append(
+            _build_log_entry(
+                "render",
+                outcome="rejected",
+                reason="blocked",
+                duration_s=time.perf_counter() - r_start,
+                detail=(
+                    f"{walled_vendor} wall survived every engine "
+                    f"({', '.join(candidates)}); escalating"
+                ),
+            )
+        )
+        return None, None
+
     success = _classify_extraction_success(
         req,
         status_code=status_code,
