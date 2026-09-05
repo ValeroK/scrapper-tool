@@ -2,6 +2,42 @@
 
 All notable changes to `scrapper-tool` are recorded here. Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning follows [SemVer](https://semver.org/).
 
+## [4.3.1] - 2026-09-05
+
+### Fixed
+
+- **The render tier returned a bot wall as a clean win.** The backend loop
+  classified every attempt and then discarded the answer whenever there was
+  nothing left to try -- `is_last` was meant to end the *search* and also ended
+  the *verdict*. So whichever engine went second won by going second, and with a
+  single candidate (an explicit `browser=`, or a cap of 1) the wall check never
+  ran at all. Reported on amayama.com: Camoufox correctly called the Cloudflare
+  wall, Patchright returned the same wall, and that became a success with
+  `blocked=False` and `challenge_detected=None`. Closes #32.
+
+  Three further symptoms resolve with it, because each keys off that payload.
+  `_record_policy` gates on `blocked`, so it learned `best_tier=render` from an
+  interstitial -- three observations later every request was pre-routed to the
+  tier that returns walls, `challenge_vendor` stayed null and E2 was never
+  attempted. The clearance profile that had landed on the wall had its TTL
+  renewed. And the cascade stopped climbing.
+
+  The suite could not catch this: the existing "every backend walled" test
+  passed because its fixture carries nothing extractable, so `no_signal`
+  rejected the page first and did the wall's job by accident. Callers whose
+  accept rule a wall satisfies -- `mode="fetch"` accepts every page by
+  definition -- walked straight through. The new fixtures defeat that accident
+  from both sides.
+
+### Changed
+
+- **Wall evidence is graded where it can overrule a page.** An identified vendor,
+  a redirect onto a challenge or a host-titled wall rejects whatever else the
+  body holds. `unknown` -- inferred from a block status on a small body -- is an
+  argument from absence, and now defers to the page when the page has content,
+  because store.mopar.com serves a genuine rendered DOM under HTTP 403 and that
+  is the case the render tier exists for.
+
 ## [4.3.0] - 2026-09-05
 
 Two reports that were confidently wrong. 4.2.0 was about detectors that missed a
