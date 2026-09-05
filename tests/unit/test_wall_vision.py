@@ -278,3 +278,57 @@ class TestTheSolverSeesTheVisionVerdict:
 
         assert called, "a wall only the model could see never reached the solver"
         assert out == "<html><body>cleared</body></html>"
+
+
+class TestATruncatedReplyIsNotAVerdict:
+    """A reasoning model that runs out of budget returns thinking, not an answer.
+
+    `_extract_message_text` surfaces that partial reasoning deliberately, to make
+    the starvation legible -- and the reasoning restates the task, so it contains
+    the very words a verdict parser looks for. Substring-matching it produced a
+    confident wrong answer.
+
+    Measured against the local 27B on a page it calls WALL at full budget:
+
+        budget 2000 -> "WALL"                correct
+        budget   60 -> reasoning -> WALL     right by accident
+        budget   30 -> reasoning -> PAGE     WRONG
+
+    A wall returned as content is the failure this detector exists to prevent,
+    so "no opinion" is the only safe reading of a reply that is not a verdict.
+    Found via a sibling project hitting the same class of bug: a 2048-token
+    ceiling on a thinking model truncated every response, and the parser mined
+    the wreckage instead of rejecting it.
+    """
+
+    @pytest.mark.parametrize(
+        ("reply", "expected"),
+        [
+            ("WALL", "WALL"),
+            ("wall.", "WALL"),
+            ("  BLANK  ", "BLANK"),
+            ("The answer is WALL", "WALL"),
+            # The real leaked reasoning, which used to parse as PAGE.
+            (
+                'The screenshot shows "One moment" text with an empty box below '
+                "it. This suggests the page is still loading, so PAGE",
+                None,
+            ),
+            ("I must decide between WALL, BLANK and PAGE here", None),
+            ("nonsense", None),
+            ("", None),
+        ],
+    )
+    def test_only_an_actual_verdict_counts(self, reply: str, expected: str | None) -> None:
+        from scrapper_tool.agent.backends.wall_vision import _parse
+
+        assert _parse(reply) == expected
+
+    @pytest.mark.asyncio
+    async def test_truncated_reasoning_yields_no_opinion_end_to_end(self) -> None:
+        """And "no opinion" costs a markup-only verdict, never a wrong one."""
+        leaked = (
+            "Looking at this page I need to work out whether it is a WALL or a "
+            "PAGE, and the empty box suggests"
+        )
+        assert await look_at_page(b"png", _Backend(leaked)) is None

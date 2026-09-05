@@ -67,13 +67,39 @@ _PROMPT = (
 )
 
 
+#: A verdict is one word. Anything longer than this is the model thinking out
+#: loud, not answering, and must not be mined for a keyword.
+_MAX_ANSWER_CHARS = 40
+
+_VERDICTS: tuple[VisionVerdict, ...] = ("WALL", "BLANK", "PAGE")
+
+
 def _parse(reply: str) -> VisionVerdict | None:
-    """First recognised verdict in the reply, or None if it said something else."""
+    """The reply's verdict, or None if it did not actually give one.
+
+    Substring-matching a long reply is unsafe, and measurably so. A reasoning
+    model that runs out of budget returns partial *reasoning* rather than an
+    answer -- ``_extract_message_text`` surfaces it deliberately, to make the
+    starvation legible -- and that reasoning restates the task, so it contains
+    the very words this function looks for. Measured against the local 27B on a
+    page it calls WALL at full budget:
+
+        budget 2000 -> "WALL"                     correct
+        budget   60 -> reasoning -> WALL          right by accident
+        budget   30 -> reasoning -> PAGE          WRONG, and confident
+
+    A wall returned as content is the failure this whole detector exists to
+    prevent, so a reply is only a verdict if it *is* one: short, and naming
+    exactly one of the three. Everything else is "no opinion", which costs a
+    markup-only verdict and nothing more.
+    """
     upper = reply.strip().upper()
-    for verdict in ("WALL", "BLANK", "PAGE"):
-        if verdict in upper:
-            return verdict
-    return None
+    if len(upper) > _MAX_ANSWER_CHARS:
+        return None
+    found: list[VisionVerdict] = [v for v in _VERDICTS if v in upper]
+    if len(found) != 1:
+        return None
+    return found[0]
 
 
 async def look_at_page(png: bytes, backend: LLMBackend) -> VisionVerdict | None:
