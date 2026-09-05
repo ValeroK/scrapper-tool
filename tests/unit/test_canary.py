@@ -181,3 +181,110 @@ class TestCliMain:
         with pytest.raises(SystemExit) as excinfo:
             canary_module.main([])
         assert excinfo.value.code == 2
+
+
+class TestVerdictSeparatesDownFromBlocked:
+    """The canary reports on OUR fingerprints. It cannot when nothing answered.
+
+    Over twelve weekly runs it failed five times, every one because httpbin.org
+    -- a free public echo service -- was overloaded, and every one filed an issue
+    advising that an impersonation profile had probably been fingerprinted.
+    Nothing had been: nothing got a response, so nothing judged us.
+
+    Both signals were present in the report and simply collapsed together.
+    """
+
+    @staticmethod
+    def _tried(*statuses: int | None) -> list[dict[str, object]]:
+        return [
+            {"profile": f"p{i}", "status": st, "elapsed_ms": 1.0, "skipped": False, "error": None}
+            for i, st in enumerate(statuses)
+        ]
+
+    def test_nothing_answered_is_unreachable_not_blocked(self) -> None:
+        """The five real failures. A timeout is not a refusal."""
+        verdict, detail = canary_module._verdict(self._tried(None, None, None))
+        assert verdict == "unreachable"
+        assert "nothing was fingerprinted" in detail
+
+    def test_answered_and_refused_is_blocked(self) -> None:
+        """The event the canary exists to catch."""
+        verdict, _ = canary_module._verdict(self._tried(403, 403, 403))
+        assert verdict == "blocked"
+
+    def test_a_mix_is_degraded_and_names_the_refused_profiles(self) -> None:
+        """What fingerprinting looks like before it becomes total."""
+        verdict, detail = canary_module._verdict(self._tried(403, 200))
+        assert verdict == "degraded"
+        assert "p0" in detail
+
+    @pytest.mark.asyncio
+    async def test_degraded_reports_without_failing_the_job(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A refused profile with another still winning means the ladder WORKED.
+
+        It is the early warning this tool was written to give, so it is carried
+        in `verdict` -- but failing a build while scraping succeeds is the same
+        false alarm as the outage case, just from the other side.
+        """
+        seen: list[str] = []
+
+        async def first_403(profile: str, url: str, **kwargs: object) -> tuple[int, float, None]:
+            seen.append(profile)
+            return (403, 1.0, None) if len(seen) == 1 else (200, 1.0, None)
+
+        monkeypatch.setattr(canary_module, "probe_profile", first_403)
+        report = await canary_module.run_canary("https://partial.test/")
+
+        assert report["verdict"] == "degraded"
+        assert report["exit_code"] == 0
+        assert report["winning_profile"] is not None
+
+    def test_a_win_is_ok(self) -> None:
+        verdict, _ = canary_module._verdict(self._tried(200))
+        assert verdict == "ok"
+
+    def test_skipped_profiles_do_not_count_as_answers(self) -> None:
+        results = [
+            *self._tried(200),
+            {
+                "profile": "later",
+                "status": None,
+                "elapsed_ms": None,
+                "skipped": True,
+                "error": None,
+            },
+        ]
+        assert canary_module._verdict(results)[0] == "ok"
+
+    @pytest.mark.asyncio
+    async def test_unreachable_does_not_fail_the_job(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """A third-party outage must not file a fingerprinting issue.
+
+        Exit 1 is reserved for "profiles were answered and refused". A weekly
+        false alarm teaches everyone to ignore the label, which costs more than
+        the alarm was ever worth.
+        """
+
+        async def all_timeout(profile: str, url: str, **kwargs: object) -> tuple[None, None, str]:
+            return None, None, "curl (28) Operation timed out"
+
+        monkeypatch.setattr(canary_module, "probe_profile", all_timeout)
+        report = await canary_module.run_canary("https://down.test/")
+
+        assert report["verdict"] == "unreachable"
+        assert report["exit_code"] == 0
+
+    @pytest.mark.asyncio
+    async def test_a_real_block_still_fails_the_job(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """The fix must not cost us the alarm we actually want."""
+
+        async def all_403(profile: str, url: str, **kwargs: object) -> tuple[int, float, None]:
+            return 403, 1.0, None
+
+        monkeypatch.setattr(canary_module, "probe_profile", all_403)
+        report = await canary_module.run_canary("https://hostile.test/")
+
+        assert report["verdict"] == "blocked"
+        assert report["exit_code"] == 1

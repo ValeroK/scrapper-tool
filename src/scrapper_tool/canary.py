@@ -15,10 +15,20 @@ Usage::
 Exit codes
 ----------
 
-- ``0`` — at least one profile returned ≠ 403/503.
-- ``1`` — all profiles blocked (informs the caller that Pattern D is
-  needed, the URL is hostile, or the canary URL itself moved).
-- ``2`` — argument parsing / runtime error (network down, bad URL).
+- ``0`` — ``ok`` (a profile reached the target) or ``unreachable`` (nothing
+  answered, so there is nothing to say about our fingerprints).
+- ``1`` — ``blocked``: every profile that got an answer was refused. Nothing
+  gets through, and this is the event worth waking up for.
+
+``degraded`` (some profiles refused, at least one still winning) exits ``0``. It
+is the early warning this tool was written to give, and it is carried in
+``verdict`` -- but the ladder is doing exactly its job, so it is information
+rather than an alarm.
+- ``2`` — argument parsing / runtime error.
+
+The ``verdict`` field carries the distinction. It matters because 503 means both
+"Cloudflare is challenging you" and "this origin is overloaded", and a canary
+that cannot separate them reports an outage as a fingerprinting event.
 
 Output (default, human-readable)::
 
@@ -103,6 +113,60 @@ async def probe_profile(
     return int(resp.status_code), elapsed_ms, None
 
 
+#: Statuses that mean "this profile was refused". 503 sits here because
+#: Cloudflare serves challenges with it and, from a body we never got, a
+#: challenge and an overloaded origin are indistinguishable. That conflation is
+#: correct inside the ladder -- rotating costs one request -- and wrong in a
+#: canary, which exists to answer *why*.
+
+
+def _verdict(results: list[dict[str, object]]) -> tuple[str, str]:
+    """``(verdict, detail)`` for a completed walk.
+
+    The distinction this draws is the whole point of the canary and it was
+    missing. Over twelve scheduled runs it failed five times, every one of them
+    because ``httpbin.org`` -- a free public echo service -- was overloaded, and
+    every one of them filed an issue advising that an impersonation profile had
+    probably been fingerprinted. It had not. Nothing was fingerprinted, because
+    nothing got a response.
+
+    The signals were both present and simply collapsed together:
+
+    * **unreachable** -- every profile timed out or errored at the transport
+      layer. Nothing reached the target, so nothing can have judged us. This is
+      the target's problem, or the network's.
+    * **blocked** -- profiles got *answers*, and every answer was a refusal.
+      Something on the other end looked at us and said no. This is the event the
+      canary exists to catch.
+    * **degraded** -- some profiles won and some were refused, which is what
+      fingerprinting looks like before it becomes total.
+    """
+    attempted = [r for r in results if not r["skipped"]]
+    if not attempted:
+        return "ok", "no profile needed to be tried"
+
+    answered = [r for r in attempted if r["status"] is not None]
+    refused = [r for r in answered if r["status"] in _ROTATE_STATUS_CODES]
+    won = [r for r in answered if r["status"] not in _ROTATE_STATUS_CODES]
+
+    if won:
+        if refused:
+            names = ", ".join(str(r["profile"]) for r in refused)
+            return "degraded", f"refused by {names}; at least one profile still works"
+        return "ok", f"{won[0]['profile']} reached the target"
+
+    if not answered:
+        return (
+            "unreachable",
+            "no profile got a response at all -- the target or the network is down, "
+            "and nothing was fingerprinted because nothing was answered",
+        )
+    return (
+        "blocked",
+        f"every profile that got a response was refused ({len(refused)} of {len(answered)})",
+    )
+
+
 async def run_canary(
     url: str,
     *,
@@ -162,10 +226,24 @@ async def run_canary(
                 )
             break
 
+    verdict, detail = _verdict(results)
     return {
         "url": url,
         "winning_profile": winning_profile,
-        "exit_code": 0 if winning_profile is not None else 1,
+        # Only `blocked` fails. The other three are reported, not alarmed:
+        #
+        # `unreachable` -- the target never answered, so there is nothing to say
+        # about our fingerprints. Failing here turns a third-party outage into a
+        # weekly false alarm, which is what happened five times in twelve runs.
+        #
+        # `degraded` -- a profile was refused and another still won, so the
+        # ladder did its job and scraping works. It is the early warning the
+        # canary exists to give, and it belongs in the verdict and the artefact
+        # rather than in a failed build: failing a job while the system works is
+        # the same false alarm from the other side.
+        "exit_code": 1 if verdict == "blocked" else 0,
+        "verdict": verdict,
+        "detail": detail,
         "results": results,
     }
 
@@ -173,6 +251,7 @@ async def run_canary(
 def _format_text(report: dict[str, object]) -> str:
     """Render the canary report as a human-readable text table."""
     lines = [
+        f"Verdict: {report.get('verdict', '?')} - {report.get('detail', '')}",
         f"URL: {report['url']}",
         f"Effective profile: {report['winning_profile'] or '(none — all blocked)'}",
         "",

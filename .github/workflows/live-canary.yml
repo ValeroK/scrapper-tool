@@ -42,14 +42,31 @@ jobs:
         run: |
           uv python install 3.13
           uv sync --extra dev
-      # httpbin.org is a generic JSON echo endpoint — no anti-bot, stable
-      # forever, no PII, MIT-data. Perfect canary for Pattern A and the
-      # impersonation-ladder walk.
-      - name: Canary — httpbin.org
+      # example.org: IANA-reserved, CDN-served, no anti-bot, no PII -- and, the
+      # property that actually matters for a canary, availability that is not the
+      # variable under test.
+      #
+      # This was httpbin.org, a free public echo service and chronically
+      # overloaded. It took the canary down five times in twelve weekly runs,
+      # every one a third-party outage filed as a suspected fingerprinting event.
+      #
+      # The `unreachable` verdict handles the timeout case, but it cannot handle
+      # this one: an overloaded origin returning 503 is *answering*, and 503 is
+      # also how Cloudflare serves a challenge. From a body we never received
+      # those are the same event, so no verdict logic can separate them -- only a
+      # target that does not 503 under load can.
+      #
+      # Deliberately NOT example.com: the smoke job uses that as its control
+      # ("if THIS fails the runner has lost internet"), and pointing both at one
+      # host would collapse the control into the experiment.
+      - name: Canary — stable reserved endpoint
         run: |
-          uv run scrapper-tool canary https://httpbin.org/anything --json | tee canary-httpbin.json
-          # Fail the job if the lib's exit code is non-zero (all-blocked).
-          uv run scrapper-tool canary https://httpbin.org/anything > /dev/null
+          uv run scrapper-tool canary https://example.org/ --json | tee canary-ladder.json
+          # Non-zero now means profiles were ANSWERED and refused. A target that
+          # never answered exits 0 with verdict=unreachable, because the canary
+          # reports on our fingerprints and has nothing to say when nothing
+          # replied.
+          uv run scrapper-tool canary https://example.org/ > /dev/null
       - name: Upload canary artefact
         if: always()
         uses: actions/upload-artifact@v7
@@ -120,9 +137,14 @@ jobs:
               `**Run:** ${runUrl}`,
               `**Trigger:** ${context.eventName}`,
               ``,
+              `The canary only fails now when profiles were ANSWERED and refused.`,
+              `A target that was simply down exits 0 with verdict=unreachable, so`,
+              `this is not a third-party outage.`,
+              ``,
               `Likely causes:`,
+              `- An impersonation profile got fingerprinted (check \`verdict\`:`,
+              `  \`degraded\` names which profiles were refused; \`blocked\` means all of them).`,
               `- A canary URL has gone away (rare; bump in tests/canary_targets.yaml).`,
-              `- An impersonation profile got fingerprinted (likely chrome133a — bump primary).`,
               `- The lib regressed (look at the most recent merge to main).`,
               ``,
               `If this issue was already open, this comment is the most-recent failure record.`,
