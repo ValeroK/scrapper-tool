@@ -2,6 +2,55 @@
 
 All notable changes to `scrapper-tool` are recorded here. Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning follows [SemVer](https://semver.org/).
 
+## [4.3.0] - 2026-09-05
+
+Two reports that were confidently wrong. 4.2.0 was about detectors that missed a
+wall; this is about the layer above them stating a conclusion it had not earned.
+
+### Fixed
+
+- **The live canary called a third-party outage a fingerprinting event.** It
+  failed five times in twelve weekly runs and every one of those filed an issue
+  advising that an impersonation profile had probably been burned. None had
+  been: `httpbin.org` was overloaded, the profiles timed out or got 503s, and
+  nothing ever looked at us to judge us. `_ROTATE_STATUS_CODES` treats 503 like
+  403, which is correct inside the ladder -- Cloudflare serves challenges that
+  way and rotating costs one request -- and wrong in a canary, whose whole job is
+  to answer *why*. Closes #16.
+- **A truncated model reply was read as a verdict.** `wall_vision._parse`
+  substring-scanned whatever came back, and when a reasoning model runs out of
+  budget `_extract_message_text` surfaces its partial thinking -- which restates
+  the task, and so contains the very words the parser looks for. Measured against
+  the local 27B on a page it calls WALL at full budget: at a 30-token budget the
+  parser reported `PAGE`. A wall read as content is precisely the failure this
+  detector exists to prevent. A reply now counts only if it *is* a verdict -- at
+  most 40 characters, naming exactly one of the three -- and anything else is no
+  opinion, which costs a markup-only verdict and nothing more.
+
+  Found by reading affiliate-service#32, which hit the same class of bug from the
+  other end: a token ceiling truncated every grounded response and the parser
+  mined the wreckage instead of rejecting it.
+
+### Added
+
+- **A `verdict` on the canary report**, carrying the distinction the exit code
+  could not: `ok`, `degraded`, `blocked`, `unreachable`. It is in the JSON, the
+  text output and the auto-filed issue, which now leads with what the failure is
+  *not*.
+
+### Changed
+
+- **The ladder canary targets `example.org`.** A verdict alone does not close
+  #16 -- an overloaded origin returning 503 *is* answering, and from a body that
+  never arrived no logic can tell that from a challenge. Only a target that does
+  not 503 under load can. Deliberately not `example.com`, which the smoke job
+  uses as its control; pointing both at one host would collapse the control into
+  the experiment.
+- **`unreachable` and `degraded` exit 0.** A third-party outage is not our alarm,
+  and neither is one profile being refused while another still wins -- that is
+  the ladder working as designed, and the early warning this tool was written to
+  give. Only `blocked` fails the build.
+
 ## [4.2.0] - 2026-09-04
 
 Detection and clearing, rebuilt after research rather than patched again. Three
