@@ -1030,6 +1030,49 @@ class TestBrowserUseCdpAttach:
             "the captcha + behavior hook rides on_step_end; without it both go dead silently"
         )
 
+    def test_the_real_history_exposes_every_field_we_read_off_it(self) -> None:
+        """The other half of the contract: what browser-use hands BACK.
+
+        The test above pins the *call* surface -- the kwargs we pass to
+        ``Agent``. Nothing pinned the *return* surface, and all three of the
+        bugs fixed in 4.4.0 live there: we read ``total_input_tokens`` (never
+        existed, so every run reported 0 tokens), ``AgentHistory.url`` (never
+        existed either, so every run echoed the requested URL), and we failed
+        to read ``judgement`` / ``is_successful`` at all, so a judge verdict of
+        FAIL came back as a win.
+
+        Each was invisible because the fake supplied whatever the code asked
+        for. Reading the real class is the only check that cannot be fooled
+        that way -- and it costs one import.
+        """
+        pytest.importorskip("browser_use")
+        from browser_use.agent.views import AgentHistory, AgentHistoryList
+
+        for name in (
+            "errors",  # -> _step_errors, the block detector's original source
+            "final_result",
+            "judgement",  # -> _judge_failure_reason
+            "is_validated",
+            "is_successful",  # -> _self_reported_failure / _succeeded
+        ):
+            assert hasattr(AgentHistoryList, name), (
+                f"AgentHistoryList.{name}() is gone -- a read in browse.py is now "
+                f"silently returning its getattr default"
+            )
+        # A Pydantic field rather than a method, so it lives in model_fields and
+        # `hasattr` on the class says False. This is where token spend actually
+        # is; `total_input_tokens`, which the old code read, is in neither.
+        assert "usage" in AgentHistoryList.model_fields
+        assert not hasattr(AgentHistoryList, "total_input_tokens")
+
+        # Where a step's location lives. `_final_url` read `.url` here for four
+        # months, got None every time, and fell back to the requested URL.
+        assert "state" in AgentHistory.model_fields
+        assert not hasattr(AgentHistory, "url"), (
+            "AgentHistory grew a `url` -- re-check _final_url, which now reads "
+            "`.state.url` precisely because this attribute did not exist"
+        )
+
     def test_the_real_browser_session_accepts_cdp_url_and_keep_alive(self) -> None:
         pytest.importorskip("browser_use")
         from browser_use.browser.session import BrowserSession
