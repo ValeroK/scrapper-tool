@@ -41,9 +41,9 @@ jobs:
       matrix:
         python-version: ["3.12", "3.13", "3.14"]
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
       - name: Set up uv
-        uses: astral-sh/setup-uv@v8.1.0
+        uses: astral-sh/setup-uv@v10.0.1
         with:
           enable-cache: true
       - name: Install Python ${{ matrix.python-version }}
@@ -80,9 +80,9 @@ jobs:
         python-version: ["3.12", "3.13", "3.14"]
         extras: ["dev,full,agent,http"]
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
       - name: Set up uv
-        uses: astral-sh/setup-uv@v8.1.0
+        uses: astral-sh/setup-uv@v10.0.1
         with:
           enable-cache: true
       - name: Install Python ${{ matrix.python-version }}
@@ -95,7 +95,7 @@ jobs:
       # Keyed on the build, so a pin bump misses the cache and re-downloads
       # exactly once instead of silently serving the old browser.
       - name: Cache the Camoufox browser build
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: ~/.cache/camoufox
           key: camoufox-${{ runner.os }}-${{ env.CAMOUFOX_BUILD }}
@@ -147,8 +147,8 @@ jobs:
     needs: [lint-and-type]
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v6
-      - uses: astral-sh/setup-uv@v8.1.0
+      - uses: actions/checkout@v7
+      - uses: astral-sh/setup-uv@v10.0.1
         with:
           enable-cache: true
       - run: uv python install 3.13
@@ -172,8 +172,8 @@ jobs:
     needs: [lint-and-type]
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v6
-      - uses: astral-sh/setup-uv@v8.1.0
+      - uses: actions/checkout@v7
+      - uses: astral-sh/setup-uv@v10.0.1
       - run: uv python install 3.13
       # `--all-extras` won't work: `[hostile]` and `[llm-agent]` are declared
       # as conflicting in pyproject.toml so each can lock independently; the
@@ -239,8 +239,8 @@ jobs:
     needs: [lint-and-type]
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v6
-      - uses: astral-sh/setup-uv@v8.1.0
+      - uses: actions/checkout@v7
+      - uses: astral-sh/setup-uv@v10.0.1
       - run: uv python install 3.13
       - run: uv sync --extra dev --extra agent --extra full --extra http
       # The MCP counterpart of openapi-spec-check. Regenerate the tool
@@ -262,8 +262,8 @@ jobs:
     needs: [lint-and-type]
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v6
-      - uses: astral-sh/setup-uv@v8.1.0
+      - uses: actions/checkout@v7
+      - uses: astral-sh/setup-uv@v10.0.1
       - run: uv python install 3.13
       - run: uv sync --extra dev --extra agent --extra full --extra http
       # Regenerate the spec; if it differs from what's committed, the

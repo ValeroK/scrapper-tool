@@ -42,9 +42,9 @@ jobs:
       SCRAPPER_TOOL_CAPTCHA_VISION_MODEL: ${{ inputs.captcha_vision_model }}
       SCRAPPER_TOOL_AGENT_OLLAMA_URL: ${{ inputs.ollama_url }}
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
       - name: Set up uv
-        uses: astral-sh/setup-uv@v8.1.0
+        uses: astral-sh/setup-uv@v10.0.1
         with:
           enable-cache: true
       - name: Install Python 3.13
