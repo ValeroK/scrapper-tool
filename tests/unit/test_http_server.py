@@ -534,9 +534,15 @@ def _mock_agent_module(
     monkeypatch.setitem(sys.modules, "scrapper_tool.agent", agent_module)
 
 
-def _fake_agent_result(mode: str = "extract", *, blocked: bool = False) -> MagicMock:
+def _fake_agent_result(
+    mode: str = "extract", *, blocked: bool = False, succeeded: bool | None = None
+) -> MagicMock:
     r = MagicMock()
     r.mode = mode
+    # Set explicitly: a bare MagicMock returns a truthy child for any attribute,
+    # so `succeeded` would never read as None or False and the whole verdict
+    # path would be untestable here.
+    r.succeeded = succeeded
     r.data = {"name": "Widget"}
     r.final_url = "https://example.com/p"
     r.rendered_markdown = "# Widget"
@@ -2198,6 +2204,65 @@ class TestDomainPolicySkip:
 
         assert get_policy_store().get("https://hard.test/p") is None
 
+    @pytest.mark.asyncio
+    async def test_an_e2_run_its_own_judge_failed_is_not_recorded_as_best_tier(
+        self, app_no_auth: Any, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The false win, at the layer where it did the damage.
+
+        Measured on a live Cloudflare Turnstile wall: E2 spent 533 s, its agent
+        reported a captcha, its judge returned FAIL -- and because not one step
+        had *errored*, the tier returned ``blocked=False`` and the domain policy
+        learned ``best_tier=e2``. Every later request to that domain was then
+        pre-routed to a nine-minute tier that returned the wall, skipping the
+        tiers that would have said "blocked" in under a second.
+
+        Nothing about a wall is asserted here on purpose: this run names no
+        evidence, so it is not a block. It is simply not a win, and a tier that
+        did not win must not be learned as the domain's best route.
+        """
+        from scrapper_tool.recipe.policy import get_policy_store
+
+        self._blocked_ladder(monkeypatch)
+        blocked_e1 = _fake_agent_result("extract", blocked=True)
+        blocked_e1.error = "captcha"
+        blocked_e1.final_url = "https://judged.test/p"
+        # Schema-valid data from a run the judge failed -- a well-formed guess.
+        failed_e2 = _fake_agent_result("browse", succeeded=False)
+        failed_e2.final_url = "https://judged.test/p"
+        _mock_agent_module(monkeypatch, extract_result=blocked_e1, browse_result=failed_e2)
+
+        async with _client(app_no_auth) as client:
+            resp = await client.post(
+                "/scrape", json={"url": "https://judged.test/p", "interactive": True}
+            )
+
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["pattern_used"] == "e2"
+        assert body["is_structured"] is False, (
+            "data from a run whose judge returned FAIL was published as a real payload"
+        )
+        # A row exists -- ``record_e2_attempt`` writes one for the attempt
+        # bookkeeping, and recording the *loss* is the point of it. What must
+        # not happen is E2 being adopted as the route.
+        policy = get_policy_store().get("https://judged.test/p")
+        assert policy is not None
+        assert policy.best_tier != "e2", (
+            "E2 was learned as this domain's best tier on a run it did not win -- "
+            "every later request now pre-routes to a nine-minute tier"
+        )
+        assert policy.e2_wins == 0, f"a judge-failed run was counted as an E2 win: {policy!r}"
+        assert policy.e2_attempts == 1
+        e2_rows = [r for r in body["escalation_log"] if r["step"] == "e2"]
+        assert e2_rows and e2_rows[0]["outcome"] == "failed", (
+            f"the escalation log still reads 'won' for a failed run: {e2_rows!r}"
+        )
+        assert e2_rows[0]["reason"] == "no_signal", (
+            "a failure with no wall named must not be charged to the vendor as "
+            f"'blocked': {e2_rows!r}"
+        )
+
 
 # --- B4: E2 is gated behind interactive=true --------------------------------
 
@@ -2590,6 +2655,41 @@ class TestIsStructuredField:
         assert http_server._is_e_tier_structured([{"a": 1}], False) is True
         # Empty dict is technically structured — has no _raw marker.
         assert http_server._is_e_tier_structured({}, False) is True
+
+    def test_a_run_the_agent_declared_failed_is_not_structured(self) -> None:
+        """Schema-valid JSON from a failed run is a guess, not a payload.
+
+        E2 can return well-formed data for a task its own judge marked FAIL --
+        the agent guesses a shape to satisfy the schema. Calling that structured
+        let ``_record_policy`` learn the tier as the domain's best route, which
+        is how a Turnstile-walled domain came to be pre-routed to a nine-minute
+        tier that never cleared it.
+        """
+        assert http_server._is_e_tier_structured({"name": "x"}, False, False) is False
+        # Only an explicit False counts: None is "nothing said either way",
+        # which is E1 on every call and E2 on a run that never reached `done`.
+        assert http_server._is_e_tier_structured({"name": "x"}, False, None) is True
+        assert http_server._is_e_tier_structured({"name": "x"}, False, True) is True
+
+    def test_the_mcp_copy_agrees(self) -> None:
+        """Two implementations, one contract -- they are documented as mirrors."""
+        from scrapper_tool import mcp as mcp_module
+
+        cases: list[tuple[object | None, bool, bool | None]] = [
+            ({"name": "x"}, False, None),
+            ({"_raw": "..."}, False, None),
+            (None, False, None),
+            ({"name": "x"}, True, None),
+            ({"name": "x"}, False, False),
+            ({"name": "x"}, False, True),
+            ({}, False, False),
+        ]
+        for data, blocked, succeeded in cases:
+            assert http_server._is_e_tier_structured(
+                data, blocked, succeeded
+            ) is mcp_module._is_e_tier_structured(data, blocked, succeeded), (
+                f"the two copies disagree on {(data, blocked, succeeded)!r}"
+            )
 
     @pytest.mark.asyncio
     async def test_a_b_c_success_carries_is_structured_true(

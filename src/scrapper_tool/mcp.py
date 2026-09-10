@@ -108,14 +108,21 @@ _AGENT_NOT_INSTALLED = (
 )
 
 
-def _is_e_tier_structured(data: object | None, blocked: bool) -> bool:
+def _is_e_tier_structured(
+    data: object | None, blocked: bool, succeeded: bool | None = None
+) -> bool:
     """Verdict for an E1/E2 result — True iff ``data`` is structured JSON.
 
     Mirrors :func:`scrapper_tool.http_server._is_e_tier_structured`. Reimplemented
     here because the http_server module pulls in FastAPI; the MCP module must
-    stay importable without the ``[http]`` extra.
+    stay importable without the ``[http]`` extra. Keep the two in step —
+    ``tests/unit/test_mcp.py`` asserts they agree.
+
+    ``succeeded is False`` means the agent, or the judge reviewing its trace,
+    said the task was not accomplished; schema-valid JSON from such a run is a
+    well-formed guess, not a payload.
     """
-    if blocked or data is None:
+    if blocked or data is None or succeeded is False:
         return False
     return not (isinstance(data, dict) and "_raw" in data)
 
@@ -277,7 +284,9 @@ async def _continue_to_e_tier(  # noqa: PLR0915 — linear cascade; splitting hi
             payload["pattern_attempts"] = attempts
             payload["product"] = None
             payload["hostile_skipped"] = hostile_skipped
-            payload["is_structured"] = _is_e_tier_structured(result.data, result.blocked)
+            payload["is_structured"] = _is_e_tier_structured(
+                result.data, result.blocked, getattr(result, "succeeded", None)
+            )
             return payload
         last_error = f"e1: {result.error or 'blocked'}"
         blocked_e1 = result
@@ -337,7 +346,9 @@ async def _continue_to_e_tier(  # noqa: PLR0915 — linear cascade; splitting hi
         payload["pattern_attempts"] = attempts
         payload["product"] = None
         payload["hostile_skipped"] = hostile_skipped
-        payload["is_structured"] = _is_e_tier_structured(result.data, result.blocked)
+        payload["is_structured"] = _is_e_tier_structured(
+            result.data, result.blocked, getattr(result, "succeeded", None)
+        )
         return payload
     except AgentBlockedError as exc:
         return _agent_error_payload(

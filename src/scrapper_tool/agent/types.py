@@ -66,6 +66,20 @@ class AgentResult(BaseModel):
     actions: list[ActionTrace] = Field(default_factory=list)
     tokens_used: int = 0
     blocked: bool = False
+    succeeded: bool | None = None
+    """Did the run accomplish its task? ``None`` when nothing said either way.
+
+    Deliberately distinct from ``blocked``, and the distinction is the whole
+    taxonomy: ``blocked`` means *the vendor stopped us* and is evidence-only,
+    while ``succeeded=False`` carrying no evidence means *we gave up* — a
+    failure charged to us rather than to them.
+
+    E2 sourced its verdict from step errors alone until 4.4.0, so a run that
+    navigated cleanly into a Turnstile page, took ten screenshots of it and
+    finished by declaring failure produced no error at all, reported
+    ``blocked=False``, and was recorded as the domain's best tier. Populated by
+    browse (judge verdict first, else the agent's own ``done`` flag); ``None``
+    from extract, which has no equivalent signal."""
     challenge_vendor: str | None = None
     """What made us say ``blocked`` -- a vendor name, or the term that matched.
 

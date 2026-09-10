@@ -2,6 +2,70 @@
 
 All notable changes to `scrapper-tool` are recorded here. Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning follows [SemVer](https://semver.org/).
 
+## [4.4.0] - 2026-09-10
+
+E2 could report a win on a run its own judge had failed. 4.3.1 fixed that shape
+for the render tier; this is the same shape one tier up, plus the two reads that
+let it stay invisible.
+
+### Fixed
+
+- **A judge verdict of FAIL was reported as an E2 win.** `blocked` was derived
+  from step *errors* alone, and a Cloudflare Turnstile wall produces none: the
+  agent navigates cleanly, looks at ten screenshots of a "Verify you are human"
+  page, and finishes by declaring failure. So `errors()` was empty, the tier
+  returned `blocked=False`, and the domain policy learned `best_tier=e2` with
+  `e2_wins=1`. Every later request to that domain was pre-routed to a
+  nine-minute tier that returns the wall, skipping the sub-second tiers that
+  would have said "blocked" immediately. Measured on amayama.com: 533.6 s, agent
+  log `Agent was blocked by a captcha`, `Judge Verdict: FAIL`, payload
+  `blocked=False` beside `challenge_detected=cloudflare`.
+
+  browser-use has exposed `judgement()`, `is_validated()` and `is_successful()`
+  the whole time and none were read. They are now, and the taxonomy is kept:
+  a FAIL that names a wall is `blocked` (422, chargeable to the vendor); a FAIL
+  that names none is a `no_signal` failure (ours, not theirs). Reading a run's
+  own words for evidence is confined to runs that already declared themselves
+  failed -- on a successful extraction the same scan condemns any page carrying
+  an ordinary reCAPTCHA footer, which is the 2-day regression fixed earlier and
+  is now pinned from both sides.
+
+- **The E2 escalation-log row was hardcoded `won` / `ok`.** Every non-raising
+  return wrote that, so the log could contradict the policy write three lines
+  above it, and did.
+
+- **E2's `url` always echoed the request.** `_final_url` read `.url` /
+  `.final_url` on the history item; browser-use keeps the location on
+  `.state.url` and has never had either attribute, so the read returned None on
+  every run and the caller fell back to the requested URL. A caller checking
+  `requested_url != url` to spot a redirect onto a challenge page could never
+  see one. Same defect class as the `total_input_tokens` read fixed earlier --
+  and the test fake carried the same invented attribute, which is why the suite
+  stayed green through both.
+
+- **A tier that returned no content could still be learned as the best route.**
+  `_record_policy` gated on `blocked` alone. It now also declines an
+  unstructured payload, which its own docstring ("remember which tier reached
+  content") already implied. A/B/C and D are unaffected -- they return only
+  after their classifier has accepted the page.
+
+### Changed
+
+- **`block_evidence` names the vendor when a message names it.** The signature
+  table is built for scanning documents, where a bare "cloudflare" is footer
+  furniture rather than evidence; in prose it is the most useful word in the
+  sentence, and the answer used to degrade to the generic "challenge". Applies
+  to messages only -- exception strings, step errors, a judge's failure reason.
+  Document scanning is unchanged and pinned against leakage.
+
+### Added
+
+- `AgentResult.succeeded` (`bool | None`) -- did the run accomplish its task,
+  as distinct from whether the vendor stopped us. `None` means nothing reported
+  either way: E1 on every call, E2 on a run that never reached `done`.
+  Schema-valid JSON from a run with `succeeded=False` is reported
+  `is_structured=false` -- it is a well-formed guess, not a payload.
+
 ## [4.3.1] - 2026-09-05
 
 ### Fixed

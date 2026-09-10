@@ -367,3 +367,47 @@ def test_a_large_radware_wall_is_still_a_wall() -> None:
     assert html.lower().find("validate.perfdrive.com") < _BODY_SCAN_BYTES
     assert is_interstitial(html, 200) == "radware"
     assert has_real_content(html, 200) is False
+
+
+def test_a_vendor_name_in_prose_names_the_vendor() -> None:
+    """An error message saying "Cloudflare" is naming the vendor.
+
+    ``block_evidence`` scans messages -- an exception string, a browser agent's
+    account of why it stopped, an LLM judge's stated failure reason. Those name
+    the wall in words, not in markup, so the markup signature table
+    (``<title>just a moment...``, ``cf-chl-bypass``) never matches and the
+    answer used to degrade to the generic term "challenge". A caller deciding
+    whether to route around Cloudflare cannot act on "challenge".
+    """
+    from scrapper_tool._challenge import block_evidence
+
+    assert (
+        block_evidence(
+            "The target page was permanently blocked behind a Cloudflare Turnstile "
+            "'Verify you are human' challenge."
+        )
+        == "cloudflare"
+    )
+    assert block_evidence("navigation failed: datadome said no") == "datadome"
+    # Nothing vendor-specific in it -- the generic term still answers.
+    assert block_evidence("the request hit a captcha") == "captcha"
+    assert block_evidence("connection reset by peer") is None
+
+
+def test_prose_vendor_names_never_leak_into_document_scanning() -> None:
+    """The boundary the prose pass depends on, pinned.
+
+    A bare vendor name is evidence in a message and furniture in a page:
+    "Performance & security by Cloudflare" sits in the footer of perfectly good
+    sites, and matching it against bodies is the regression that once condemned
+    successful extractions and cost a downstream integration two days. So
+    ``_VENDOR_PROSE_NAMES`` must stay out of ``is_interstitial``'s path.
+    """
+    footer_page = (
+        "<html><head><title>2016 Jeep Wrangler | Mopar</title></head><body>"
+        + ("<h2>Select Parts Category</h2><h3>Brakes</h3><p>x</p>" * 200)
+        + "<footer>Performance &amp; security by Cloudflare. This site is "
+        "protected by reCAPTCHA.</footer></body></html>"
+    )
+    assert is_interstitial(footer_page, 200) is None
+    assert has_real_content(footer_page, 200) is True

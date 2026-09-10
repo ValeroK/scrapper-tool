@@ -41,6 +41,13 @@ _FIXTURES = Path(__file__).parent.parent / "fixtures" / "agent"
 # ---------------------------------------------------------------------------
 
 
+class _FakeState:
+    """``AgentHistory.state`` — where browser-use records the step's location."""
+
+    def __init__(self, url: str | None) -> None:
+        self.url = url
+
+
 class _FakeHistoryItem:
     """Mirrors a single browser-use history step."""
 
@@ -48,6 +55,11 @@ class _FakeHistoryItem:
         self.step = fields.get("step")
         self.model_action = fields.get("model_action")
         self.url = fields.get("url")
+        # The real ``AgentHistory`` keeps the location on ``.state.url`` and has
+        # no ``.url`` of its own. The attribute above is kept only because
+        # ``_action_target`` still reads it; ``_final_url`` must find the URL
+        # here or not at all.
+        self.state = _FakeState(fields.get("url"))
         self.selector = fields.get("selector")
         self.screenshot = fields.get("screenshot")
         self.extracted_content = fields.get("extracted_content")
@@ -68,19 +80,44 @@ class _FakeAgentHistoryList:
     An earlier version of this fake carried ``total_input_tokens``, an attribute
     browser-use has never had — which is precisely how the adapter came to read
     it and report 0 tokens on every real run while the tests stayed green.
+
+    It happened twice. This fake also carried a top-level ``url``, which
+    ``AgentHistoryList`` has never had either, so ``_final_url``'s attribute
+    walk was satisfied here and returned None on every real run — and E2
+    reported ``requested_url == url`` for pages it had been redirected off.
+    The attribute is gone: the URL now lives on each step's ``state``, where
+    browser-use actually keeps it, and the fixture's ``final_url`` key is only
+    an expectation the tests assert against.
+
+    ``judgement`` / ``is_successful`` / ``is_validated`` mirror the trio the
+    adapter reads to tell a run that worked from one that declared itself
+    failed. Absent from this fake until 4.4.0, which is why a judge verdict of
+    FAIL could be reported as a win with the suite green.
     """
 
     def __init__(self, payload: dict[str, Any]) -> None:
         self.history = [_FakeHistoryItem(**h) for h in payload["history"]]
-        self.url = payload.get("final_url")
         self._final = payload.get("final_result")
         self.usage = _FakeUsage(payload.get("total_tokens", 0))
+        self._judgement = payload.get("judgement")
+        self._successful = payload.get("is_successful")
 
     def final_result(self) -> Any:
         return self._final
 
     def errors(self) -> list[str | None]:
         return [item.error for item in self.history]
+
+    def judgement(self) -> dict[str, Any] | None:
+        return self._judgement
+
+    def is_validated(self) -> bool | None:
+        if self._judgement is None:
+            return None
+        return bool(self._judgement.get("verdict"))
+
+    def is_successful(self) -> bool | None:
+        return self._successful
 
 
 @pytest.fixture
@@ -595,6 +632,189 @@ class _ChallengeSession:
 
     async def get_current_page(self) -> Any:
         return self._page
+
+
+class TestTheAgentsOwnVerdictIsRead:
+    """A run browser-use judged FAIL must never be reported as a win.
+
+    The shape this fixes, measured on a live Cloudflare Turnstile wall: the
+    agent navigated cleanly, looked at ten screenshots of a "Verify you are
+    human" page, finished by declaring failure, and the judge returned
+    ``verdict=false``. Not one step *errored*, so the error-only detector found
+    nothing, the tier returned ``blocked=False``, and the domain policy learned
+    that E2 -- a nine-minute tier -- was this domain's best route. Every later
+    request was pre-routed there, skipping the sub-second tiers that would have
+    said "blocked" immediately.
+    """
+
+    def test_a_judge_fail_naming_a_wall_is_a_block(self) -> None:
+        from scrapper_tool.agent.browse import _history_to_agent_result
+
+        history = _FakeAgentHistoryList(
+            {
+                "history": [{"step": 1, "model_action": "goto", "url": "https://e.com/epc"}],
+                "final_result": None,
+                "is_successful": False,
+                "judgement": {
+                    "verdict": False,
+                    "failure_reason": (
+                        "The target page was permanently blocked behind a Cloudflare "
+                        "Turnstile 'Verify you are human' challenge that could not be "
+                        "resolved in the automated session."
+                    ),
+                },
+            }
+        )
+        result = _history_to_agent_result(
+            history, url="https://e.com/epc", duration_s=533.6, schema=None
+        )
+        assert result.succeeded is False
+        assert result.blocked is True, (
+            "a run whose own judge returned FAIL on a Turnstile wall was reported "
+            "as unblocked -- the false win that poisoned the domain policy"
+        )
+        assert result.challenge_vendor == "cloudflare"
+
+    def test_a_judge_fail_naming_no_wall_is_a_failure_not_a_block(self) -> None:
+        """Ours to own, not the vendor's to be charged for.
+
+        ``blocked`` is evidence-only and maps to HTTP 422 (the vendor stopped
+        us); a tier that simply could not do the job is 502 ``pattern_failed``.
+        A judge FAIL with no wall named is the second kind, and inflating it to
+        a block would charge a vendor's failure budget for our own shortfall.
+        """
+        from scrapper_tool.agent.browse import _history_to_agent_result
+
+        history = _FakeAgentHistoryList(
+            {
+                "history": [{"step": 1, "model_action": "click", "url": "https://e.com"}],
+                "final_result": None,
+                "is_successful": False,
+                "judgement": {
+                    "verdict": False,
+                    "failure_reason": "The agent never located the submit button.",
+                },
+            }
+        )
+        result = _history_to_agent_result(history, url="https://e.com", duration_s=1.0, schema=None)
+        assert result.succeeded is False
+        assert result.blocked is False
+        assert result.challenge_vendor is None
+
+    def test_the_agents_own_failure_report_is_evidence(self) -> None:
+        """The judge is preferred, but an unjudged run still speaks for itself."""
+        from scrapper_tool.agent.browse import _history_to_agent_result
+
+        history = _FakeAgentHistoryList(
+            {
+                "history": [{"step": 1, "model_action": "goto", "url": "https://e.com"}],
+                "final_result": "Unable to complete task: the page is protected by Cloudflare.",
+                "is_successful": False,
+            }
+        )
+        result = _history_to_agent_result(history, url="https://e.com", duration_s=1.0, schema=None)
+        assert result.succeeded is False
+        assert result.blocked is True
+        assert result.challenge_vendor == "cloudflare"
+
+    def test_a_successful_run_is_still_never_scanned_for_prose(self) -> None:
+        """The 2024 regression must not come back through the new door.
+
+        Reading a run's own words for block evidence is safe *only* on a run
+        that has already declared itself failed. On a successful extraction the
+        same scan condemns any page carrying an ordinary reCAPTCHA footer --
+        which is what cost a downstream integration two days. The guard is
+        structural: this branch is unreachable unless ``succeeded is False``.
+        """
+        from scrapper_tool.agent.browse import _history_to_agent_result
+
+        history = _FakeAgentHistoryList(
+            {
+                "history": [{"step": 1, "model_action": "extract", "url": "https://shop.example"}],
+                "final_result": (
+                    "Part 68001234AA, $149.99, in stock. This site is protected by "
+                    "reCAPTCHA. Performance & security by Cloudflare."
+                ),
+                "is_successful": True,
+                "judgement": {"verdict": True, "failure_reason": ""},
+            }
+        )
+        result = _history_to_agent_result(
+            history, url="https://shop.example", duration_s=1.0, schema=None
+        )
+        assert result.succeeded is True
+        assert result.blocked is False
+        assert result.challenge_vendor is None
+
+    def test_an_unfinished_run_claims_nothing_either_way(self) -> None:
+        """Step-budget exhaustion is unknown, not failure."""
+        from scrapper_tool.agent.browse import _history_to_agent_result
+
+        history = _FakeAgentHistoryList(
+            {
+                "history": [{"step": 1, "model_action": "goto", "url": "https://e.com"}],
+                "final_result": "partial",
+                "is_successful": None,
+            }
+        )
+        result = _history_to_agent_result(history, url="https://e.com", duration_s=1.0, schema=None)
+        assert result.succeeded is None
+        assert result.blocked is False
+
+    def test_a_failed_run_that_names_no_wall_still_reports_an_error(self) -> None:
+        from scrapper_tool.agent.browse import _history_to_agent_result
+
+        history = _FakeAgentHistoryList(
+            {
+                "history": [{"step": 1, "model_action": "click", "url": "https://e.com"}],
+                "final_result": {"title": "a plausible-looking guess"},
+                "is_successful": False,
+            }
+        )
+        result = _history_to_agent_result(history, url="https://e.com", duration_s=1.0, schema=None)
+        assert result.error == "agent-reported-failure", (
+            "schema-valid JSON from a run that declared itself failed came back "
+            "looking like a clean payload"
+        )
+
+
+class TestFinalUrlComesFromTheBrowser:
+    def test_final_url_is_read_from_the_steps_state(self) -> None:
+        """``AgentHistory`` keeps the location on ``.state.url`` and nowhere else.
+
+        The old read named ``.url`` / ``.final_url`` on the item -- attributes
+        browser-use has never had -- so it returned None every time and the
+        caller fell back to the *requested* URL. E2 therefore reported
+        ``requested_url == url`` even for a run that finished on a challenge
+        page, which is exactly the field a caller checks to detect that.
+        """
+        from scrapper_tool.agent.browse import _final_url
+
+        history = _FakeAgentHistoryList(
+            {
+                "history": [
+                    {"step": 1, "model_action": "goto", "url": "https://e.com/epc"},
+                    {"step": 2, "model_action": "wait", "url": "https://e.com/captcha.html"},
+                ],
+                "final_result": None,
+            }
+        )
+        assert _final_url(history) == "https://e.com/captcha.html"
+
+    def test_the_last_step_without_a_location_does_not_erase_the_answer(self) -> None:
+        """A teardown step can carry a null URL; the last real one is the answer."""
+        from scrapper_tool.agent.browse import _final_url
+
+        history = _FakeAgentHistoryList(
+            {
+                "history": [
+                    {"step": 1, "model_action": "goto", "url": "https://e.com/real"},
+                    {"step": 2, "model_action": "done", "url": None},
+                ],
+                "final_result": None,
+            }
+        )
+        assert _final_url(history) == "https://e.com/real"
 
 
 class TestCaptchaBehaviorWiring:

@@ -358,11 +358,30 @@ def _history_to_agent_result(
     final_url = _final_url(history) or url
     # Same discipline as E1: name the evidence, never just assert the verdict.
     challenge_vendor = _block_evidence(history)
+    succeeded = _succeeded(history)
+    if challenge_vendor is None and succeeded is False:
+        # A run that declared itself failed gets its account read for evidence.
+        # Step errors are the *only* source for a run that thinks it worked, so
+        # a wall the agent walked into without erroring -- Turnstile serves a
+        # 200 and a human-verification page, which navigates perfectly -- was
+        # invisible here. It is safe to read prose on this branch and only this
+        # branch; see _self_reported_failure for why.
+        for message in (_judge_failure_reason(history), _self_reported_failure(history)):
+            if not message:
+                continue
+            challenge_vendor = block_evidence(message)
+            if challenge_vendor is not None:
+                break
     blocked = challenge_vendor is not None
 
     data, error = _coerce_final(final_result, schema=schema)
     if not data and not error:
         error = "no-match"
+    if error is None and succeeded is False and not blocked:
+        # Not a block -- nothing named a wall -- but not a win either. Without
+        # this the tier returned a clean-looking payload for a task its judge
+        # had failed, and the domain policy learned to route here first.
+        error = "agent-reported-failure"
 
     screenshots = _downsample_screenshots(raw_screenshots) or None
 
@@ -375,6 +394,7 @@ def _history_to_agent_result(
         actions=actions,
         tokens_used=_tokens_used(history),
         blocked=blocked,
+        succeeded=succeeded,
         challenge_vendor=challenge_vendor,
         error=error,
         duration_s=duration_s,
@@ -433,6 +453,28 @@ def _final_result(history: Any) -> object:
 
 
 def _final_url(history: Any) -> str | None:
+    """Where the browser actually ended up, or None.
+
+    browser-use keeps a step's location on ``AgentHistory.state.url`` — the
+    item itself has no ``url`` and never had one, so the attribute walk below
+    was reading names that do not exist and returning None on every run. The
+    caller falls back to the *requested* URL, which is why E2 has always
+    reported ``requested_url == url`` even for a run that finished on a
+    challenge page. Same defect class as the ``total_input_tokens`` read in
+    :func:`_tokens_used`: a getattr fallback silently standing in for a field
+    that was never populated.
+
+    The walk is backwards from the last step because the final step's state can
+    carry a null URL (an about:blank teardown, a step that errored before
+    navigating); the most recent step that actually recorded a location is the
+    honest answer.
+    """
+    for item in reversed(list(getattr(history, "history", []) or [])):
+        state = getattr(item, "state", None)
+        candidate = getattr(state, "url", None)
+        if isinstance(candidate, str) and candidate:
+            return candidate
+    # Pre-0.13 shapes, and defensive against further API drift.
     for attr in ("url", "final_url"):
         v = getattr(history, attr, None)
         if isinstance(v, str):
@@ -482,6 +524,95 @@ def _block_evidence(history: Any) -> str | None:
         evidence = block_evidence(message)
         if evidence is not None:
             return evidence
+    return None
+
+
+def _judge_failure_reason(history: Any) -> str | None:
+    """The judge's stated reason for a FAIL verdict, or None.
+
+    browser-use 0.13 runs an LLM judge over the finished trace and stores a
+    :class:`JudgementResult` (``verdict: bool``, ``failure_reason: str``) on the
+    last step. ``AgentHistoryList.judgement()`` returns it as a dict.
+
+    Nothing here consulted it until 4.4.0, and the omission was load-bearing: on
+    a Cloudflare Turnstile wall the agent produced **no step error at all** — it
+    navigated fine, looked at ten screenshots of a challenge page, and finished
+    by declaring failure. :func:`_step_errors` is empty for that run, so
+    :func:`_block_evidence` found nothing and the tier reported success on a
+    page its own judge had marked FAIL.
+    """
+    fn = getattr(history, "judgement", None)
+    if not callable(fn):
+        return None
+    try:
+        judgement = fn()
+    except Exception as exc:
+        _logger.debug("agent.browse.judgement_unreadable", error=str(exc)[:160])
+        return None
+    if not isinstance(judgement, dict):
+        return None
+    if judgement.get("verdict"):
+        return None
+    reason = judgement.get("failure_reason")
+    return str(reason) if reason else ""
+
+
+def _self_reported_failure(history: Any) -> str | None:
+    """The agent's own account of a run it declared unsuccessful, or None.
+
+    ``is_successful()`` reads the ``done`` action's ``success`` flag — the
+    agent's verdict on itself, distinct from the judge's. It returns None when
+    the run never reached ``done`` (step budget exhausted), which is not a claim
+    either way and is reported as such.
+
+    Only the *failing* case returns text. That asymmetry is deliberate and is
+    the guard against the regression documented in :func:`_detect_block`:
+    scanning a successful run's extracted content for words like "captcha"
+    condemned good pages carrying an ordinary reCAPTCHA footer notice. Here the
+    text is only ever read from a run that has already declared itself failed,
+    so the words cannot be furniture on a page that worked.
+    """
+    fn = getattr(history, "is_successful", None)
+    if not callable(fn):
+        return None
+    try:
+        if fn() is not False:
+            return None
+    except Exception as exc:
+        _logger.debug("agent.browse.is_successful_unreadable", error=str(exc)[:160])
+        return None
+    final = _final_result(history)
+    return str(final) if final else ""
+
+
+def _succeeded(history: Any) -> bool | None:
+    """Did this run accomplish its task? None when nothing said either way.
+
+    The judge outranks the agent's self-assessment: it is the later, adversarial
+    check and it is what "Judge Verdict: FAIL" in the logs refers to. When the
+    trace was never judged the agent's own ``done`` flag stands in, and when the
+    run never finished at all the answer is genuinely unknown rather than False
+    — a step-budget exhaustion is a failure to *complete*, but the partial data
+    it carries is judged on its own merits by the caller, not condemned here.
+    """
+    if _judge_failure_reason(history) is not None:
+        return False
+    fn = getattr(history, "is_validated", None)
+    if callable(fn):
+        try:
+            if fn() is True:
+                return True
+        except Exception as exc:
+            _logger.debug("agent.browse.is_validated_unreadable", error=str(exc)[:160])
+    fn = getattr(history, "is_successful", None)
+    if callable(fn):
+        try:
+            value = fn()
+        except Exception as exc:
+            _logger.debug("agent.browse.is_successful_unreadable", error=str(exc)[:160])
+            return None
+        if isinstance(value, bool):
+            return value
     return None
 
 

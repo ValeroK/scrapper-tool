@@ -238,6 +238,16 @@ active. With no vision model, walls carrying no known signature are not caught.
 `blocked=true` is guaranteed to carry a non-null `challenge_detected`: a block
 that cannot name its evidence is withdrawn rather than published.
 
+**The reverse does not hold, and must not be read as a contradiction.**
+`challenge_detected` reports the wall any tier hit on the way; `blocked` reports
+whether the response you are holding is one. A cheap tier walled and a later
+tier clearing it is a *successful* escalation -- `challenge_detected:
+"cloudflare"` with `blocked: false` and real data -- and the per-tier detail is
+in `escalation_log`. Key on `blocked` for "did I get the page", on
+`challenge_detected` for "who is guarding this domain". Since 4.4.0 a tier
+cannot reach that pairing by mistakenly declaring a wall cleared: a run whose
+own agent or judge says it failed is not reported as a win.
+
 A tier of ours that timed out, crashed, or found no signal returns **HTTP 502
 `pattern_failed`** instead:
 

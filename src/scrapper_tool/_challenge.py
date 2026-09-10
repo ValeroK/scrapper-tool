@@ -477,12 +477,31 @@ def block_evidence(text: str) -> str | None:
 
     A vendor name wins over a generic term when both match, because "datadome" is
     strictly more useful to a caller than "captcha".
+
+    Three passes, most specific first: markup signatures (a message often quotes
+    the wall's own hostname or title), then the vendor's plain name, then the
+    generic terms.
+
+    The middle pass exists because ``_VENDOR_SIGNATURES`` is built for scanning
+    *documents* -- its Cloudflare entries are ``<title>just a moment...`` and
+    ``cf-chl-bypass``, and a bare "cloudflare" is deliberately absent from it,
+    since "Performance & security by Cloudflare" sits in the footer of perfectly
+    good pages. In prose that reasoning inverts: an error string or a judge's
+    stated failure reason saying "blocked behind a Cloudflare Turnstile
+    challenge" is naming the vendor, and answering "challenge" there discards
+    the most useful word in the sentence. Safe only because every caller of this
+    function passes a message -- an exception, a step error, a payload's
+    ``error`` field -- and never a page body. Keep it that way: document
+    scanning goes through :func:`is_interstitial`.
     """
     if not text:
         return None
     lowered = text.lower()
     for vendor, signatures in _VENDOR_SIGNATURES.items():
         if any(sig in lowered for sig in signatures):
+            return vendor
+    for vendor, names in _VENDOR_PROSE_NAMES.items():
+        if any(name in lowered for name in names):
             return vendor
     for term in _BLOCK_MESSAGE_TERMS:
         if term in lowered:
@@ -510,6 +529,19 @@ def looks_like_block_message(text: str) -> bool:
 
 # Generic wording that shows up in anti-bot failures across libraries. Kept
 # separate from the vendor table so each can grow without disturbing the other.
+# Vendor names as they appear in PROSE -- an exception string, a browser agent's
+# account of why it stopped, an LLM judge's failure reason. Message-only, and
+# never merged into `_VENDOR_SIGNATURES`: that table is scanned against page
+# bodies, where a bare vendor name is ordinary footer furniture rather than
+# evidence of a wall. See :func:`block_evidence` for the full reasoning.
+_VENDOR_PROSE_NAMES: dict[str, tuple[str, ...]] = {
+    "cloudflare": ("cloudflare", "turnstile"),
+    "radware": ("radware", "shieldsquare"),
+    "datadome": ("datadome",),
+    "perimeterx": ("perimeterx",),
+    "akamai": ("akamai",),
+}
+
 _BLOCK_MESSAGE_TERMS: tuple[str, ...] = (
     "challenge",
     "captcha",

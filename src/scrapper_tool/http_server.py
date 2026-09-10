@@ -1353,7 +1353,9 @@ def _classify_extraction_success(
     )
 
 
-def _is_e_tier_structured(data: object | None, blocked: bool) -> bool:
+def _is_e_tier_structured(
+    data: object | None, blocked: bool, succeeded: bool | None = None
+) -> bool:
     """Verdict for an E1/E2 result — True iff data is structured JSON, not LLM narration.
 
     Crawl4AI and browser-use return ``{"_raw": "<free-form text>"}`` when the
@@ -1361,11 +1363,18 @@ def _is_e_tier_structured(data: object | None, blocked: bool) -> bool:
     "narration of failure" case — surface it as ``is_structured=False`` so
     downstream consumers don't treat it as a real payload.
 
+    ``succeeded=False`` is the same verdict arrived at from the other side: the
+    agent, or the judge reviewing its trace, said the task was not accomplished.
+    Schema-valid JSON emitted by a run that failed is a well-formed guess, and
+    calling it structured let it stand as the domain's learned best route. Only
+    an explicit False counts — ``None`` means nothing reported either way, which
+    is E1 on every call and E2 on a run that never reached ``done``.
+
     A/B/C and D never reach this helper — they return only when their
     classifier (``_classify_extraction_success``) already accepted the page,
     so their ``is_structured`` is always True.
     """
-    if blocked or data is None:
+    if blocked or data is None or succeeded is False:
         return False
     return not (isinstance(data, dict) and "_raw" in data)
 
@@ -1992,6 +2001,17 @@ def _e2_backend_detail(req: Any) -> str | None:
     return f"backend {configured!r} cannot host E2 (no CDP); ran on {using!r}"
 
 
+def _e2_loss_reason(result: Any) -> str:
+    """Why an E2 run that returned normally is still not a win.
+
+    Keeps the ``blocked`` / ``no_signal`` split the escalation log's enum draws
+    everywhere else: ``blocked`` is chargeable to the vendor, ``no_signal`` is
+    our tier failing to get there. An agent that declared its own task failed
+    without any evidence of a wall is the second one.
+    """
+    return "blocked" if getattr(result, "blocked", False) else "no_signal"
+
+
 def _e2_gate(req: Any) -> tuple[bool, str]:  # noqa: PLR0911 - one return per gate outcome
     """Whether E2 may run for this request, and the reason either way.
 
@@ -2083,6 +2103,20 @@ def _record_policy(payload: dict[str, Any] | None, req: Any) -> None:
         return
     tier = payload.get("pattern_used")
     if not isinstance(tier, str) or payload.get("blocked"):
+        return
+    if payload.get("is_structured") is False:
+        # "Reached content" is this function's own standard, and a payload that
+        # carried none did not meet it. Only the E tiers can arrive here
+        # unstructured -- A/B/C and D return solely when their classifier has
+        # already accepted the page -- so this costs those paths nothing and
+        # stops an E tier that narrated a failure from being learned as the
+        # domain's best route.
+        _logger.debug(
+            "scrape.policy.not_recorded",
+            url=req.url,
+            tier=tier,
+            detail="tier returned no structured payload; not learning it as best_tier",
+        )
         return
     try:
         from scrapper_tool.recipe.policy import (  # noqa: PLC0415
@@ -3054,12 +3088,23 @@ async def _do_scrape_e_tier(  # noqa: PLR0912, PLR0915 — linear cascade; split
         # decides whether E2 is worth paying for on this domain next time, and
         # a win here is what permanently re-enables a domain the futility
         # counter had written off.
-        _record_e2_attempt(req, won=not result.blocked)
+        #
+        # `succeeded is False` is a loss even with nothing named: the agent or
+        # its judge said the task was not accomplished. Charging that as a win
+        # is what taught a Turnstile-walled domain that E2 -- a nine-minute
+        # tier -- was its best route, so every later request skipped the cheap
+        # tiers that would have said "blocked" in under a second.
+        e2_won = not result.blocked and result.succeeded is not False
+        _record_e2_attempt(req, won=e2_won)
         log.append(
             _build_log_entry(
                 "e2",
-                outcome="won",
-                reason="ok",
+                # The outcome used to be hardcoded "won"/"ok" on every
+                # non-raising return, so the log could contradict the policy
+                # write directly above it -- and did, reading `e2 won ok` for a
+                # run whose judge verdict was FAIL.
+                outcome="won" if e2_won else "failed",
+                reason=_e2_loss_reason(result) if not e2_won else "ok",
                 duration_s=time.perf_counter() - e2_start,
                 detail=_e2_backend_detail(req),
             )
@@ -3645,7 +3690,9 @@ def _scrape_response_from_agent(
         "blocked": result.blocked,
         "error": result.error,
         "hostile_skipped": hostile_skipped,
-        "is_structured": _is_e_tier_structured(result.data, result.blocked),
+        "is_structured": _is_e_tier_structured(
+            result.data, result.blocked, getattr(result, "succeeded", None)
+        ),
         "duration_s": time.perf_counter() - start,
     }
 

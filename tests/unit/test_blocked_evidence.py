@@ -103,7 +103,12 @@ class TestE1BlockedRequiresAnEmptyResult:
             )
         )
         assert agent.blocked is True
-        assert agent.challenge_vendor == "challenge"
+        # The vendor, not the generic term. This message names Cloudflare, and
+        # answering "challenge" threw away the most useful word in it. Vendor
+        # names are matched in *prose* only -- an error string, an agent's
+        # account of why it stopped -- never against a page body, where
+        # "Performance & security by Cloudflare" is ordinary footer furniture.
+        assert agent.challenge_vendor == "cloudflare"
 
     def test_a_body_alone_is_not_evidence_of_success(self) -> None:
         """A challenge page has a body too.
