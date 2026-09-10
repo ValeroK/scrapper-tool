@@ -944,14 +944,42 @@ class TestDependencyCoexistence:
     """
 
     def test_pydantic_matches_browser_uses_pin(self) -> None:
+        """The resolved pydantic must be the one browser-use asks for.
+
+        Read from browser-use's own metadata rather than hard-coded. The
+        hard-coded form asserted ``startswith("2.12.")`` and went stale the
+        moment browser-use 0.13.10 moved its *own* pin to ``pydantic==2.13.5``.
+        It then blocked a dependency bump that was **following** the pin -- the
+        opposite of this test's purpose -- with a message telling the reader to
+        go verify something that was already correct.
+
+        The risk being guarded is unchanged, and it is a coexistence one: in the
+        ``[full]`` environment scrapling[fetchers] carries its own newer pins,
+        and if one of those wins the resolution, browser-use ends up validating
+        LLM tool calls against a pydantic it was never pinned to. That is what
+        must stay impossible, and it is expressible without naming a version.
+
+        Verified 2026-09-10 across the 0.13.8/2.12.5 -> 0.13.10/2.13.5 bump: the
+        tool-call schema browser-use builds is byte-identical (21,980 bytes) and
+        the same ``done`` payload validates to the same result under both. The
+        bump is neutral on the path this pin protects.
+        """
         pytest.importorskip("browser_use")
         import importlib.metadata as md
 
-        # browser-use 0.13.x pins pydantic==2.12.5 exactly. We honour it rather
-        # than override, so the resolved version must be in the 2.12 line.
-        assert md.version("pydantic").startswith("2.12."), (
-            "pydantic moved off browser-use's pin — confirm E2 tool-calls still "
-            "validate before accepting the new version"
+        from packaging.requirements import Requirement
+
+        pins = [
+            req
+            for req in (Requirement(r) for r in (md.requires("browser-use") or []))
+            if req.name == "pydantic"
+        ]
+        assert pins, "browser-use stopped pinning pydantic -- re-read whether this still applies"
+        resolved = md.version("pydantic")
+        assert pins[0].specifier.contains(resolved), (
+            f"pydantic {resolved} does not satisfy browser-use's own pin "
+            f"({pins[0]}) -- something else in [full] won the resolution, so E2 "
+            f"would validate LLM tool calls against a pydantic it was never tested on"
         )
 
     def test_typing_extensions_override_holds(self) -> None:
