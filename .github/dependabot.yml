@@ -1,0 +1,45 @@
+# Dependabot configuration.
+#
+# Security *alerts* were already on (they are a repo setting, not this file) --
+# that is what raised #79. What was missing was everything else: no version
+# updates, and no watch on the GitHub Actions ecosystem at all. The evidence
+# that the second one matters arrived on its own: CI annotates every run with
+# "Node.js 20 is deprecated ... actions/cache@v4", and nothing was going to
+# tell us to bump it.
+#
+# Monthly and grouped on purpose. This repo pins its actions to major tags and
+# its Python deps through uv.lock, so the useful signal is "something moved
+# this month", not a PR per package. A weekly firehose gets muted, and a muted
+# updater is worse than none because it looks like coverage.
+
+version: 2
+updates:
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "monthly"
+    groups:
+      actions:
+        patterns: ["*"]
+    commit-message:
+      prefix: "ci"
+    labels: ["dependencies", "github-actions"]
+
+  - package-ecosystem: "uv"
+    directory: "/"
+    schedule:
+      interval: "monthly"
+    groups:
+      # One PR for the routine drift; anything that needs thought gets read on
+      # its own rather than buried in a 40-package bump.
+      minor-and-patch:
+        patterns: ["*"]
+        update-types: ["minor", "patch"]
+    # Majors are deliberately excluded from the group above so each arrives as
+    # its own PR. The 0.5 -> 0.13 browser-use jump is the reason: it changed
+    # both the call and the return surface, ignored the kwargs it no longer
+    # supported instead of raising, and shipped green. That is not a review you
+    # want batched with six other bumps.
+    commit-message:
+      prefix: "deps"
+    labels: ["dependencies"]

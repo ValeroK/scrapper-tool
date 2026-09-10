@@ -180,7 +180,14 @@ jobs:
       # supported "everything" combo is `[full,agent,dev]` (which uses the
       # uv lxml override), matching the published Docker image and recommended
       # SDK install path.
-      - run: uv sync --extra full --extra agent --extra dev
+      #
+      # `http` and `cookies` are named explicitly because `full` does NOT
+      # include them -- it is hostile + llm-agent + turnstile-solver. That left
+      # FastAPI, uvicorn, PyYAML and prometheus-client unaudited: the extra
+      # that ships in the published sidecar image and is the only one listening
+      # on a socket was the one nobody was checking. Adding them found nothing
+      # on the day, which is the point of adding them before it does.
+      - run: uv sync --extra full --extra agent --extra dev --extra http --extra cookies
       # pip itself is not a dependency of this project — it is seeded into the
       # venv by the toolchain and then audited along with everything else. The
       # 2026-08 advisory PYSEC-2026-3721 (pip < 26.2) failed the build for a
@@ -203,6 +210,16 @@ jobs:
         # job that everyone learns to ignore, which is worse than one documented
         # exception. Revisit when nltk ships a fixed version: drop this line and
         # let the job tell you whether it is still needed.
+        #
+        # This is the SAME finding as Dependabot alert #79 (GHSA-8mgp-746c-j5xp),
+        # which is dismissed as not-used with the same reasoning. Two trackers,
+        # one decision: if you reopen one, reopen the other, or the next person
+        # to look re-derives all of it from scratch. The specifics, for that
+        # person: the advisory covers TransitionParser, AveragedPerceptron,
+        # PerceptronTagger.save_to_json and save_maxent_params; crawl4ai imports
+        # nltk in three modules and touches none of them; we never import nltk
+        # at all; and the bug is a bypass of nltk's `pathsec` containment, which
+        # nothing here enables.
         run: uv run pip-audit --skip-editable --ignore-vuln PYSEC-2026-3740
         continue-on-error: false   # fail the build on any OTHER new CVE
 
