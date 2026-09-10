@@ -33,9 +33,9 @@ jobs:
     name: Pattern A — anti-bot ladder against a stable JSON endpoint
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
       - name: Set up uv
-        uses: astral-sh/setup-uv@v8.1.0
+        uses: astral-sh/setup-uv@v10.0.1
         with:
           enable-cache: true
       - name: Install Python 3.13 + lib
@@ -79,9 +79,9 @@ jobs:
     name: Pattern B — schema.org Product extraction on a stable page
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
       - name: Set up uv
-        uses: astral-sh/setup-uv@v8.1.0
+        uses: astral-sh/setup-uv@v10.0.1
         with:
           enable-cache: true
       - name: Install Python 3.13 + lib
@@ -102,9 +102,9 @@ jobs:
     name: Smoke — example.com fetch + lib import
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
       - name: Set up uv
-        uses: astral-sh/setup-uv@v8.1.0
+        uses: astral-sh/setup-uv@v10.0.1
         with:
           enable-cache: true
       - name: Install Python 3.13 + lib
