@@ -181,13 +181,24 @@ jobs:
       # uv lxml override), matching the published Docker image and recommended
       # SDK install path.
       #
-      # `http` and `cookies` are named explicitly because `full` does NOT
-      # include them -- it is hostile + llm-agent + turnstile-solver. That left
-      # FastAPI, uvicorn, PyYAML and prometheus-client unaudited: the extra
-      # that ships in the published sidecar image and is the only one listening
-      # on a socket was the one nobody was checking. Adding them found nothing
-      # on the day, which is the point of adding them before it does.
-      - run: uv sync --extra full --extra agent --extra dev --extra http --extra cookies
+      # `http` is named explicitly because `full` does NOT include it -- `full`
+      # is hostile + llm-agent + turnstile-solver. That left FastAPI, uvicorn,
+      # PyYAML and prometheus-client unaudited: the extra that ships in the
+      # published sidecar image and is the only one that binds a port was the
+      # one nobody was checking. It finds nothing today, which is the point of
+      # adding it before it does.
+      #
+      # `cookies` is deliberately NOT here, and cannot be: rookiepy 0.5.6
+      # publishes an sdist whose own pyproject.toml is invalid -- a `[project]`
+      # table with no `version` and no `dynamic = ["version"]` -- so any
+      # platform without a matching wheel fails at build time rather than at
+      # install time. ubuntu-latest on 3.13 is such a platform. That makes the
+      # extra unauditable here, and it is worth saying out loud rather than
+      # leaving as an unexplained omission: `[cookies]` is the one dependency
+      # in this project that no CI job installs, and `tests/unit/test_cookies.py`
+      # skips its rookiepy case for the same reason. Revisit when rookiepy
+      # fixes its metadata or ships broader wheels.
+      - run: uv sync --extra full --extra agent --extra dev --extra http
       # pip itself is not a dependency of this project — it is seeded into the
       # venv by the toolchain and then audited along with everything else. The
       # 2026-08 advisory PYSEC-2026-3721 (pip < 26.2) failed the build for a
