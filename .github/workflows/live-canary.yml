@@ -35,7 +35,7 @@ jobs:
     steps:
       - uses: actions/checkout@v7
       - name: Set up uv
-        uses: astral-sh/setup-uv@v10.0.1
+        uses: astral-sh/setup-uv@v10.2.0
         with:
           enable-cache: true
       - name: Install Python 3.13 + lib
@@ -81,7 +81,7 @@ jobs:
     steps:
       - uses: actions/checkout@v7
       - name: Set up uv
-        uses: astral-sh/setup-uv@v10.0.1
+        uses: astral-sh/setup-uv@v10.2.0
         with:
           enable-cache: true
       - name: Install Python 3.13 + lib
@@ -104,7 +104,7 @@ jobs:
     steps:
       - uses: actions/checkout@v7
       - name: Set up uv
-        uses: astral-sh/setup-uv@v10.0.1
+        uses: astral-sh/setup-uv@v10.2.0
         with:
           enable-cache: true
       - name: Install Python 3.13 + lib
