@@ -195,6 +195,22 @@ _CASES: list[tuple[str, str, str | None, str, dict[str, str]]] = [
 ]
 
 
+_KNOWN_BROKEN: tuple[str, ...] = tuple(
+    f"aws-waf collects gokuProps: extra[{key!r}]" for key in ("awsKey", "awsIv", "awsContext")
+)
+"""Mismatches expected under the pinned browser build, matched by prefix.
+
+Every Camoufox build from ``beta.29`` on loses the ``gokuProps`` triple (see the
+CHANGELOG), and Playwright 1.61+ refuses anything older than ``beta.30``, so the
+build CI pins can no longer be the last one that passed. These are tolerated
+*strictly*: any other mismatch still fails the test, and so does the triple
+coming back - at which point delete this tuple.
+
+Scoped to the three lines rather than an ``xfail`` on the whole test, because the
+test is one browser launch covering every case, and a blanket xfail would have
+silenced regressions in all of them.
+"""
+
 _EXTERNAL = re.compile(r"^https?://")
 """Only real remote fetches. Deliberately NOT the ``**/*`` glob.
 
@@ -276,10 +292,16 @@ async def test_detection_js_against_real_markup() -> None:
                 if got.extra.get(key) != value:
                     failures.append(f"{label}: extra[{key!r}] {got.extra.get(key)!r} != {value!r}")
 
-    assert not failures, "detection mismatches:\n  " + "\n  ".join(failures)
+    known = [f for f in failures if f.startswith(_KNOWN_BROKEN)]
+    unexpected = [f for f in failures if f not in known]
+    assert not unexpected, "detection mismatches:\n  " + "\n  ".join(unexpected)
 
     # URL-valued extras are resolved against the document, so assert on the tail
     # rather than pinning the base URL set_content happens to use.
     assert extras["aws-waf collects gokuProps"]["awsChallengeJS"].endswith("/challenge.js")
     assert "initialCid=ABC123" in extras["datadome captures challenge url"]["captchaUrl"]
     assert extras["image captcha beside a captcha-named field"]["image_url"].endswith("captcha.png")
+
+    # Last, so every real assertion above has already run.
+    assert known, "gokuProps is detected again: remove _KNOWN_BROKEN"
+    pytest.xfail("gokuProps triple missing under Camoufox beta.29+ (see CHANGELOG)")

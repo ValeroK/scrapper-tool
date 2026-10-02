@@ -2,6 +2,30 @@
 
 All notable changes to `scrapper-tool` are recorded here. Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning follows [SemVer](https://semver.org/).
 
+## [Unreleased]
+
+### Changed
+
+- **Browser stack brought current: scrapling 0.3.11 -> 0.4.15, playwright
+  1.58 -> 1.62, patchright 1.62.3 -> 1.63.0, camoufox 0.5.5 -> 0.5.6, crawl4ai
+  0.9.3 -> 0.9.4.** The holdback was browser-use 0.13's exact
+  `anyio==4.12.1` pin against scrapling 0.4.15's `anyio>=4.14`. A plain
+  `uv lock --upgrade` was worse than nothing: it moved patchright *backwards*
+  to 1.58.2. Lifted with an `anyio>=4.14` override, the same treatment as
+  browser-use's other exact pins, and `[hostile]` now floors scrapling at
+  0.4.15 so a re-lock cannot slide back onto the 0.3 line. Routine patch and
+  minor bumps across the rest of the lock come along with it.
+
+- **CI's Camoufox browser pin moved from `152.0.4-beta.28` to `beta.31`.**
+  Forced, not chosen: Playwright 1.61+ changed the viewport protocol, and
+  camoufox 0.5.6 will not launch a build older than `beta.30` under it. That
+  rules out the last build where the aws-waf `gokuProps` triple was detected
+  (see the 3.0.0 notes). `test_detection_js_against_real_markup` now tolerates
+  exactly those three mismatches through `_KNOWN_BROKEN`. Any other mismatch
+  still fails, and so does the triple coming back. The open question from
+  before still stands: is this a `set_content` timing artefact or a real
+  detection regression? CI now runs the same build production does.
+
 ## [4.4.0] - 2026-09-10
 
 E2 could report a win on a run its own judge had failed. 4.3.1 fixed that shape

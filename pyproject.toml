@@ -45,7 +45,12 @@ dependencies = [
 # Scrapling 0.4+ splits browser/fetcher deps into a [fetchers] extra
 # (msgspec, playwright, patchright, browserforge, …). We pull that
 # transitively so ``scrapling.fetchers.StealthyFetcher`` actually loads.
-hostile = ["scrapling[fetchers]>=0.3"]
+#
+# Floor at 0.4.15: below it the lock sat on 0.3.11 for months without anyone
+# choosing that. The real constraint was browser-use's exact anyio pin (see the
+# anyio override in [tool.uv]); once that was lifted, the floor keeps a future
+# re-lock from sliding back onto the 0.3 line.
+hostile = ["scrapling[fetchers]>=0.4.15"]
 # M13: filled. Provides scrapper-tool-mcp console script (stdio MCP server)
 # exposing the nine tools listed in docs/mcp.md for LLM agents (Claude Desktop,
 # Claude Code, OpenClaw, Hermes Agent, AutoGen, LangChain via mcp-use).
@@ -259,6 +264,13 @@ override-dependencies = [
     # ...and aiohttp: browser-use pins ``aiohttp==3.13.4`` (PYSEC-2026-2105..2108);
     # 3.14.1 fixes all four and stays under the <4.0 cap every other consumer sets.
     "aiohttp>=3.14.1",
+    # browser-use 0.13 pins ``anyio==4.12.1`` exactly, and scrapling 0.4.15 needs
+    # ``anyio>=4.14``. Honouring the pin held the [full] resolution on scrapling
+    # 0.3.11 and playwright 1.58, and a plain ``uv lock --upgrade`` went further
+    # and dragged patchright 1.62 -> 1.58 backwards. anyio is additive within 4.x,
+    # so lifting the pin costs browser-use nothing; the backend launch-contract
+    # tests are the tripwire if that stops being true.
+    "anyio>=4.14",
 ]
 
 # When NOT using the [full] extra, ``[hostile]`` and ``[llm-agent]``

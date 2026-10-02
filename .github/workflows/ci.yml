@@ -21,13 +21,15 @@ env:
   # culprit here.
   #
   # Pinned here so the browser is a declared dependency like any other and
-  # moving it is a reviewable edit rather than a silent Tuesday. beta.28 is the
-  # build docs/research/2026-camoufox-obscura-capabilities.md records as
-  # validated, and is what a fresh install resolves to today.
+  # moving it is a reviewable edit rather than a silent Tuesday.
   #
-  # NB: this pin is for determinism, not a diagnosis. It is NOT known to fix
-  # the aws-waf `gokuProps` failure - see the CHANGELOG note under Unreleased.
-  CAMOUFOX_BUILD: 152.0.4-beta.28
+  # beta.31, the newest *stable* build, moved forward from beta.28 because it
+  # had to: Playwright 1.61+ changed the viewport protocol, and camoufox 0.5.6
+  # refuses to launch any build older than beta.30 under it. The cost is the
+  # aws-waf `gokuProps` triple, which every build from beta.29 on loses - see
+  # the CHANGELOG and _KNOWN_BROKEN in test_captcha_detection_dom.py. Production
+  # images already ship a current build, so CI now tests what production runs.
+  CAMOUFOX_BUILD: 152.0.4-beta.31
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
