@@ -193,7 +193,30 @@ _DETECT_JS = r"""
   // set it (it survives same-context navigation and set_content), so keying off
   // its mere presence made every subsequent page on that tab report aws-waf and
   // swallowed the DataDome and image branches below.
-  const goku = window.gokuProps;
+  //
+  // The global alone is also not enough to *find* it. From beta.29, Camoufox
+  // runs evaluate() in an isolated world: the DOM is shared, but globals the
+  // page defines are not, so `window.gokuProps` reads undefined even after the
+  // inline script has run. The script's source text IS part of the DOM, so the
+  // triple is parsed from there as well. It is per-document too, so the source
+  // path cannot leak across navigations the way the global does.
+  const gokuFromSource = () => {
+    for (const s of document.querySelectorAll('script:not([src])')) {
+      const t = s.textContent || '';
+      const at = t.indexOf('gokuProps');
+      if (at === -1) continue;
+      const end = t.indexOf('}', at);
+      const body = end === -1 ? t.slice(at) : t.slice(at, end + 1);
+      const field = (name) => {
+        const m = body.match(new RegExp('\\b' + name + '["\']?\\s*:\\s*["\']([^"\']*)["\']'));
+        return m ? m[1] : '';
+      };
+      const g = { key: field('key'), iv: field('iv'), context: field('context') };
+      if (g.key && g.context) return g;
+    }
+    return null;
+  };
+  const goku = window.gokuProps || gokuFromSource();
   const wafRes = pick('script[src*="awswaf.com"]') || pick('iframe[src*="awswaf.com"]');
   if (wafRes || (goku && goku.key && goku.context)) {
     return hit('aws-waf', '', {
