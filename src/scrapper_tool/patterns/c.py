@@ -72,7 +72,7 @@ def extract_microdata_price(html: str) -> tuple[Decimal, str] | None:
     price_node = parser.css_first('[itemprop="price"]')
     currency_node = parser.css_first('[itemprop="priceCurrency"]')
     if price_node is None or currency_node is None:
-        _logger.debug("patterns.c.microdata.miss")  # type: ignore[unreachable]
+        _logger.debug("patterns.c.microdata.miss")
         return None
 
     raw_price = price_node.attributes.get("content") or price_node.text(strip=True)
@@ -147,7 +147,7 @@ def extract_via_selectors(
 
     price_node = parser.css_first(price_selector)
     if price_node is None:
-        _logger.debug("patterns.c.selector.miss", selector=price_selector)  # type: ignore[unreachable]
+        _logger.debug("patterns.c.selector.miss", selector=price_selector)
         return None
 
     raw_price = (
@@ -168,7 +168,7 @@ def extract_via_selectors(
     if currency_selector is not None:
         currency_node = parser.css_first(currency_selector)
         if currency_node is None:
-            _logger.debug(  # type: ignore[unreachable]
+            _logger.debug(
                 "patterns.c.selector.miss_currency",
                 selector=currency_selector,
             )

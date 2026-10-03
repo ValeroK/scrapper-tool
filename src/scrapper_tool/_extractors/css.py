@@ -46,7 +46,7 @@ Output: list of dicts, one per matched row from ``baseSelector``.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any, cast
+from typing import Any
 
 from selectolax.lexbor import LexborHTMLParser, LexborNode
 
@@ -64,14 +64,10 @@ def _extract_field(  # noqa: PLR0911 — small dispatch on field type
     selector = field_spec.get("selector")
     field_type = field_spec.get("type", "text")
 
-    # selectolax stubs claim css_first returns LexborNode (non-None),
-    # but the implementation can return None when nothing matches.
-    # Cast to the optional type so the runtime None-check below is
-    # not flagged as unreachable. Selector-less fields use the row
-    # node directly (caller wants the whole row).
-    match: LexborNode | None = (
-        node if not selector else cast("LexborNode | None", node.css_first(selector))
-    )
+    # css_first returns None when nothing matches (typed that way since
+    # selectolax 1.0). Selector-less fields use the row node directly (caller
+    # wants the whole row).
+    match: LexborNode | None = node if not selector else node.css_first(selector)
     if match is None:
         return False, None
 
