@@ -74,6 +74,32 @@ _DETECT_JS = r"""
   const origin = (u) => {
     try { return new URL(u, location.href).origin; } catch (e) { return ''; }
   };
+  // Config a page defines as a JS global, read from the inline script that
+  // defines it. From beta.29, Camoufox runs evaluate() in an isolated world: the
+  // DOM is shared, but globals the page defines are not, so `window.X` reads
+  // undefined even after the script has run. The script's source text IS part
+  // of the DOM. Collects `name: 'value'` fields from the span between each
+  // occurrence of `marker` and the next `}`. Every occurrence is checked,
+  // because the first one is often a definition (`initGeetest4 = function () {}`)
+  // rather than the call carrying the config. Returns null when no inline
+  // script mentions `marker`.
+  const fromSource = (marker, names) => {
+    let out = null;
+    for (const s of document.querySelectorAll('script:not([src])')) {
+      const t = s.textContent || '';
+      for (let at = t.indexOf(marker); at !== -1; at = t.indexOf(marker, at + 1)) {
+        out = out || Object.fromEntries(names.map((n) => [n, '']));
+        const end = t.indexOf('}', at);
+        const body = end === -1 ? t.slice(at) : t.slice(at, end + 1);
+        for (const name of names) {
+          if (out[name]) continue;
+          const m = body.match(new RegExp('\\b' + name + '["\']?\\s*:\\s*["\']([^"\']*)["\']'));
+          if (m) out[name] = m[1];
+        }
+      }
+    }
+    return out;
+  };
 
   // --- Cloudflare Turnstile ---
   let el = pick('.cf-turnstile[data-sitekey]') || pick('[data-sitekey][data-action]');
@@ -151,13 +177,25 @@ _DETECT_JS = r"""
   // on the prefix. The id is NOT in any documented global — measured on a live v4
   // page, the only place it appears is the loader script's query string
   // (`gcaptcha4.geetest.com/load?...&captcha_id=<id>`), so parse it from there.
+  //
+  // The `initGeetest*` globals are defined by GeeTest's loader script, and are
+  // invisible under Camoufox's isolated world (see fromSource). The loader's
+  // own <script src> and the inline call that initialises it are the visible
+  // equivalents, so either one counts as the same signal the global gave.
+  const gtInit = fromSource('initGeetest', ['gt', 'captchaId', 'challenge']);
+  const gtLoader = pick('script[src*="geetest.com"]');
   if (pick('[class^="geetest_"]') || pick('[class*=" geetest_"]')
       || typeof window.initGeetest === 'function'
-      || typeof window.initGeetest4 === 'function') {
-    let key = '', version = typeof window.initGeetest4 === 'function' ? '4' : '3';
+      || typeof window.initGeetest4 === 'function'
+      || gtLoader || gtInit) {
+    const v4Source = [...document.querySelectorAll('script:not([src])')]
+      .some((s) => (s.textContent || '').indexOf('initGeetest4') !== -1);
+    let key = '';
+    let version = (typeof window.initGeetest4 === 'function' || v4Source) ? '4' : '3';
     let challenge = '';
     for (const s of document.querySelectorAll('script[src*="geetest.com"]')) {
       const src = s.getAttribute('src') || '';
+      if (/gt4\.js|gcaptcha4\./.test(src)) version = '4';
       const v4 = src.match(/[?&]captcha_id=([^&]+)/);
       if (v4) { key = decodeURIComponent(v4[1]); version = '4'; break; }
       const v3 = src.match(/[?&]gt=([^&]+)/);
@@ -165,7 +203,10 @@ _DETECT_JS = r"""
       const ch = src.match(/[?&]challenge=([^&]+)/);
       if (ch) challenge = decodeURIComponent(ch[1]);
     }
-    const cfg = window.__geetest_config || window.gtConfig || {};
+    const cfgNames = ['gt', 'captchaId', 'challenge'];
+    const cfg = window.__geetest_config || window.gtConfig
+             || fromSource('__geetest_config', cfgNames) || fromSource('gtConfig', cfgNames)
+             || gtInit || {};
     return hit('geetest', key || cfg.gt || cfg.captchaId || '', {
       challenge: challenge || cfg.challenge || '',
       version: version
@@ -194,29 +235,10 @@ _DETECT_JS = r"""
   // its mere presence made every subsequent page on that tab report aws-waf and
   // swallowed the DataDome and image branches below.
   //
-  // The global alone is also not enough to *find* it. From beta.29, Camoufox
-  // runs evaluate() in an isolated world: the DOM is shared, but globals the
-  // page defines are not, so `window.gokuProps` reads undefined even after the
-  // inline script has run. The script's source text IS part of the DOM, so the
-  // triple is parsed from there as well. It is per-document too, so the source
-  // path cannot leak across navigations the way the global does.
-  const gokuFromSource = () => {
-    for (const s of document.querySelectorAll('script:not([src])')) {
-      const t = s.textContent || '';
-      const at = t.indexOf('gokuProps');
-      if (at === -1) continue;
-      const end = t.indexOf('}', at);
-      const body = end === -1 ? t.slice(at) : t.slice(at, end + 1);
-      const field = (name) => {
-        const m = body.match(new RegExp('\\b' + name + '["\']?\\s*:\\s*["\']([^"\']*)["\']'));
-        return m ? m[1] : '';
-      };
-      const g = { key: field('key'), iv: field('iv'), context: field('context') };
-      if (g.key && g.context) return g;
-    }
-    return null;
-  };
-  const goku = window.gokuProps || gokuFromSource();
+  // Under Camoufox's isolated world the global is invisible anyway, so the
+  // triple is also parsed from the inline source (see fromSource). The source
+  // is per-document, so that path cannot leak across navigations.
+  const goku = window.gokuProps || fromSource('gokuProps', ['key', 'iv', 'context']);
   const wafRes = pick('script[src*="awswaf.com"]') || pick('iframe[src*="awswaf.com"]');
   if (wafRes || (goku && goku.key && goku.context)) {
     return hit('aws-waf', '', {
@@ -250,12 +272,21 @@ _DETECT_JS = r"""
 # image than the one the form expects.
 _IMAGE_B64_JS = r"""
 async (url) => {
+  // FileReader, not a Uint8Array walk. Under Camoufox (beta.29+) evaluate runs
+  // in an isolated world, and Firefox forbids reading TypedArray data across
+  // that boundary ("Accessing TypedArray data over Xrays ... forbidden"), so the
+  // byte loop threw on every call and the image tier silently got no image.
+  // readAsDataURL hands back a plain string, which crosses fine.
   const resp = await fetch(url, { credentials: 'include' });
-  const buf = await resp.arrayBuffer();
-  let binary = '';
-  const bytes = new Uint8Array(buf);
-  for (let i = 0; i < bytes.byteLength; i++) binary += String.fromCharCode(bytes[i]);
-  return btoa(binary);
+  const blob = await resp.blob();
+  const dataUrl = await new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(String(reader.result || ''));
+    reader.onerror = () => reject(reader.error);
+    reader.readAsDataURL(blob);
+  });
+  const comma = dataUrl.indexOf(',');
+  return comma === -1 ? '' : dataUrl.slice(comma + 1);
 }
 """
 

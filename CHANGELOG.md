@@ -22,6 +22,24 @@ All notable changes to `scrapper-tool` are recorded here. Format follows [Keep a
   Not taken: launching with `main_world_eval=True`. That makes our own
   evaluation visible to the page, which a stealth browser cannot afford.
 
+- **The same isolated world broke two more things.** I audited every script
+  passed to `evaluate` for page-global reads, and found two:
+  - **GeeTest went undetected** on pages where the only sign was the
+    `initGeetest*` globals, and its key and nonce fallbacks (`__geetest_config`,
+    `gtConfig`) were always empty. The loader's `<script src>` and the inline
+    init call now count as the same signal the global gave. The config is
+    parsed from inline source through the same helper as `gokuProps`.
+  - **Image captchas never got their image.** `_IMAGE_B64_JS` walked a
+    `Uint8Array`, and Firefox forbids reading TypedArray data across the
+    isolated-world boundary. Every call threw, `_fetch_image_b64` logged a
+    warning and returned `""`, and the image tier could not run. It now uses
+    `FileReader.readAsDataURL`, which hands back a plain string. I checked
+    that the page's cookies are still sent.
+
+  Injection, token readback, the slider canvas grab and scrolling are only
+  DOM reads and writes, and are unaffected. Each fix has a real-browser case
+  that fails against the 4.5.0 code.
+
 ## [4.5.0] - 2026-10-03
 
 ### Changed

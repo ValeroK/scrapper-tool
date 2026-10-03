@@ -26,7 +26,7 @@ from typing import Any
 import pytest
 
 from scrapper_tool._extras import browser_binary_present
-from scrapper_tool.agent.backends.captcha_dom import detect_challenge_detail
+from scrapper_tool.agent.backends.captcha_dom import _fetch_image_b64, detect_challenge_detail
 
 pytestmark = pytest.mark.skipif(
     not browser_binary_present("camoufox"),
@@ -145,6 +145,28 @@ _CASES: list[tuple[str, str, str | None, str, dict[str, str]]] = [
         "geetest",
         "GT3KEY",
         {"challenge": "CHAL1", "version": "3"},
+    ),
+    (
+        # No geetest_ markup yet and no loader URL: the inline init call is the
+        # only sign. Detection used to rest on the `initGeetest4` global, which
+        # reads undefined under Camoufox's isolated world, so this page came back
+        # as nothing at all.
+        "geetest v4 from inline init alone",
+        "<script>window.initGeetest4 = function () {};"
+        "initGeetest4({captchaId: 'GT4INIT', product: 'bind'}, function () {});</script>",
+        "geetest",
+        "GT4INIT",
+        {"version": "4"},
+    ),
+    (
+        # The key and nonce live only in a page-defined config global, which the
+        # detector cannot see under the isolated world, so they come from the source.
+        "geetest v3 config from inline source",
+        "<script>window.__geetest_config = {gt: 'GT3CFG', challenge: 'CH3CFG'};</script>"
+        '<script type="text/plain" src="https://static.geetest.com/static/js/gt.0.4.9.js"></script>',
+        "geetest",
+        "GT3CFG",
+        {"challenge": "CH3CFG", "version": "3"},
     ),
     (
         # AWS WAF has no sitekey; the solver needs the gokuProps triple, which a
@@ -294,3 +316,25 @@ async def test_detection_js_against_real_markup() -> None:
     assert extras["aws-waf collects gokuProps"]["awsChallengeJS"].endswith("/challenge.js")
     assert "initialCid=ABC123" in extras["datadome captures challenge url"]["captchaUrl"]
     assert extras["image captcha beside a captcha-named field"]["image_url"].endswith("captcha.png")
+
+
+async def test_image_fetch_returns_bytes_from_the_isolated_world() -> None:
+    # The image tier fetches the captcha picture from inside the page. Under
+    # Camoufox, evaluate runs in an isolated world, and Firefox forbids reading
+    # TypedArray data across it, so the old Uint8Array loop threw on every call.
+    # _fetch_image_b64 logged a warning and returned "", and the solver was never
+    # given an image. A data: URL keeps this off the network.
+    pytest.importorskip("camoufox", reason="needs the [llm-agent] extra")
+    import base64
+
+    from camoufox.async_api import AsyncCamoufox
+
+    payload = bytes(range(256)) * 4
+    url = "data:image/png;base64," + base64.b64encode(payload).decode()
+    async with AsyncCamoufox(headless=True) as browser:
+        page = await browser.new_page()
+        await page.set_content("<!doctype html><html><body></body></html>")
+        got = await _fetch_image_b64(page, url)
+        await page.close()
+
+    assert base64.b64decode(got) == payload
