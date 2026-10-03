@@ -25,10 +25,8 @@ env:
   #
   # beta.31, the newest *stable* build, moved forward from beta.28 because it
   # had to: Playwright 1.61+ changed the viewport protocol, and camoufox 0.5.6
-  # refuses to launch any build older than beta.30 under it. The cost is the
-  # aws-waf `gokuProps` triple, which every build from beta.29 on loses - see
-  # the CHANGELOG and _KNOWN_BROKEN in test_captcha_detection_dom.py. Production
-  # images already ship a current build, so CI now tests what production runs.
+  # refuses to launch any build older than beta.30 under it. Production images
+  # already ship a current build, so CI now tests what production runs.
   CAMOUFOX_BUILD: 152.0.4-beta.31
 
 concurrency:

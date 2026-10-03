@@ -2,6 +2,26 @@
 
 All notable changes to `scrapper-tool` are recorded here. Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning follows [SemVer](https://semver.org/).
 
+## [Unreleased]
+
+### Fixed
+
+- **AWS WAF detection loses the `gokuProps` triple under Camoufox beta.29+.**
+  This answers the open question from 3.0.0 and 4.5.0. It is a real
+  detection regression, not a `set_content` timing artefact, and it hit
+  production images too. From beta.29, Camoufox runs `page.evaluate` in an
+  isolated JS world: the DOM is shared, but globals the page defines are
+  not. So `window.gokuProps` read `undefined` even after the inline script
+  had run. Measured directly: the same script's DOM write was visible, and
+  its global was not. The detector now also parses the triple out of the
+  inline `<script>` source, which is part of the DOM and visible from any
+  world. The `_KNOWN_BROKEN` tolerance from 4.5.0 is gone, and a new case
+  covers the shape live AWS WAF pages serve, with JSON-quoted keys and no
+  awswaf `<script src>`.
+
+  Not taken: launching with `main_world_eval=True`. That makes our own
+  evaluation visible to the page, which a stealth browser cannot afford.
+
 ## [4.5.0] - 2026-10-03
 
 ### Changed
