@@ -2,7 +2,7 @@
 
 All notable changes to `scrapper-tool` are recorded here. Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning follows [SemVer](https://semver.org/).
 
-## [Unreleased]
+## [4.5.1] - 2026-10-03
 
 ### Fixed
 
@@ -39,6 +39,17 @@ All notable changes to `scrapper-tool` are recorded here. Format follows [Keep a
   Injection, token readback, the slider canvas grab and scrolling are only
   DOM reads and writes, and are unaffected. Each fix has a real-browser case
   that fails against the 4.5.0 code.
+
+### Changed
+
+- **Lock refreshed against releases since 4.5.0:** selectolax 0.4.13 -> 1.0.0,
+  mcp 2.2.0 -> 2.3.0, plus markupsafe, trimesh and ast-serialize patches. CI's
+  `astral-sh/setup-uv` action is bumped 10.0.1 -> 10.2.0. selectolax 1.0 is a
+  new major version, but the Lexbor API we use is unchanged and the full suite
+  passes on it. Its stubs now type `css_first` as returning `None` on a miss, so
+  three `type: ignore[unreachable]` comments in Pattern C and a cast in the CSS
+  extractor were removed rather than left as suppressions that suppress
+  nothing.
 
 ## [4.5.0] - 2026-10-03
 
