@@ -111,14 +111,14 @@ class AgentResult(BaseModel):
 
 
 CaptchaSolverName = Literal[
-    "auto", "camoufox-auto", "theyka", "capsolver", "nopecha", "twocaptcha", "none"
+    "auto", "camoufox-auto", "theyka", "capsolver", "nopecha", "twocaptcha", "solvecha", "none"
 ]
 BrowserBackendName = Literal["camoufox", "patchright", "scrapling", "obscura"]
 CamoufoxDisplayName = Literal["headless", "virtual"]
 LLMBackendName = Literal["ollama", "llama_cpp", "vllm", "openai_compat"]
 BehaviorName = Literal["humanlike", "fast", "off"]
 FingerprintName = Literal["browserforge", "none"]
-PaidFallbackName = Literal["capsolver", "nopecha", "twocaptcha", "none"]
+PaidFallbackName = Literal["capsolver", "nopecha", "twocaptcha", "solvecha", "none"]
 
 #: Default model for the captcha image-grid tier. Named here rather than inlined
 #: so ``doctor``, the docs and the tests all quote one string — the same reason
