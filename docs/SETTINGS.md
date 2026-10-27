@@ -135,9 +135,9 @@ Free OSS by default. Escalates to a paid solver only when an API key is configur
 
 | Field | Env var | Default | Choices |
 |-------|---------|---------|---------|
-| `captcha_solver` | `SCRAPPER_TOOL_CAPTCHA_SOLVER` | `auto` | `auto` / `camoufox-auto` / `theyka` / `capsolver` / `nopecha` / `twocaptcha` / `none` |
+| `captcha_solver` | `SCRAPPER_TOOL_CAPTCHA_SOLVER` | `auto` | `auto` / `camoufox-auto` / `theyka` / `capsolver` / `nopecha` / `twocaptcha` / `solvecha` / `none` |
 | `captcha_api_key` | `SCRAPPER_TOOL_CAPTCHA_KEY` | unset | Paid-vendor API key. Triggers Tier-2 escalation. |
-| `captcha_paid_fallback` | `SCRAPPER_TOOL_CAPTCHA_PAID_FALLBACK` | `capsolver` | `capsolver` / `nopecha` / `twocaptcha` / `none` |
+| `captcha_paid_fallback` | `SCRAPPER_TOOL_CAPTCHA_PAID_FALLBACK` | `capsolver` | `capsolver` / `nopecha` / `twocaptcha` / `solvecha` / `none` |
 | `captcha_timeout_s` | `SCRAPPER_TOOL_CAPTCHA_TIMEOUT_S` | `120` | Per-solve cap. |
 | `captcha_vision_model` | `SCRAPPER_TOOL_CAPTCHA_VISION_MODEL` | `qwen3.8-27b-apex` | Model for the image-grid tier. Set **empty** to reuse `model`. See below. |
 

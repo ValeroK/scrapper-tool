@@ -376,6 +376,72 @@ def _capsolver_task_type(kind: CaptchaKind) -> str:
     }[kind]
 
 
+class SolvechaSolver(_PaidSolverBase):
+    """Tier 2 — Solvecha. Pictures and text only (``image``); no token tasks.
+
+    Speaks CapSolver-style ``createTask`` / ``getTaskResult``. ``createTask`` may
+    already return ``status: ready``. Docs: https://solvecha.com/docs
+    """
+
+    name = "solvecha"
+    _api_base = "https://api.solvecha.com"
+
+    @property
+    def supported(self) -> frozenset[CaptchaKind]:
+        return frozenset({"image"})
+
+    async def _post(
+        self, client: httpx.AsyncClient, path: str, payload: dict[str, object]
+    ) -> dict[str, object]:
+        # Errors arrive as 4xx plus a JSON body; keep the API's own message.
+        resp = await client.post(f"{self._api_base}{path}", json=payload, timeout=20.0)
+        try:
+            body = resp.json()
+        except ValueError:
+            body = None
+        if not isinstance(body, dict):
+            resp.raise_for_status()
+            raise CaptchaSolveError(f"Solvecha {path}: non-object response")
+        err = body.get("errorId")
+        if isinstance(err, int) and err != 0:
+            detail = body.get("errorDescription") or body.get("errorCode") or "(no detail)"
+            raise CaptchaSolveError(f"Solvecha {path} error: {detail}")
+        return body
+
+    async def solve(
+        self,
+        kind: CaptchaKind,
+        site_key: str,
+        url: str,
+        *,
+        action: str | None = None,
+        extra: dict[str, str] | None = None,
+    ) -> str:
+        if kind not in self.supported:
+            raise CaptchaSolveError(f"Solvecha solves pictures and text only, not {kind!r}")
+        task = {"type": "ImageToTextTask", "body": (extra or {}).get("body", "")}
+        deadline = asyncio.get_event_loop().time() + self._timeout_s
+        async with httpx.AsyncClient() as client:
+            body = await self._post(
+                client, "/createTask", {"clientKey": self._api_key, "task": task}
+            )
+            task_id = str(body.get("taskId") or "")
+            while body.get("status") != "ready":
+                if not task_id:
+                    raise CaptchaSolveError("Solvecha createTask returned no taskId")
+                if asyncio.get_event_loop().time() >= deadline:
+                    raise CaptchaSolveError("Solvecha poll timed out")
+                await asyncio.sleep(1.5)
+                body = await self._post(
+                    client, "/getTaskResult", {"clientKey": self._api_key, "taskId": task_id}
+                )
+        solution = body.get("solution")
+        text = solution.get("text") if isinstance(solution, dict) else None
+        if not text:
+            raise CaptchaSolveError("Solvecha: solution has no text")
+        return str(text)
+
+
 class NopechaSolver(_PaidSolverBase):
     """Tier 2 — NopeCHA. Has a free dev tier; smaller coverage."""
 
@@ -775,6 +841,10 @@ def get_captcha_solver(config: AgentConfig) -> CaptchaSolver:  # noqa: PLR0911, 
         if not api_key:
             return NoSolver()
         return TwoCaptchaSolver(api_key=api_key, timeout_s=timeout_s)
+    if name == "solvecha":
+        if not api_key:
+            return NoSolver()
+        return SolvechaSolver(api_key=api_key, timeout_s=timeout_s)
     if name == "auto":
         tiers: list[CaptchaSolver] = [CamoufoxAutoSolver(), TheykaSolver()]
         if api_key:
@@ -786,6 +856,8 @@ def get_captcha_solver(config: AgentConfig) -> CaptchaSolver:  # noqa: PLR0911, 
                 paid_solver = NopechaSolver(api_key=api_key, timeout_s=timeout_s)
             elif chosen == "twocaptcha":
                 paid_solver = TwoCaptchaSolver(api_key=api_key, timeout_s=timeout_s)
+            elif chosen == "solvecha":
+                paid_solver = SolvechaSolver(api_key=api_key, timeout_s=timeout_s)
             if paid_solver is not None:
                 tiers.append(paid_solver)
         return AutoCascadeSolver(tiers=tiers)
@@ -802,6 +874,7 @@ __all__ = [
     "CaptchaSolver",
     "NoSolver",
     "NopechaSolver",
+    "SolvechaSolver",
     "TheykaSolver",
     "TwoCaptchaSolver",
     "captcha_capabilities",

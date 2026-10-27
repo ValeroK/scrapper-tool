@@ -2,6 +2,15 @@
 
 All notable changes to `scrapper-tool` are recorded here. Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning follows [SemVer](https://semver.org/).
 
+## [Unreleased]
+
+### Added
+
+- **Optional `solvecha` captcha provider** (image-to-text only). Select it with
+  `SCRAPPER_TOOL_CAPTCHA_SOLVER=solvecha` or `SCRAPPER_TOOL_CAPTCHA_PAID_FALLBACK=solvecha`.
+  It handles the `image` kind and no token tasks. Existing providers and
+  defaults are unchanged. Docs: https://solvecha.com/docs
+
 ## [4.5.1] - 2026-10-03
 
 ### Fixed

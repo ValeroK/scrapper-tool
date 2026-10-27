@@ -19,6 +19,7 @@ from scrapper_tool.agent.backends.captcha import (
     CapSolverSolver,
     NopechaSolver,
     NoSolver,
+    SolvechaSolver,
     TheykaSolver,
     TwoCaptchaSolver,
 )
@@ -108,6 +109,67 @@ class TestCapSolverSolver:
         s = CapSolverSolver(api_key="x").supported
         for kind in ("turnstile", "hcaptcha", "recaptcha-v2", "recaptcha-v3", "datadome"):
             assert kind in s
+
+
+class TestSolvechaSolver:
+    def test_supports_images_only(self) -> None:
+        assert SolvechaSolver(api_key="x").supported == frozenset({"image"})
+
+    @pytest.mark.asyncio
+    async def test_ready_in_create_task(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        sent: list[Any] = []
+
+        async def fake_post(self: Any, url: str, **kw: Any) -> Any:
+            sent.append((url, kw["json"]))
+            return _MockResp(200, {"errorId": 0, "status": "ready", "solution": {"text": "x7Kp"}})
+
+        monkeypatch.setattr(httpx.AsyncClient, "post", fake_post)
+        text = await SolvechaSolver(api_key="sk").solve(
+            "image", "", "https://e.com", extra={"body": "aGk="}
+        )
+        assert text == "x7Kp"
+        assert sent[0][0] == "https://api.solvecha.com/createTask"
+        assert sent[0][1]["task"] == {"type": "ImageToTextTask", "body": "aGk="}
+
+    @pytest.mark.asyncio
+    async def test_processing_then_ready(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        responses = iter(
+            [
+                _MockResp(200, {"errorId": 0, "status": "processing", "taskId": "t1"}),
+                _MockResp(200, {"errorId": 0, "status": "ready", "solution": {"text": "abc"}}),
+            ]
+        )
+
+        async def fake_post(self: Any, url: str, **_: Any) -> Any:
+            return next(responses)
+
+        async def instant(_s: float) -> None:
+            return None
+
+        monkeypatch.setattr(httpx.AsyncClient, "post", fake_post)
+        monkeypatch.setattr("asyncio.sleep", instant)
+        assert await SolvechaSolver(api_key="sk").solve("image", "", "u") == "abc"
+
+    @pytest.mark.asyncio
+    async def test_api_error_keeps_message_on_4xx(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        async def fake_post(self: Any, url: str, **_: Any) -> Any:
+            return _MockResp(
+                401,
+                {
+                    "errorId": 1,
+                    "errorCode": "ERROR_KEY_DENIED_ACCESS",
+                    "errorDescription": "The clientKey is missing or wrong.",
+                },
+            )
+
+        monkeypatch.setattr(httpx.AsyncClient, "post", fake_post)
+        with pytest.raises(CaptchaSolveError, match="clientKey is missing or wrong"):
+            await SolvechaSolver(api_key="sk").solve("image", "", "u")
+
+    @pytest.mark.asyncio
+    async def test_token_kinds_rejected(self) -> None:
+        with pytest.raises(CaptchaSolveError, match="pictures and text only"):
+            await SolvechaSolver(api_key="sk").solve("turnstile", "k", "u")
 
 
 class TestNopechaSolver:
