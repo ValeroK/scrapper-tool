@@ -2,6 +2,58 @@
 
 All notable changes to `scrapper-tool` are recorded here. Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning follows [SemVer](https://semver.org/).
 
+## [4.6.0] - 2026-11-14
+
+### Fixed
+
+- **Tier d (Scrapling) ignored every option we gave it, cookies included.**
+  `hostile_client` built `StealthyFetcher(headless=, block_resources=, cookies=)`
+  as an instance. Scrapling has made that constructor a warning-only no-op
+  since 0.3, so every tier-d fetch ran on Scrapling defaults, without the
+  caller's session, and without our timeout, while `cookies_applied` still
+  listed `d`. All options now ride on each `StealthyFetcher.async_fetch` call.
+  Live check at httpbin.org/cookies: 4.5.1 drops the cookie, 4.6.0 sends it.
+  The unit fakes had a working constructor, which is why the suite missed it;
+  they now mirror the real API, and a contract test checks the installed
+  Scrapling accepts every key we send.
+- **doctor reported `geoip2: False` on a working Camoufox 0.5.9 install** and
+  suggested `pip install geoip2`. Camoufox 0.5.9 moved its `[geoip]` extra to
+  `maxminddb`; either module now counts, and the hint installs
+  `camoufox[geoip]`.
+- **doctor judged tier d by a Firefox binary.** Scrapling 0.5 runs Patchright
+  Chromium only; the probe and the fix hint (`patchright install chromium`)
+  follow it.
+
+### Changed
+
+- **Impersonation ladder refreshed for curl_cffi 0.17.0:**
+  `chrome152 -> chrome150 -> safari270 -> firefox155 -> chrome133a`
+  (was `chrome150 -> chrome146 -> safari2601 -> firefox147 -> chrome133a`).
+  Every rung probed live at tls.peet.ws/api/all: all 200, UA versions
+  Chrome/152, Chrome/150, Version/27.0, Firefox/155. chrome152's JA4
+  (`t13d1517h2_8daaf6152771_cb7bf5808d99`) differs from chrome150's, so the
+  first two rungs are a real TLS rotation; chrome151 was skipped because its
+  JA4 equals chrome150's. The single-shot `use_curl_cffi=True` default moved
+  to chrome152 too, with a test tying it to the ladder's first rung.
+- **Dependencies:** Scrapling 0.5.1, curl-cffi 0.17.0 (floor raised),
+  camoufox 0.5.9, patchright 1.64.4, crawl4ai 0.9.5, fastapi 0.162.7,
+  browser-use 0.13.14 (floor raised; a plain upgrade slid it back to 0.13.9),
+  plus routine bumps. pip-audit clean.
+
+### Not taken
+
+- **browser-use 1.0.** It keeps local browsers over CDP and reaches Ollama
+  through `ChatOpenAI(base_url=...)`, but it removes the `on_step_end` hook
+  that our captcha solver and behaviour shaping run on between agent steps,
+  removes `max_actions_per_step`, and replaces the action loop with the model
+  writing Python that runs as the local user. Staying on 0.13 until E2 is
+  redesigned for it.
+
+### Upgrade note
+
+- patchright 1.64 needs Chromium build 1248: run `patchright install chromium`
+  (doctor says so when it is missing).
+
 ## [4.5.1] - 2026-10-03
 
 ### Fixed
