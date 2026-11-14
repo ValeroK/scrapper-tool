@@ -226,7 +226,7 @@ flowchart TD
     B --> C{TLS-sensitive?}
     C -- no --> D[httpx]
     C -- yes --> E[curl_cffi ladder]
-    E --> E1[chrome150] --> E2[chrome146] --> E3[safari2601] --> E4[firefox147]
+    E --> E1[chrome152] --> E2[chrome150] --> E3[safari270] --> E4[firefox155]
     D --> F[Response]
     E4 --> F
     F --> G{Pattern}
@@ -272,7 +272,7 @@ Most scrapers are written from scratch every time, even though 90% of the work i
 `scrapper-tool` packages the parts that don't change per vendor, so you only write the parts that do.
 
 - **Pattern-first design.** Five named, documented extraction patterns (A–E) — pick the one DevTools points at, skip the rest.
-- **Anti-bot ladder built in.** Auto-walks `chrome150 → chrome146 → safari2601 → firefox147 → chrome133a` when a profile gets fingerprinted.
+- **Anti-bot ladder built in.** Auto-walks `chrome152 → chrome150 → safari270 → firefox155 → chrome133a` when a profile gets fingerprinted.
 - **Deterministic tests.** Fixture-replay (`FakeCurlSession`, `replay_fixture`, golden snapshots) — no live HTTP in CI.
 - **Optional hostile mode.** Cloudflare Turnstile / Akamai EVA defeat path via [Scrapling](https://github.com/D4Vinci/Scrapling) — opt-in extra, no Playwright bloat by default.
 - **LLM-agent ready.** `v0.2.0+` ships an MCP server so Claude, AutoGen, LangChain, etc. can drive the scraper directly.

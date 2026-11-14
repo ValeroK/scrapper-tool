@@ -101,7 +101,7 @@ _TRANSPORT_ERRORS: tuple[type[Exception], ...] = (
 # to sit on chrome124 long after the ladder moved on, which meant every
 # non-ladder request advertised a Chrome build no real user runs — a fingerprint
 # in itself. See IMPERSONATE_LADDER in ladder.py for the full chain.
-_CURL_CFFI_IMPERSONATE: Literal["chrome150"] = "chrome150"
+_CURL_CFFI_IMPERSONATE: Literal["chrome152"] = "chrome152"
 
 
 class _GuardedTransport(httpx.AsyncBaseTransport):

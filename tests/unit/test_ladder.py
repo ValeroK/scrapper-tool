@@ -66,7 +66,7 @@ class TestLadderFallback:
             IMPERSONATE_LADDER[0]: 403,
             IMPERSONATE_LADDER[1]: 200,
             IMPERSONATE_LADDER[2]: 200,
-            "firefox147": 200,
+            IMPERSONATE_LADDER[3]: 200,
         }
         resp, profile = await request_with_ladder("GET", "https://example.test/fallback")
         assert resp.status_code == 200
@@ -88,7 +88,7 @@ class TestLadderFallback:
             IMPERSONATE_LADDER[0]: 503,
             IMPERSONATE_LADDER[1]: 200,
             IMPERSONATE_LADDER[2]: 200,
-            "firefox147": 200,
+            IMPERSONATE_LADDER[3]: 200,
         }
         resp, profile = await request_with_ladder("GET", "https://example.test/svc-unavail")
         assert resp.status_code == 200
@@ -102,7 +102,7 @@ class TestLadderFallback:
             IMPERSONATE_LADDER[0]: 403,
             IMPERSONATE_LADDER[1]: 403,
             IMPERSONATE_LADDER[2]: 200,
-            "firefox147": 200,
+            IMPERSONATE_LADDER[3]: 200,
         }
         resp, profile = await request_with_ladder("GET", "https://example.test/all-chrome-burned")
         assert resp.status_code == 200
@@ -149,12 +149,23 @@ class TestLadderConfiguration:
     def test_default_ladder_shape(self) -> None:
         """The exported default ladder is the documented chain, in order."""
         assert IMPERSONATE_LADDER == (
+            "chrome152",
             "chrome150",
-            "chrome146",
-            "safari2601",
-            "firefox147",
+            "safari270",
+            "firefox155",
             "chrome133a",
         )
+
+    def test_curl_cffi_session_default_matches_the_ladder_primary(self) -> None:
+        """http.py's single-profile default must not fall behind the ladder.
+
+        It is a separate literal (http.py cannot import ladder.py, which imports
+        it), so a ladder refresh that forgets it leaves the non-ladder path on
+        an older Chrome than the one the docs say we lead with.
+        """
+        from scrapper_tool import http
+
+        assert IMPERSONATE_LADDER[0] == http._CURL_CFFI_IMPERSONATE
 
     def test_every_ladder_profile_is_a_real_curl_cffi_target(self) -> None:
         """The drift guard for dependency upgrades.

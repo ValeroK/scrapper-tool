@@ -398,7 +398,7 @@
       }
     },
     {
-      "description": "Issue an HTTP request through the four-profile TLS-impersonation ladder (chrome150 -> chrome146 -> safari2601 -> firefox147 -> chrome133a) until a profile returns non-403/503. Returns status, body (truncated to 64 KB), and which profile won. Use for sites that fingerprint the default httpx stack.",
+      "description": "Issue an HTTP request through the four-profile TLS-impersonation ladder (chrome152 -> chrome150 -> safari270 -> firefox155 -> chrome133a) until a profile returns non-403/503. Returns status, body (truncated to 64 KB), and which profile won. Use for sites that fingerprint the default httpx stack.",
       "name": "fetch_with_ladder",
       "parameters": {
         "properties": {

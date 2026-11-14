@@ -6,10 +6,11 @@ When `use_curl_cffi=True`, `vendor_client` walks `IMPERSONATE_LADDER` top-to-bot
 
 ```python
 IMPERSONATE_LADDER: tuple[BrowserTypeLiteral, ...] = (
-    "chrome150",   # primary — freshest in curl_cffi 0.16.2 (2026-08-27)
-    "chrome146",   # fallback — the previous primary; settled
-    "safari2601",  # diversification (chrome family disproportionately fingerprinted — see curl_cffi#500)
-    "firefox147",   # last resort before Pattern D (Scrapling)
+    "chrome152",   # primary — freshest in curl_cffi 0.17.0 (2026-11-14)
+    "chrome150",   # fallback — the previous primary; a different JA4
+    "safari270",   # diversification (chrome family disproportionately fingerprinted — see curl_cffi#500)
+    "firefox155",  # freshest Firefox
+    "chrome133a",  # tail rung, the originally validated primary; last stop before Pattern D (Scrapling)
 )
 ```
 

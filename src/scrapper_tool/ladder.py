@@ -106,11 +106,25 @@ if TYPE_CHECKING:
 #   already 403'd (i.e. we were heading to Pattern D regardless), and it keeps a
 #   known-good profile reachable for consumers whose adapters were shipped
 #   against it.
+#
+# Refreshed 2026-11-14 for curl_cffi 0.17.0, which added chrome151/152 (+ _macos),
+# safari270 (+ _ios) and firefox153/154/155. Every candidate returned 200 from
+# tls.peet.ws/api/all, with the UA confirming the version:
+#
+# - chrome152 — Chrome/152.0.0.0. JA4 ``t13d1517h2_8daaf6152771_cb7bf5808d99``,
+#   a new extension hash, so a real TLS rotation away from chrome150.
+# - chrome150 — the previous primary. chrome151 was skipped for this rung: its
+#   JA4 (``..._806a8c22fdea``) is identical to chrome150's, so it would add a
+#   request without adding a different fingerprint.
+# - safari270 — Version/27.0 (safari2601 reported 26.0.1).
+# - firefox155 — Firefox/155.0, JA4 ``t13d1517h2_8daaf6152771_3cbfd9057e0d``
+#   against firefox147's ``t13d1717h2_5b57614c22b0_...``.
+# - chrome133a — tail rung, unchanged (see above).
 IMPERSONATE_LADDER: tuple[str, ...] = (
+    "chrome152",
     "chrome150",
-    "chrome146",
-    "safari2601",
-    "firefox147",
+    "safari270",
+    "firefox155",
     "chrome133a",
 )
 

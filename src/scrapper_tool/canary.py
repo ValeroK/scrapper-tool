@@ -2,7 +2,7 @@
 
 Walks the impersonation ladder against a target URL and reports which
 profiles return 200 vs 403/blocked. Designed to run from cron / GitHub
-Actions to surface "chrome146 is starting to 403" before any consumer
+Actions to surface "chrome152 is starting to 403" before any consumer
 adapter notices.
 
 Usage::
@@ -10,7 +10,7 @@ Usage::
     scrapper-tool canary https://example.com/api/health
     scrapper-tool canary https://example.com/api/health --json
     scrapper-tool canary https://example.com/api/health \\
-        --profiles chrome146,chrome142,safari260
+        --profiles chrome152,chrome150,safari270
 
 Exit codes
 ----------
@@ -282,8 +282,8 @@ def add_subparser(sub: Any) -> None:
         "canary",
         help="Probe a URL through the impersonation ladder; report which profile won.",
         description=(
-            "Walks the four-profile impersonation ladder "
-            "(chrome146 -> chrome142 -> safari260 -> firefox147) against "
+            "Walks the impersonation ladder "
+            f"({' -> '.join(IMPERSONATE_LADDER)}) against "
             "URL. Stops at the first non-403/503. Exit 0 on success, 1 if "
             "all profiles 403, 2 on error."
         ),
