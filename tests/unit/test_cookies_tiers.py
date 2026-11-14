@@ -14,9 +14,11 @@ the bookkeeping helper cannot catch that; a test that drives the tier can.
 The three tiers carry a session by three different mechanisms, which is why they
 need separate coverage rather than one parametrised case:
 
-* **D** passes ``cookies`` to Scrapling's ``StealthyFetcher``. Its ``__init__``
-  is ``(*args, **kwargs)``, so nothing is knowable statically and the
-  kwarg-rejected path is real.
+* **D** passes ``cookies`` to Scrapling's ``StealthyFetcher.async_fetch``
+  classmethod. Its kwargs are only a TypedDict, so the kwarg-rejected path is
+  real. (Until 4.6.0 they went to ``StealthyFetcher.__init__``, which Scrapling
+  has made a warning-only no-op since 0.3: the session was silently dropped,
+  and a fake with a working ``__init__`` hid it.)
 * **E1** lets Crawl4AI launch its own browser, so the session rides on
   ``BrowserConfig(cookies=...)``.
 * **E2** attaches over CDP to a browser we already launched, so cookies go onto
@@ -81,12 +83,16 @@ class _FakeContext:
 def _install_fake_scrapling(
     monkeypatch: pytest.MonkeyPatch, *, reject_cookies: bool = False
 ) -> list[dict[str, Any]]:
-    """Install a fake ``scrapling.fetchers``; return the init kwargs it observes.
+    """Install a fake ``scrapling.fetchers``; return the fetch kwargs it observes.
 
-    ``reject_cookies`` imitates a Scrapling build whose ``StealthyFetcher`` does
-    not accept the kwarg. Not hypothetical: the real ``__init__`` is declared
-    ``(*args, **kwargs)``, so no signature probe can rule it out and the
-    rejection path has to work.
+    Shaped like the real one: every option rides on the ``async_fetch``
+    classmethod, and constructing an instance takes nothing (the real
+    ``__init__`` only logs a deprecation warning), so any option sent there is
+    recorded as lost.
+
+    ``reject_cookies`` imitates a Scrapling build whose fetch does not accept
+    the kwarg. Not hypothetical: the kwargs are a TypedDict, so no signature
+    probe can rule it out and the rejection path has to work.
     """
     seen: list[dict[str, Any]] = []
 
@@ -96,17 +102,17 @@ def _install_fake_scrapling(
         url = "https://example.com/dashboard"
 
     class _FakeFetcher:
-        def __init__(self, **kwargs: Any) -> None:
+        def __init__(self, *_a: Any, **kwargs: Any) -> None:
+            msg = f"options passed to StealthyFetcher() are ignored by Scrapling: {kwargs}"
+            raise AssertionError(msg)
+
+        @classmethod
+        async def async_fetch(cls, url: str, **kwargs: Any) -> Any:
             seen.append(kwargs)
             if reject_cookies and "cookies" in kwargs:
-                msg = "__init__() got an unexpected keyword argument 'cookies'"
+                msg = "async_fetch() got an unexpected keyword argument 'cookies'"
                 raise TypeError(msg)
-
-        async def async_fetch(self, url: str, **_kw: Any) -> Any:
             return _FakeResponse()
-
-        async def aclose(self) -> None:
-            return None
 
     fetchers = types.SimpleNamespace(StealthyFetcher=_FakeFetcher)
     monkeypatch.setitem(sys.modules, "scrapling", types.SimpleNamespace(fetchers=fetchers))
@@ -122,7 +128,7 @@ class TestDTier:
         seen = _install_fake_scrapling(monkeypatch)
         await _d_fetch_with_smart_defaults(_TierReq([cookie()]))
 
-        assert seen, "StealthyFetcher was never constructed"
+        assert seen, "StealthyFetcher.async_fetch was never called"
         assert [c["name"] for c in seen[0]["cookies"]] == ["session"]
         assert seen[0]["cookies"][0]["value"] == SECRET
 
@@ -184,8 +190,9 @@ class TestDTier:
         """Only cookie-shaped rejections are translated; real kwarg bugs must surface."""
 
         class _Exploding:
-            def __init__(self, **_kw: Any) -> None:
-                msg = "__init__() got an unexpected keyword argument 'headless'"
+            @classmethod
+            async def async_fetch(cls, url: str, **_kw: Any) -> Any:
+                msg = "async_fetch() got an unexpected keyword argument 'headless'"
                 raise TypeError(msg)
 
         fetchers = types.SimpleNamespace(StealthyFetcher=_Exploding)

@@ -9,7 +9,7 @@ Scrapling brings ~400 MB of Playwright bloat, so it's an opt-in extra
 - Calling ``hostile_client()`` without Scrapling installed raises
   ``ImportError`` with the install hint.
 - Calling ``hostile_client()`` *with* Scrapling installed (mocked)
-  yields the fetcher and closes it on exit.
+  sends every option on Scrapling's ``async_fetch`` classmethod.
 
 Real Scrapling integration is exercised by an opt-in live test
 (``tests/integration/test_live_probes.py``, marker ``live``); CI's
@@ -63,81 +63,101 @@ class TestHostileClientWithoutScrapling:
         assert "Playwright" in msg
 
 
+def _install_fake_scrapling(monkeypatch: pytest.MonkeyPatch) -> AsyncMock:
+    """Install a ``scrapling.fetchers`` shaped like the real one; return its fetch mock.
+
+    Real Scrapling (0.3+) takes every option on the ``async_fetch`` classmethod
+    and makes ``StealthyFetcher(...)`` a warning-only no-op. The fake class
+    therefore refuses construction outright: an option sent to ``__init__`` is
+    an option Scrapling throws away.
+    """
+    fetch = AsyncMock(return_value=MagicMock(status=200))
+
+    class _FakeStealthyFetcher:
+        def __init__(self, *_a: Any, **kwargs: Any) -> None:
+            msg = f"StealthyFetcher() ignores its options: {kwargs}"
+            raise AssertionError(msg)
+
+        async_fetch = fetch
+
+    fake_module = MagicMock()
+    fake_module.StealthyFetcher = _FakeStealthyFetcher
+    fake_pkg = MagicMock()
+    fake_pkg.fetchers = fake_module
+    monkeypatch.setitem(sys.modules, "scrapling", fake_pkg)
+    monkeypatch.setitem(sys.modules, "scrapling.fetchers", fake_module)
+    return fetch
+
+
 class TestHostileClientWithMockedScrapling:
     @pytest.mark.asyncio
-    async def test_yields_fetcher_and_closes_on_exit(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        # Mock the scrapling.fetchers module before the lazy import fires.
-        fake_fetcher = MagicMock()
-        fake_fetcher.aclose = AsyncMock()
-        fake_stealthy_fetcher_cls = MagicMock(return_value=fake_fetcher)
+    async def test_options_ride_on_every_fetch(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """headless, resource blocking and the timeout reach Scrapling's fetch.
 
-        fake_module = MagicMock()
-        fake_module.StealthyFetcher = fake_stealthy_fetcher_cls
+        Until 4.6.0 they went to ``StealthyFetcher.__init__`` and were dropped.
+        Scrapling's timeout is in milliseconds; ours is seconds.
+        """
+        fetch = _install_fake_scrapling(monkeypatch)
 
-        fake_pkg = MagicMock()
-        fake_pkg.fetchers = fake_module
+        async with hostile_client(timeout=12.5, headless=False, block_resources=False) as fetcher:
+            await fetcher.async_fetch("https://example.test/p", solve_cloudflare=True)
 
-        monkeypatch.setitem(sys.modules, "scrapling", fake_pkg)
-        monkeypatch.setitem(sys.modules, "scrapling.fetchers", fake_module)
-
-        async with hostile_client(headless=True, block_resources=True) as fetcher:
-            assert fetcher is fake_fetcher
-
-        # StealthyFetcher was constructed with our defaults.
-        fake_stealthy_fetcher_cls.assert_called_once()
-        kwargs = fake_stealthy_fetcher_cls.call_args.kwargs
-        assert kwargs == {"headless": True, "block_resources": True}
-
-        # aclose() was awaited on exit.
-        fake_fetcher.aclose.assert_awaited_once()
+        fetch.assert_awaited_once()
+        assert fetch.call_args.args == ("https://example.test/p",)
+        assert fetch.call_args.kwargs == {
+            "headless": False,
+            "disable_resources": False,
+            "timeout": 12500,
+            "solve_cloudflare": True,
+        }
 
     @pytest.mark.asyncio
-    async def test_extra_kwargs_propagate_to_init(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        fake_fetcher = MagicMock()
-        fake_fetcher.aclose = AsyncMock()
-        fake_stealthy_fetcher_cls = MagicMock(return_value=fake_fetcher)
+    async def test_extra_kwargs_propagate_to_fetch(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        fetch = _install_fake_scrapling(monkeypatch)
 
-        fake_module = MagicMock()
-        fake_module.StealthyFetcher = fake_stealthy_fetcher_cls
+        async with hostile_client(extra_kwargs={"user_data_dir": "/tmp/scrapling-profile"}) as f:
+            await f.async_fetch("https://example.test/p")
 
-        fake_pkg = MagicMock()
-        fake_pkg.fetchers = fake_module
-
-        monkeypatch.setitem(sys.modules, "scrapling", fake_pkg)
-        monkeypatch.setitem(sys.modules, "scrapling.fetchers", fake_module)
-
-        async with hostile_client(
-            extra_kwargs={"profile_dir": "/tmp/scrapling-profile"},
-        ):
-            pass
-
-        kwargs = fake_stealthy_fetcher_cls.call_args.kwargs
-        assert kwargs["profile_dir"] == "/tmp/scrapling-profile"
+        kwargs = fetch.call_args.kwargs
+        assert kwargs["user_data_dir"] == "/tmp/scrapling-profile"
         assert kwargs["headless"] is True  # default preserved
+        assert kwargs["disable_resources"] is True
 
     @pytest.mark.asyncio
-    async def test_falls_back_to_sync_close_when_no_aclose(
+    async def test_a_per_call_kwarg_overrides_the_client_default(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        # Older Scrapling versions expose ``close()`` (non-async).
-        fake_fetcher = MagicMock()
-        fake_fetcher.aclose = None  # signal "no async close"
-        fake_fetcher.close = MagicMock()
-        fake_stealthy_fetcher_cls = MagicMock(return_value=fake_fetcher)
+        fetch = _install_fake_scrapling(monkeypatch)
 
-        fake_module = MagicMock()
-        fake_module.StealthyFetcher = fake_stealthy_fetcher_cls
+        async with hostile_client(headless=True) as fetcher:
+            await fetcher.async_fetch("https://example.test/p", headless=False)
 
-        fake_pkg = MagicMock()
-        fake_pkg.fetchers = fake_module
+        assert fetch.call_args.kwargs["headless"] is False
 
-        monkeypatch.setitem(sys.modules, "scrapling", fake_pkg)
-        monkeypatch.setitem(sys.modules, "scrapling.fetchers", fake_module)
 
-        async with hostile_client():
-            pass
+class TestHostileClientAgainstRealScrapling:
+    """The fakes above only help if they match the installed library."""
 
-        fake_fetcher.close.assert_called_once()
+    def test_async_fetch_is_a_classmethod_accepting_our_options(self) -> None:
+        import inspect
+        import typing
+
+        fetchers = pytest.importorskip("scrapling.fetchers")
+        from scrapling.engines._browsers._types import StealthSession
+
+        cls = fetchers.StealthyFetcher
+        assert isinstance(inspect.getattr_static(cls, "async_fetch"), classmethod)
+        accepted = set(typing.get_type_hints(StealthSession))
+        sent = {
+            "headless",
+            "disable_resources",
+            "timeout",
+            "cookies",
+            "solve_cloudflare",
+            "network_idle",
+            "user_data_dir",
+        }
+        assert sent <= accepted, f"Scrapling no longer accepts: {sorted(sent - accepted)}"
 
 
 class TestModuleDocstring:

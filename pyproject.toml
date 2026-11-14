@@ -50,7 +50,7 @@ dependencies = [
 # choosing that. The real constraint was browser-use's exact anyio pin (see the
 # anyio override in [tool.uv]); once that was lifted, the floor keeps a future
 # re-lock from sliding back onto the 0.3 line.
-hostile = ["scrapling[fetchers]>=0.4.15,<0.5"]
+hostile = ["scrapling[fetchers]>=0.5.1"]
 # M13: filled. Provides scrapper-tool-mcp console script (stdio MCP server)
 # exposing the nine tools listed in docs/mcp.md for LLM agents (Claude Desktop,
 # Claude Code, OpenClaw, Hermes Agent, AutoGen, LangChain via mcp-use).

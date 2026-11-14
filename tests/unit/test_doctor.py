@@ -102,6 +102,8 @@ class TestTierProbes:
         monkeypatch.setattr(_extras, "browser_binary_present", lambda *a, **k: False)
         result = doctor_module._probe_d()
         assert result.status == "degraded"
+        assert "Chromium" in result.detail
+        assert result.fixes == [_extras.INSTALL_HINTS["patchright-chromium"]]
 
     def test_render_disabled_is_not_a_fault(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setattr(_extras, "render_tier_enabled", lambda: False)

@@ -256,7 +256,10 @@ def browser_binary_present(browser: str, *, root: Path | None = None) -> bool:
     """
     search_root = root if root is not None else playwright_browsers_root()
 
-    if browser == "patchright":
+    if browser in ("patchright", "scrapling"):
+        # Scrapling 0.5 dropped its Camoufox/Firefox backend and is
+        # Patchright-only, so tier d needs exactly this Chromium too.
+        #
         # Patchright ships a patched Chromium under chromium-<rev>/. The
         # subdirectory is ``chrome-linux64/`` on Linux x64 (default Playwright
         # layout); older images used ``chrome-linux/``. Try both so the probe
@@ -285,14 +288,6 @@ def browser_binary_present(browser: str, *, root: Path | None = None) -> bool:
             pass
         # browser-use (E2) also drives plain Playwright Firefox, so treat that as
         # runnable too.
-        return any(p.is_file() for pat in _FIREFOX_GLOBS for p in search_root.glob(pat))
-
-    if browser == "scrapling":
-        # Scrapling drives its own Camoufox, which lands in the Playwright root
-        # as a Firefox build. The binary being there is the whole question —
-        # whether the Python package imports is `check_browser_module`'s job,
-        # and this used to ask it too, in a try/except whose branches both
-        # returned False.
         return any(p.is_file() for pat in _FIREFOX_GLOBS for p in search_root.glob(pat))
 
     if browser == "obscura":

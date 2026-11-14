@@ -131,8 +131,8 @@ def _probe_d() -> _TierResult:
     if not _extras.browser_binary_present("scrapling"):
         return _TierResult(
             "degraded",
-            "scrapling installed, but no Camoufox/Firefox binary found on disk",
-            [_hint("playwright-firefox")],
+            "scrapling installed, but no Patchright Chromium binary found on disk",
+            [_hint("patchright-chromium")],
         )
     return _TierResult("ok", "scrapling + browser binary present")
 

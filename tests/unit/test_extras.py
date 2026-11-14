@@ -220,6 +220,20 @@ class TestBrowserBinaryPresent:
         binary.parent.mkdir(parents=True)
         binary.touch()
         assert _extras.browser_binary_present("patchright", root=tmp_path) is True
+        # Scrapling 0.5 is Patchright-only, so the same Chromium serves tier d.
+        assert _extras.browser_binary_present("scrapling", root=tmp_path) is True
+
+    def test_scrapling_needs_chromium_not_firefox(self, tmp_path: Path) -> None:
+        """Scrapling 0.5's StealthyFetcher launches Patchright Chromium.
+
+        The probe used to look for a Firefox build (pre-0.5 Camoufox era), so a
+        machine with Firefox but no Chromium reported tier d ok and failed on
+        the first fetch, and a Chromium-only machine reported it degraded.
+        """
+        binary = tmp_path / "firefox-1509/firefox/firefox.exe"
+        binary.parent.mkdir(parents=True)
+        binary.touch()
+        assert _extras.browser_binary_present("scrapling", root=tmp_path) is False
 
     @pytest.mark.parametrize(
         "relative",
@@ -235,7 +249,6 @@ class TestBrowserBinaryPresent:
         binary = tmp_path / relative
         binary.parent.mkdir(parents=True)
         binary.touch()
-        assert _extras.browser_binary_present("scrapling", root=tmp_path) is True
         assert _extras.browser_binary_present("camoufox", root=tmp_path) is True
 
     def test_camoufox_uses_pkgman_launch_path(
