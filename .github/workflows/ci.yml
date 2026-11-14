@@ -27,7 +27,12 @@ env:
   # had to: Playwright 1.61+ changed the viewport protocol, and camoufox 0.5.6
   # refuses to launch any build older than beta.30 under it. Production images
   # already ship a current build, so CI now tests what production runs.
-  CAMOUFOX_BUILD: 152.0.4-beta.31
+  #
+  # beta.41 since 4.6.0: camoufox 0.5.9 pairs with 158.0.1-beta.41, and its
+  # `fetch` of any other build leaves the paired one active, so a pin on
+  # beta.31 failed the check below on every job ("active is
+  # official/158.0.1-beta.41 (paired with this release)").
+  CAMOUFOX_BUILD: 158.0.1-beta.41
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
