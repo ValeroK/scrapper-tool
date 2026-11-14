@@ -84,7 +84,7 @@ INSTALL_HINTS: dict[str, str] = {
     "camoufox-binary": "camoufox fetch",
     "playwright-firefox": "playwright install firefox",
     "patchright-chromium": "patchright install chromium",
-    "geoip2": "pip install geoip2",
+    "geoip2": "pip install 'camoufox[geoip]'",
     "ollama": "ollama serve && ollama pull <model>",
 }
 
@@ -130,18 +130,24 @@ def crawl4ai_available() -> bool:
 
 
 def geoip2_available() -> bool:
-    """Return True if ``geoip2`` is importable.
+    """Return True if Camoufox's ``[geoip]`` extra is importable.
 
-    Camoufox 0.4+ raises a 500 at launch when ``geoip2`` is absent — see the
+    Camoufox 0.4+ raises a 500 at launch when the extra is absent — see the
     dependency comment in ``pyproject.toml``. Surfacing it as its own check
     turns an opaque runtime failure into a one-line fix.
-    """
-    try:
-        import geoip2  # noqa: F401, PLC0415
 
+    Which module that is depends on the Camoufox version: 0.5.9 replaced
+    ``geoip2`` with ``maxminddb`` and probes ``import maxminddb`` itself
+    (``camoufox/geolocation.py``), while older releases probed ``geoip2``.
+    Either counts. The name keeps ``geoip2`` because it is the doctor check key.
+    """
+    for module in ("maxminddb", "geoip2"):
+        try:
+            __import__(module)
+        except ImportError:
+            continue
         return True
-    except ImportError:
-        return False
+    return False
 
 
 def cookie_backend_available() -> bool:

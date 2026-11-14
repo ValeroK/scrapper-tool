@@ -55,7 +55,27 @@ class TestPackageProbes:
 
     def test_geoip2_available_false_when_missing(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setitem(sys.modules, "geoip2", None)
+        monkeypatch.setitem(sys.modules, "maxminddb", None)
         assert _extras.geoip2_available() is False
+
+    def test_geoip_available_with_maxminddb_alone(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Camoufox 0.5.9 swapped ``geoip2`` for ``maxminddb`` in its [geoip] extra.
+
+        It probes ``import maxminddb`` itself, so that module alone is enough to
+        launch; reporting geoip as missing there is a false alarm with a wrong fix.
+        """
+        monkeypatch.setitem(sys.modules, "geoip2", None)
+        monkeypatch.setitem(sys.modules, "maxminddb", types.ModuleType("maxminddb"))
+        assert _extras.geoip2_available() is True
+
+    def test_geoip_available_with_geoip2_alone(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Camoufox < 0.5.9 probed ``geoip2``; that install must still count."""
+        monkeypatch.setitem(sys.modules, "maxminddb", None)
+        monkeypatch.setitem(sys.modules, "geoip2", types.ModuleType("geoip2"))
+        assert _extras.geoip2_available() is True
+
+    def test_geoip_hint_installs_the_camoufox_extra(self) -> None:
+        assert _extras.INSTALL_HINTS["geoip2"] == "pip install 'camoufox[geoip]'"
 
     def test_probes_return_bool_not_truthy(self) -> None:
         """Callers serialize these straight into JSON — they must be real bools."""

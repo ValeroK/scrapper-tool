@@ -10,7 +10,7 @@ half-working, each of which fails late and opaquely:
 * ``import camoufox`` succeeds while the Firefox blob is absent, because the
   Dockerfile runs ``camoufox fetch || true``. The module probe says ``ok`` and
   the first render 500s.
-* Camoufox 0.4+ refuses to launch at all without ``geoip2``.
+* Camoufox 0.4+ refuses to launch at all without its ``[geoip]`` extra.
 * **E2 cannot run on the default configuration.** The default backend is
   ``camoufox``, Firefox has no CDP, and ``agent_browse`` hard-raises for any
   backend without a CDP endpoint. Nothing tells you until a request escalates
@@ -258,7 +258,8 @@ def _environment_checks(cfg: Any) -> tuple[dict[str, Any], list[str]]:
     checks["platform"] = sys.platform
     checks["browser"] = getattr(cfg, "browser", None)
 
-    # Camoufox 0.4+ raises NotInstalledGeoIPExtra at launch without geoip2. Only
+    # Camoufox 0.4+ raises NotInstalledGeoIPExtra at launch without its [geoip]
+    # extra (maxminddb since 0.5.9, geoip2 before). Only
     # worth reporting when Camoufox is the backend actually in use.
     geoip_ok = _extras.geoip2_available()
     checks["geoip2"] = geoip_ok

@@ -35,7 +35,7 @@ dependencies = [
     # fail on rung one -- reported as a vendor block, because that is what an
     # exhausted ladder looks like from outside. If a newer profile is ever
     # promoted to the ladder, this floor moves with it.
-    "curl-cffi>=0.16.2",
+    "curl-cffi>=0.17.0",
     "selectolax>=0.3.21",
     "extruct>=0.18",
     "pydantic>=2.5",
@@ -50,7 +50,7 @@ dependencies = [
 # choosing that. The real constraint was browser-use's exact anyio pin (see the
 # anyio override in [tool.uv]); once that was lifted, the floor keeps a future
 # re-lock from sliding back onto the 0.3 line.
-hostile = ["scrapling[fetchers]>=0.4.15"]
+hostile = ["scrapling[fetchers]>=0.4.15,<0.5"]
 # M13: filled. Provides scrapper-tool-mcp console script (stdio MCP server)
 # exposing the nine tools listed in docs/mcp.md for LLM agents (Claude Desktop,
 # Claude Code, OpenClaw, Hermes Agent, AutoGen, LangChain via mcp-use).
@@ -76,7 +76,7 @@ agent = ["mcp>=2.1.1,<3"]
 # install. They stay inert unless SCRAPPER_TOOL_CAPTCHA_KEY is set.
 llm-agent = [
     "crawl4ai>=0.9",
-    "browser-use>=0.13,<0.14",
+    "browser-use>=0.13.14,<0.14",
     # browser-use imports ``pydantic_settings`` in its config module but
     # never declares it. Until 3.1 that went unnoticed because the mcp
     # 1.x SDK happened to depend on pydantic-settings and dragged it in
@@ -85,9 +85,9 @@ llm-agent = [
     # three tests quietly switching from passed to skipped. Declared here
     # so the stack does not depend on an unrelated package's transitives.
     "pydantic-settings>=2.15",
-    # Camoufox v0.4+ refuses to launch without ``geoip2`` because its
+    # Camoufox v0.4+ refuses to launch without its ``[geoip]`` extra because its
     # locale-matching layer queries a MaxMind GeoLite2 db at start.
-    # The ``[geoip]`` extra pulls ``geoip2`` + ``maxminddb``. Bare
+    # The extra pulls ``maxminddb`` (0.5.9+; ``geoip2`` before that). Bare
     # ``camoufox`` lets ``camoufox fetch`` succeed but every browser
     # launch then 500s with ``NotInstalledGeoIPExtra``.
     # v1.6.0: upgraded 0.4 -> 0.5.x. 0.5 adds ``fingerprint_preset`` (real
