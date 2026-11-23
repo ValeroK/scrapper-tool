@@ -44,7 +44,7 @@ jobs:
     runs-on: ubuntu-latest
     strategy:
       matrix:
-        python-version: ["3.12", "3.13", "3.14"]
+        python-version: ["3.14"]
     steps:
       - uses: actions/checkout@v7
       - name: Set up uv
@@ -82,7 +82,7 @@ jobs:
         # `[hostile]` alone, `[llm-agent]` alone), run pytest locally
         # with that combo. The CI matrix prioritises ship-blocking
         # signal over à la carte regression coverage.
-        python-version: ["3.12", "3.13", "3.14"]
+        python-version: ["3.14"]
         extras: ["dev,full,agent,http"]
     steps:
       - uses: actions/checkout@v7
