@@ -2,6 +2,27 @@
 
 All notable changes to `scrapper-tool` are recorded here. Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning follows [SemVer](https://semver.org/).
 
+## [4.6.1] - 2026-11-28
+
+### Changed
+
+- **Dependencies:** lock refresh, transitive only. Notable: certifi
+  2026.11.20, lxml 6.2.0, fastapi 0.165.0, openai 3.60.0, huggingface-hub
+  2.5.0, pypdf 7.2.0, selenium 4.54.0, pyyaml 6.0.4; full list in the PR.
+  Ladder unchanged: curl_cffi 0.17.0 is still the newest release, so there
+  are no new impersonation profiles. Live canary: chrome152 returned 200 at
+  tls.peet.ws/api/all and at yad2.co.il.
+
+### Held back
+
+- **crawl4ai 0.9.6** needs `playwright>=1.64.1`; camoufox 0.5.9 needs
+  `playwright<1.63`. Stays on 0.9.5 until camoufox lifts its cap.
+- **httpx 0.29.0, pydantic-settings 2.16.3, pydantic 2.14:** browser-use
+  0.13.14 pins httpx 0.28.1 and pydantic-settings 2.15.0 exactly. browser-use
+  1.x stays skipped (rewrite, cloud-first).
+- **Camoufox browser 159.0-beta.43:** camoufox 0.5.9 pairs with
+  158.0.1-beta.41; the CI pin stays.
+
 ## [4.6.0] - 2026-11-14
 
 ### Fixed
